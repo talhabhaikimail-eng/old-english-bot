@@ -1,0 +1,56 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Environment variables
+
+.env
+# WhatsApp authentication (keep only creds.json)
+auth_info/*
+
+# YouTube cookies
+browser_data/youtube-cookies.txt
+
+# Logs
+*.log
+src/libs/test-google-scripts.js
+src/libs/test-cookie-search.js
+npm-debug.log*
+
+# Docker
+dashboard/.env.local
+
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Executables and Go binaries
+google-drive-api/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.bin
+src-go/*/*.exe
+src-go/container-manager/container-manager
+src-go/contact-scraper/contact-scraper
+src-go/create-cv/create-cv
+src-go/create-cv/cv-server
+src-go/create-cv/test-build
+src-go/browser-cdp-connection/browser-cdp-connection
+
+# Dashboard build artifacts
+dashboard/node_modules/
+dashboard/dist/
+
+# Generated CV files
+/applications/
+/src-go/create-cv/storage/*.pdf
+
+

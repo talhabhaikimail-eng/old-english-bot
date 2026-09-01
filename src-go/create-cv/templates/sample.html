@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Talha Riaz - Resume</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            margin: 40px auto;
+            max-width: 900px;
+            color: #333;
+        }
+        h1, h2, h3, h4 {
+            margin-bottom: 0.5em;
+            color: #222;
+        }
+        h1 {
+            text-transform: uppercase;
+            font-size: 2.5em;
+        }
+        h2 {
+            font-size: 1.2em;
+            font-weight: normal;
+            letter-spacing: 1px;
+            margin-top: -15px;
+            color: #555;
+        }
+        h3 {
+            border-bottom: 2px solid #333;
+            padding-bottom: 5px;
+            margin-top: 30px;
+        }
+        .contact-info {
+            font-size: 0.95em;
+            margin-bottom: 20px;
+        }
+        .date {
+            font-style: italic;
+            color: #666;
+            margin-top: -10px;
+            margin-bottom: 10px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 10px;
+            text-align: left;
+            vertical-align: top;
+        }
+        th {
+            background-color: #f9f9f9;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>{{.Name}}</h1>
+    <h2>{{.Role}}</h2>
+
+    <h3>PROFESSIONAL SUMMARY</h3>
+    <p class="contact-info">{{.ContactInfo}}</p>
+    <p>{{.Summary}}</p>
+
+    <h3>WORK EXPERIENCE</h3>
+    {{range .Experiences}}
+    <h4>{{.Role}} | {{.Company}}</h4>
+    <p class="date">{{.Date}}</p>
+    <ul>
+        {{range .Bullets}}
+        <li>{{.}}</li>
+        {{end}}
+    </ul>
+    {{end}}
+
+    <h3>MANAGEMENT SYSTEMS & PROJECTS</h3>
+    {{range .Projects}}
+    <h4>{{.Title}}</h4>
+    <ul>
+        {{range .Bullets}}
+        <li>{{.}}</li>
+        {{end}}
+    </ul>
+    {{end}}
+
+    <h3>TECHNICAL SKILLS</h3>
+    <table>
+        <thead>
+            <tr>
+                {{range .Skills}}
+                <th>{{.Name}}</th>
+                {{end}}
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                {{range .Skills}}
+                <td>{{join .Items ", "}}</td>
+                {{end}}
+            </tr>
+        </tbody>
+    </table>
+
+    <h3>EDUCATION</h3>
+    {{range .Education}}
+    <h4>{{.Degree}}</h4>
+    <p class="date">{{.Date}}</p>
+    <p>{{.School}}</p>
+    {{end}}
+
+    <h3>LANGUAGES</h3>
+    <p>{{join .Languages " | "}}</p>
+
+</body>
+</html>

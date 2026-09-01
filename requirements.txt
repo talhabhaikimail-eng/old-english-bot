@@ -1,0 +1,7 @@
+seleniumbase
+fastapi
+uvicorn
+pydantic
+pyautogui
+httpx
+

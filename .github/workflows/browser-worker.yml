@@ -1,0 +1,170 @@
+name: Browser Workers
+
+on:
+  workflow_dispatch: # Manual trigger
+  repository_dispatch: # Triggered by main workflow
+    types: [spawn-browsers]
+
+jobs:
+  cancel-old:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Manage concurrent worker runs (cancel oldest if limit exceeded)
+        run: |
+          echo "🔍 Checking for concurrent browser-worker runs..."
+          AUTH_HEADER="Authorization: Bearer ${{ secrets.PAT_TOKEN }}"
+
+          # ── 1. Sweep stale QUEUED runs ──────────────────────────────────
+          # A queued run older than this one is pure backlog: it was superseded
+          # by a newer dispatch. Cancelling them keeps the queue bounded
+          # (previously the queue grew to hundreds of runs).
+          QUEUED_JSON=$(curl -s \
+            -H "Accept: application/vnd.github+json" \
+            -H "$AUTH_HEADER" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/workflows/browser-worker.yml/runs?status=queued&per_page=100")
+
+          QUEUED_IDS=$(echo "$QUEUED_JSON" | jq -r '.workflow_runs[] | select(.id != ${{ github.run_id }}) | .id')
+          QUEUED_COUNT=$(echo "$QUEUED_IDS" | grep -c . || true)
+
+          if [ "$QUEUED_COUNT" -gt 0 ]; then
+            echo "🛑 Cancelling $QUEUED_COUNT stale queued run(s)..."
+            for RUN_ID in $QUEUED_IDS; do
+              echo "   Cancelling queued run ID $RUN_ID..."
+              curl -s -X POST \
+                -H "Accept: application/vnd.github+json" \
+                -H "$AUTH_HEADER" \
+                -H "X-GitHub-Api-Version: 2022-11-28" \
+                "https://api.github.com/repos/${{ github.repository }}/actions/runs/$RUN_ID/cancel" > /dev/null
+            done
+          else
+            echo "✅ No stale queued runs."
+          fi
+
+          # ── 2. Enforce in-progress concurrency limit ────────────────────
+          RUNS_JSON=$(curl -s \
+            -H "Accept: application/vnd.github+json" \
+            -H "$AUTH_HEADER" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/workflows/browser-worker.yml/runs?status=in_progress&per_page=100")
+
+          OTHER_RUNS=$(echo "$RUNS_JSON" | jq -c '.workflow_runs[] | select(.id != ${{ github.run_id }})' | jq -s 'sort_by(.created_at)')
+          OTHER_RUNS_COUNT=$(echo "$OTHER_RUNS" | jq '. | length')
+          TOTAL_RUNS=$((OTHER_RUNS_COUNT + 1))
+          LIMIT=5
+
+          echo "📊 Currently running: $TOTAL_RUNS (Limit: $LIMIT)"
+
+          if [ "$TOTAL_RUNS" -gt "$LIMIT" ]; then
+            TO_CANCEL=$((TOTAL_RUNS - LIMIT))
+            echo "⚠️ Limit exceeded. Cancelling the oldest $TO_CANCEL run(s)."
+
+            for i in $(seq 0 $((TO_CANCEL - 1))); do
+              RUN_TO_CANCEL_ID=$(echo "$OTHER_RUNS" | jq -r ".[$i].id")
+              RUN_TO_CANCEL_CREATED=$(echo "$OTHER_RUNS" | jq -r ".[$i].created_at")
+              if [ "$RUN_TO_CANCEL_ID" != "null" ] && [ -n "$RUN_TO_CANCEL_ID" ]; then
+                echo "🛑 Cancelling oldest run ID $RUN_TO_CANCEL_ID (created at $RUN_TO_CANCEL_CREATED)..."
+                curl -s -X POST \
+                  -H "Accept: application/vnd.github+json" \
+                  -H "$AUTH_HEADER" \
+                  -H "X-GitHub-Api-Version: 2022-11-28" \
+                  "https://api.github.com/repos/${{ github.repository }}/actions/runs/$RUN_TO_CANCEL_ID/cancel"
+              fi
+            done
+          else
+            echo "✅ Concurrency limit not exceeded. Proceeding..."
+          fi
+
+  browser:
+    needs: cancel-old
+    runs-on: ubuntu-latest
+    timeout-minutes: 310 # 5 hours + 10 min buffer
+    strategy:
+      matrix:
+        worker: [1, 2, 3]
+      fail-fast: false # Don't kill siblings if one crashes
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Prepare environment
+        env:
+          ENV_FILE: ${{ secrets.ENV_FILE }}
+        run: |
+          printf '%s' "$ENV_FILE" > .env
+          source .env
+          echo "::add-mask::$DASHBOARD_DOMAIN"
+          echo "::add-mask::$R2_ACCOUNT_ID"
+          echo "::add-mask::$R2_BUCKET_NAME"
+          echo "::add-mask::$R2_ACCESS_KEY_ID"
+          echo "::add-mask::$R2_SECRET_ACCESS_KEY"
+          echo "::add-mask::$PAT_TOKEN"
+          echo "::add-mask::$WHATSAPP_PHONE"
+          echo "::add-mask::$BROWSER_PASSWORD"
+          echo "::add-mask::$DASHBOARD_PASSWORD"
+          echo "✅ environment prepared"
+
+      - name: Install Chrome
+        uses: browser-actions/setup-chrome@v1
+        with:
+          chrome-version: stable
+
+      - name: Install cloudflared
+        run: |
+          curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
+          sudo dpkg -i cloudflared.deb
+          echo "✅ cloudflared installed"
+
+      - name: Install GUI dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb python3-tk scrot
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+
+      - name: Run browser worker
+        run: |
+          set -a
+          source .env
+          set +a
+          export GITHUB_RUN_ID="${{ github.run_id }}"
+          export WORKER_ID="browser-worker-${{ matrix.worker }}-$(hostname | cut -c1-6)-$(head -c4 /dev/urandom | xxd -p)"
+          export MAX_RUNTIME=18000
+          export HEARTBEAT_INTERVAL=60
+
+          chmod +x src/scripts/browser-worker.sh
+          bash src/scripts/browser-worker.sh 2>&1 | tee worker.log
+
+      - name: Setup AWS CLI for Cloudflare R2
+        if: always()
+        run: |
+          if [ -f ".env" ]; then
+            source .env
+            aws configure set default.s3.signature_version s3v4
+            aws configure set aws_access_key_id ${R2_ACCESS_KEY_ID}
+            aws configure set aws_secret_access_key ${R2_SECRET_ACCESS_KEY}
+            aws configure set default.region auto
+          fi
+
+      - name: Save Logs to Cloudflare R2
+        if: always()
+        run: |
+          if [ -f "worker.log" ] && [ -f ".env" ]; then
+            source .env
+            aws s3 cp worker.log s3://${R2_BUCKET_NAME}/logs/worker-${{ matrix.worker }}-${{ github.run_id }}.log --endpoint-url https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com || echo "Failed to upload logs"
+          fi

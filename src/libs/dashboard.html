@@ -1,0 +1,718 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>🤖 Bridge Dev Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+
+  <style>
+    /* ── Reset & base ─────────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg-deep:    #070b14;
+      --bg-mid:     #0d1424;
+      --surface:    rgba(255,255,255,0.04);
+      --surface-hov:rgba(255,255,255,0.08);
+      --border:     rgba(255,255,255,0.08);
+      --border-hov: rgba(255,255,255,0.18);
+      --accent:     #6c63ff;
+      --accent2:    #00d4aa;
+      --accent3:    #ff6b6b;
+      --text:       #e8ecf4;
+      --muted:      #6b7894;
+      --success:    #22c55e;
+      --warning:    #f59e0b;
+      --radius:     16px;
+      --radius-sm:  10px;
+    }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: 'Inter', sans-serif;
+      background: var(--bg-deep);
+      color: var(--text);
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    /* ── Animated background orbs ────────────────────────────────────── */
+    .bg-orbs {
+      position: fixed; inset: 0; pointer-events: none; z-index: 0;
+      overflow: hidden;
+    }
+    .orb {
+      position: absolute;
+      border-radius: 50%;
+      filter: blur(120px);
+      opacity: 0.18;
+      animation: orb-float 12s ease-in-out infinite;
+    }
+    .orb-1 { width: 600px; height: 600px; top: -200px; left: -100px; background: var(--accent); animation-delay: 0s; }
+    .orb-2 { width: 500px; height: 500px; bottom: -150px; right: -100px; background: var(--accent2); animation-delay: -4s; }
+    .orb-3 { width: 400px; height: 400px; top: 40%; left: 60%; background: var(--accent3); animation-delay: -8s; }
+
+    @keyframes orb-float {
+      0%, 100% { transform: translate(0, 0) scale(1); }
+      33%       { transform: translate(30px, -40px) scale(1.05); }
+      66%       { transform: translate(-20px, 20px) scale(0.97); }
+    }
+
+    /* ── Layout ───────────────────────────────────────────────────────── */
+    .wrapper {
+      position: relative; z-index: 1;
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 40px 24px 80px;
+    }
+
+    /* ── Header ───────────────────────────────────────────────────────── */
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 20px;
+      margin-bottom: 40px;
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .logo-icon {
+      width: 52px; height: 52px;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      border-radius: 14px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 24px;
+      box-shadow: 0 0 24px rgba(108,99,255,0.4);
+    }
+
+    .logo-text h1 {
+      font-size: 1.4rem;
+      font-weight: 700;
+      background: linear-gradient(135deg, #fff 30%, var(--accent2));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      line-height: 1.2;
+    }
+
+    .logo-text p {
+      font-size: 0.78rem;
+      color: var(--muted);
+      margin-top: 2px;
+    }
+
+    /* ── Status bar ───────────────────────────────────────────────────── */
+    .status-bar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .badge {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 6px 14px;
+      border-radius: 100px;
+      font-size: 0.78rem;
+      font-weight: 500;
+      border: 1px solid var(--border);
+      backdrop-filter: blur(12px);
+    }
+
+    .badge-live {
+      background: rgba(34,197,94,0.12);
+      border-color: rgba(34,197,94,0.3);
+      color: var(--success);
+    }
+
+    .badge-dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: var(--success);
+      animation: pulse-dot 2s infinite;
+    }
+
+    @keyframes pulse-dot {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50%       { opacity: 0.5; transform: scale(0.8); }
+    }
+
+    /* ── Countdown ────────────────────────────────────────────────────── */
+    .countdown-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      backdrop-filter: blur(16px);
+      padding: 28px 32px;
+      margin-bottom: 36px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 24px;
+    }
+
+    .countdown-label {
+      font-size: 0.82rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 8px;
+    }
+
+    .countdown-time {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 2.6rem;
+      font-weight: 500;
+      letter-spacing: 0.05em;
+      background: linear-gradient(135deg, var(--text) 50%, var(--accent2));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .countdown-time.urgent {
+      background: linear-gradient(135deg, var(--accent3), #ff9a3c);
+      -webkit-background-clip: text;
+      background-clip: text;
+    }
+
+    .progress-bar-wrap {
+      flex: 1;
+      min-width: 200px;
+    }
+
+    .progress-bar {
+      width: 100%;
+      height: 8px;
+      background: rgba(255,255,255,0.06);
+      border-radius: 100px;
+      overflow: hidden;
+    }
+
+    .progress-fill {
+      height: 100%;
+      border-radius: 100px;
+      background: linear-gradient(90deg, var(--accent), var(--accent2));
+      transition: width 1s linear;
+    }
+
+    .progress-fill.urgent {
+      background: linear-gradient(90deg, var(--accent3), #ff9a3c);
+    }
+
+    .progress-label {
+      margin-top: 8px;
+      font-size: 0.75rem;
+      color: var(--muted);
+    }
+
+    /* ── Section title ────────────────────────────────────────────────── */
+    .section-title {
+      font-size: 0.78rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--muted);
+      margin-bottom: 16px;
+    }
+
+    /* ── Tool cards grid ──────────────────────────────────────────────── */
+    .tools-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      gap: 18px;
+      margin-bottom: 40px;
+    }
+
+    .tool-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      backdrop-filter: blur(16px);
+      padding: 24px;
+      transition: border-color 0.2s, background 0.2s, transform 0.2s, box-shadow 0.2s;
+      cursor: default;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .tool-card::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(135deg, rgba(108,99,255,0.06), transparent 60%);
+      opacity: 0;
+      transition: opacity 0.3s;
+    }
+
+    .tool-card:hover {
+      border-color: var(--border-hov);
+      background: var(--surface-hov);
+      transform: translateY(-2px);
+      box-shadow: 0 12px 40px rgba(0,0,0,0.3);
+    }
+
+    .tool-card:hover::before { opacity: 1; }
+
+    .card-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+
+    .card-icon {
+      width: 40px; height: 40px;
+      border-radius: 10px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 18px;
+      flex-shrink: 0;
+    }
+
+    .card-icon-terminal  { background: rgba(34,197,94,0.15); border: 1px solid rgba(34,197,94,0.2); }
+    .card-icon-vscode    { background: rgba(0,153,255,0.15); border: 1px solid rgba(0,153,255,0.2); }
+    .card-icon-browser   { background: rgba(245,158,11,0.15); border: 1px solid rgba(245,158,11,0.2); }
+    .card-icon-novnc     { background: rgba(255,107,107,0.15); border: 1px solid rgba(255,107,107,0.2); }
+    .card-icon-api       { background: rgba(108,99,255,0.15); border: 1px solid rgba(108,99,255,0.2); }
+    .card-icon-dashboard { background: rgba(0,212,170,0.15); border: 1px solid rgba(0,212,170,0.2); }
+    .card-icon-default   { background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.1); }
+
+    .card-label {
+      font-size: 1rem;
+      font-weight: 600;
+    }
+
+    .card-registered {
+      font-size: 0.72rem;
+      color: var(--muted);
+      margin-top: 2px;
+    }
+
+    .card-url-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: rgba(0,0,0,0.25);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 10px 14px;
+      margin-bottom: 12px;
+    }
+
+    .card-url {
+      flex: 1;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.75rem;
+      color: var(--accent2);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      text-decoration: none;
+    }
+
+    .card-url:hover { text-decoration: underline; }
+
+    .copy-btn, .open-btn {
+      flex-shrink: 0;
+      background: none;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 14px;
+      width: 30px; height: 30px;
+      display: flex; align-items: center; justify-content: center;
+      transition: border-color 0.2s, color 0.2s, background 0.2s;
+    }
+
+    .copy-btn:hover { border-color: var(--accent2); color: var(--accent2); }
+    .open-btn:hover { border-color: var(--accent); color: var(--accent); }
+    .copy-btn.copied { border-color: var(--success); color: var(--success); }
+
+    .creds-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+      gap: 8px;
+    }
+
+    .cred-item {
+      background: rgba(0,0,0,0.2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 8px 12px;
+    }
+
+    .cred-key {
+      font-size: 0.68rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      margin-bottom: 4px;
+    }
+
+    .cred-val {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.8rem;
+      color: var(--text);
+      word-break: break-all;
+      cursor: pointer;
+      transition: color 0.2s;
+    }
+
+    .cred-val:hover { color: var(--accent2); }
+
+    /* ── Empty state ──────────────────────────────────────────────────── */
+    .empty-state {
+      text-align: center;
+      padding: 60px 24px;
+      color: var(--muted);
+    }
+
+    .empty-state .spinner {
+      width: 40px; height: 40px;
+      border: 3px solid rgba(255,255,255,0.08);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin: 0 auto 20px;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .empty-state h3 { font-size: 1.1rem; margin-bottom: 8px; color: var(--text); }
+    .empty-state p  { font-size: 0.85rem; }
+
+    /* ── Raw JSON section ─────────────────────────────────────────────── */
+    .json-section {
+      margin-top: 20px;
+    }
+
+    .json-toggle {
+      background: none;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 0.8rem;
+      padding: 8px 16px;
+      display: flex; align-items: center; gap: 8px;
+      transition: border-color 0.2s, color 0.2s;
+      font-family: 'Inter', sans-serif;
+    }
+
+    .json-toggle:hover { border-color: var(--border-hov); color: var(--text); }
+
+    .json-body {
+      display: none;
+      margin-top: 12px;
+      background: rgba(0,0,0,0.35);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+      overflow-x: auto;
+    }
+
+    .json-body pre {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.8rem;
+      color: var(--accent2);
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+
+    /* ── Footer ───────────────────────────────────────────────────────── */
+    footer {
+      margin-top: 60px;
+      text-align: center;
+      font-size: 0.75rem;
+      color: var(--muted);
+      border-top: 1px solid var(--border);
+      padding-top: 24px;
+    }
+
+    /* ── Responsive ───────────────────────────────────────────────────── */
+    @media (max-width: 600px) {
+      .countdown-card { flex-direction: column; }
+      .countdown-time { font-size: 2rem; }
+      header { flex-direction: column; align-items: flex-start; }
+    }
+  </style>
+</head>
+<body>
+
+<div class="bg-orbs">
+  <div class="orb orb-1"></div>
+  <div class="orb orb-2"></div>
+  <div class="orb orb-3"></div>
+</div>
+
+<div class="wrapper">
+
+  <!-- Header -->
+  <header>
+    <div class="logo">
+      <div class="logo-icon">🤖</div>
+      <div class="logo-text">
+        <h1>Bridge Dev Dashboard</h1>
+        <p>Discord ↔ WhatsApp · GitHub Actions Session</p>
+      </div>
+    </div>
+    <div class="status-bar">
+      <div class="badge badge-live" id="live-badge">
+        <div class="badge-dot"></div>
+        Session Active
+      </div>
+      <div class="badge" id="refresh-badge" style="display:none;">
+        🔄 Refreshed <span id="last-refresh">—</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Countdown -->
+  <div class="countdown-card">
+    <div>
+      <div class="countdown-label">⏱ Session Time Remaining</div>
+      <div class="countdown-time" id="countdown">—:—:—</div>
+    </div>
+    <div class="progress-bar-wrap">
+      <div class="progress-bar">
+        <div class="progress-fill" id="progress-fill" style="width:100%"></div>
+      </div>
+      <div class="progress-label" id="progress-label">Calculating…</div>
+    </div>
+  </div>
+
+  <!-- Tools grid -->
+  <div class="section-title">🔧 Live Tool URLs</div>
+  <div class="tools-grid" id="tools-grid">
+    <div class="empty-state" id="empty-state">
+      <div class="spinner"></div>
+      <h3>Loading tool URLs…</h3>
+      <p>Waiting for the bot to register active tunnels.</p>
+    </div>
+  </div>
+
+  <!-- Raw JSON -->
+  <div class="json-section">
+    <button class="json-toggle" id="json-toggle" onclick="toggleJson()">
+      <span>{ }</span> View raw JSON
+    </button>
+    <div class="json-body" id="json-body">
+      <pre id="json-pre">Loading…</pre>
+    </div>
+  </div>
+
+  <footer>
+    Auto-refreshes every 15 s &nbsp;·&nbsp; Served by the Discord-WhatsApp Bridge &nbsp;·&nbsp;
+    <span id="session-start-label">—</span>
+  </footer>
+
+</div>
+
+<script>
+  // ─── Config ─────────────────────────────────────────────────────────────
+  const SESSION_DURATION_S = 5 * 60 * 60; // must match server-side constant
+  const POLL_INTERVAL_MS   = 15_000;
+
+  // ─── Icon mapping ────────────────────────────────────────────────────────
+  const ICONS = {
+    terminal:  { icon: '💻', cls: 'card-icon-terminal'  },
+    vscode:    { icon: '🔵', cls: 'card-icon-vscode'    },
+    browser:   { icon: '🌐', cls: 'card-icon-browser'   },
+    novnc:     { icon: '🖥️', cls: 'card-icon-novnc'     },
+    api:       { icon: '⚡', cls: 'card-icon-api'       },
+    bypasser:  { icon: '⚡', cls: 'card-icon-api'       },
+    dashboard: { icon: '📊', cls: 'card-icon-dashboard' },
+  };
+
+  // ─── State ───────────────────────────────────────────────────────────────
+  let sessionRemainingS  = SESSION_DURATION_S;
+  let sessionStartEpoch  = null;
+  let lastPayload        = null;
+  let jsonVisible        = false;
+
+  // ─── Countdown ticker ────────────────────────────────────────────────────
+  function tickCountdown() {
+    if (sessionStartEpoch === null) return;
+
+    const elapsedS = Math.floor((Date.now() - sessionStartEpoch) / 1000);
+    const remS     = Math.max(0, SESSION_DURATION_S - elapsedS);
+    const pct      = Math.min(100, Math.max(0, (remS / SESSION_DURATION_S) * 100));
+    const urgent   = remS < 30 * 60; // < 30 min
+
+    const h = Math.floor(remS / 3600);
+    const m = Math.floor((remS % 3600) / 60);
+    const s = remS % 60;
+
+    const fmt = (n) => String(n).padStart(2, '0');
+    document.getElementById('countdown').textContent = `${fmt(h)}:${fmt(m)}:${fmt(s)}`;
+    document.getElementById('countdown').classList.toggle('urgent', urgent);
+
+    const fill = document.getElementById('progress-fill');
+    fill.style.width = pct.toFixed(2) + '%';
+    fill.classList.toggle('urgent', urgent);
+
+    document.getElementById('progress-label').textContent =
+      `${pct.toFixed(1)}% remaining (${h}h ${m}m ${s}s)`;
+  }
+
+  setInterval(tickCountdown, 1000);
+
+  // ─── Render tools ────────────────────────────────────────────────────────
+  function formatTimeAgo(isoStr) {
+    const diff = Date.now() - new Date(isoStr).getTime();
+    const s = Math.floor(diff / 1000);
+    if (s < 60) return `${s}s ago`;
+    const m = Math.floor(s / 60);
+    if (m < 60) return `${m}m ago`;
+    const h = Math.floor(m / 60);
+    return `${h}h ${m % 60}m ago`;
+  }
+
+  function renderTools(tools) {
+    const grid = document.getElementById('tools-grid');
+    const empty = document.getElementById('empty-state');
+
+    const keys = Object.keys(tools);
+    if (keys.length === 0) {
+      empty.style.display = 'block';
+      // Remove all old cards but keep empty state
+      Array.from(grid.children).forEach(c => { if (c !== empty) c.remove(); });
+      return;
+    }
+
+    empty.style.display = 'none';
+
+    // Build a map of existing card DOM elements
+    const existing = {};
+    Array.from(grid.children).forEach(c => {
+      if (c.dataset.key) existing[c.dataset.key] = c;
+    });
+
+    const rendered = new Set();
+
+    keys.forEach((key) => {
+      const t = tools[key];
+      const meta = ICONS[key] || { icon: '🔗', cls: 'card-icon-default' };
+      rendered.add(key);
+
+      let card = existing[key];
+      if (!card) {
+        card = document.createElement('div');
+        card.className = 'tool-card';
+        card.dataset.key = key;
+        grid.appendChild(card);
+      }
+
+      const credsHtml = (() => {
+        const parts = [];
+        if (t.username) parts.push(`<div class="cred-item"><div class="cred-key">Username</div><div class="cred-val" onclick="copyText(this,'${t.username}')" title="Click to copy">${t.username}</div></div>`);
+        if (t.password) parts.push(`<div class="cred-item"><div class="cred-key">Password</div><div class="cred-val" onclick="copyText(this,'${t.password}')" title="Click to copy">${t.password}</div></div>`);
+        return parts.length ? `<div class="creds-grid">${parts.join('')}</div>` : '';
+      })();
+
+      card.innerHTML = `
+        <div class="card-header">
+          <div class="card-icon ${meta.cls}">${meta.icon}</div>
+          <div>
+            <div class="card-label">${escHtml(t.label || key)}</div>
+            <div class="card-registered">Registered ${formatTimeAgo(t.registeredAt)}</div>
+          </div>
+        </div>
+        <div class="card-url-row">
+          <a class="card-url" href="${escHtml(t.url)}" target="_blank" rel="noopener noreferrer">${escHtml(t.url)}</a>
+          <button class="copy-btn" title="Copy URL" onclick="copyUrl(this,'${escHtml(t.url)}')">📋</button>
+          <button class="open-btn" title="Open in new tab" onclick="window.open('${escHtml(t.url)}','_blank')">↗</button>
+        </div>
+        ${credsHtml}
+      `;
+    });
+
+    // Remove stale cards
+    Object.keys(existing).forEach(k => {
+      if (!rendered.has(k)) existing[k].remove();
+    });
+  }
+
+  // ─── Fetch & update ──────────────────────────────────────────────────────
+  async function fetchUrls() {
+    try {
+      const res  = await fetch('/api/urls?' + Date.now());
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      lastPayload = data;
+
+      if (data.sessionStartedAt && sessionStartEpoch === null) {
+        sessionStartEpoch = new Date(data.sessionStartedAt).getTime();
+        document.getElementById('session-start-label').textContent =
+          'Started ' + new Date(sessionStartEpoch).toLocaleTimeString();
+        tickCountdown();
+      }
+
+      renderTools(data.tools || {});
+
+      if (jsonVisible) updateJsonView();
+
+      const now = new Date();
+      document.getElementById('refresh-badge').style.display = 'flex';
+      document.getElementById('last-refresh').textContent =
+        now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    } catch (err) {
+      console.warn('Poll error:', err);
+    }
+  }
+
+  fetchUrls();
+  setInterval(fetchUrls, POLL_INTERVAL_MS);
+
+  // ─── JSON view ───────────────────────────────────────────────────────────
+  function toggleJson() {
+    jsonVisible = !jsonVisible;
+    document.getElementById('json-body').style.display = jsonVisible ? 'block' : 'none';
+    document.getElementById('json-toggle').querySelector('span').textContent =
+      jsonVisible ? '✕' : '{ }';
+    if (jsonVisible && lastPayload) updateJsonView();
+  }
+
+  function updateJsonView() {
+    document.getElementById('json-pre').textContent =
+      JSON.stringify(lastPayload, null, 2);
+  }
+
+  // ─── Helpers ─────────────────────────────────────────────────────────────
+  function escHtml(s) {
+    return String(s)
+      .replace(/&/g,'&amp;')
+      .replace(/"/g,'&quot;')
+      .replace(/</g,'&lt;')
+      .replace(/>/g,'&gt;');
+  }
+
+  async function copyUrl(btn, url) {
+    await navigator.clipboard.writeText(url).catch(() => {});
+    btn.textContent = '✅';
+    btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = '📋'; btn.classList.remove('copied'); }, 1500);
+  }
+
+  async function copyText(el, text) {
+    await navigator.clipboard.writeText(text).catch(() => {});
+    const orig = el.textContent;
+    el.textContent = '✅ Copied!';
+    el.style.color = 'var(--success)';
+    setTimeout(() => { el.textContent = orig; el.style.color = ''; }, 1500);
+  }
+</script>
+</body>
+</html>

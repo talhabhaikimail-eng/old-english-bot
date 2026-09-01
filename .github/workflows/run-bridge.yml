@@ -1,0 +1,243 @@
+name: Discord WhatsApp Bridge
+
+on:
+  push:
+    branches: [main] # Restart bridge on every push to main
+  workflow_dispatch: # Allows manual trigger
+  schedule:
+    - cron: "0 */5 * * *" # Fallback in case the self-trigger fails
+
+jobs:
+  run-whatsapp:
+    runs-on: ubuntu-latest
+    timeout-minutes: 310 # 5 hours + 10 min buffer for setup/teardown
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Prepare Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Prepare runtime folders
+        run: mkdir -p auth_info browser_data
+
+      - name: Prepare credentials
+        env:
+          CREDS_JSON: ${{ secrets.CREDS_JSON }}
+        run: |
+          printf '%s' "$CREDS_JSON" > auth_info/creds.json
+          echo "✅ credentials prepared"
+
+      - name: Prepare environment
+        env:
+          ENV_FILE: ${{ secrets.ENV_FILE }}
+        run: |
+          printf '%s' "$ENV_FILE" > .env.secret
+          cp .env.secret .env
+          source .env.secret
+          echo "::add-mask::$DASHBOARD_DOMAIN"
+          echo "::add-mask::$R2_ACCOUNT_ID"
+          echo "::add-mask::$R2_BUCKET_NAME"
+          echo "::add-mask::$R2_ACCESS_KEY_ID"
+          echo "::add-mask::$R2_SECRET_ACCESS_KEY"
+          echo "::add-mask::$PAT_TOKEN"
+          echo "::add-mask::$WHATSAPP_PHONE"
+          echo "::add-mask::$BROWSER_PASSWORD"
+          echo "::add-mask::$DASHBOARD_PASSWORD"
+          echo "✅ environment prepared"
+
+      - name: Prepare storage connection
+        run: |
+          source .env.secret
+          aws configure set default.s3.signature_version s3v4
+          aws configure set aws_access_key_id ${R2_ACCESS_KEY_ID}
+          aws configure set aws_secret_access_key ${R2_SECRET_ACCESS_KEY}
+          aws configure set default.region auto
+
+      - name: Sync storage state
+        run: |
+          source .env.secret
+          echo "📥 Downloading latest state..."
+          aws s3 cp s3://${R2_BUCKET_NAME}/state.tar.gz state.tar.gz --endpoint-url https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com || echo "No previous state found."
+          if [ -f "state.tar.gz" ]; then
+            echo "📦 Extracting state..."
+            tar -xzf state.tar.gz -C $(pwd) --overwrite || echo "Failed to extract state"
+          fi
+
+      - name: Consolidate configuration
+        run: |
+          if [ -f ".env.secret" ]; then
+            echo "🔄 Merging GitHub secrets into .env..."
+            node -e "
+              const fs = require('fs');
+
+              function parseEnv(filePath) {
+                if (!fs.existsSync(filePath)) return {};
+                const content = fs.readFileSync(filePath, 'utf8');
+                const config = {};
+                content.split('\n').forEach(line => {
+                  const trimmed = line.trim();
+                  if (!trimmed || trimmed.startsWith('#')) return;
+                  const eqIdx = trimmed.indexOf('=');
+                  if (eqIdx !== -1) {
+                    const k = trimmed.substring(0, eqIdx).trim();
+                    const v = trimmed.substring(eqIdx + 1).trim();
+                    config[k] = v;
+                  }
+                });
+                return config;
+              }
+
+              const r2Env = parseEnv('.env');
+              const secretEnv = parseEnv('.env.secret');
+              const merged = { ...r2Env, ...secretEnv };
+
+              let output = '';
+              for (const [k, v] of Object.entries(merged)) {
+                let val = v;
+                if (val.includes(' ') && !((val.startsWith('"') && val.endsWith('"')) || (val.startsWith('\'') && val.endsWith('\'')))) {
+                  val = \`"\${val}"\`;
+                }
+                output += \`\${k}=\${val}\n\`;
+              }
+              fs.writeFileSync('.env', output, 'utf8');
+              console.log('✅ .env merged successfully');
+            "
+          fi
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build project
+        run: npm run build
+
+      - name: Install & build dashboard
+        run: |
+          npm run dashboard:install
+          npm run dashboard:build
+          echo "✅ Dashboard built"
+
+      - name: Install System Dependencies 
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg libsox-dev wkhtmltopdf xvfb
+
+      - name: Start VNC and Tunnel
+        run: |
+          curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
+          sudo dpkg -i cloudflared.deb
+
+      - name: Prepare Go environment
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'src-go/container-manager/go.mod'
+          cache-dependency-path: src-go/container-manager/go.sum
+
+      - name: Start session manager
+        run: |
+          cd src-go/container-manager
+          go build -o ../../container-manager .
+          cd ../..
+          chmod +x container-manager
+          ./container-manager > container-manager.log 2>&1 &
+
+          SUCCESS=0
+          for i in {1..10}; do
+            if curl -s http://127.0.0.1:18080/api/go/containers/sessions > /dev/null; then
+              SUCCESS=1
+              break
+            fi
+            sleep 1
+          done
+          if [ $SUCCESS -ne 1 ]; then
+            exit 1
+          fi
+
+      - name: Start contact scraper
+        run: |
+          cd src-go/contact-scraper
+          go build -o ../../contact-scraper .
+          cd ../..
+          chmod +x contact-scraper
+          PORT=8081 ./contact-scraper > contact-scraper.log 2>&1 &
+
+          SUCCESS=0
+          for i in {1..10}; do
+            if curl -s http://127.0.0.1:8081/health > /dev/null; then
+              SUCCESS=1
+              break
+            fi
+            sleep 1
+          done
+          if [ $SUCCESS -ne 1 ]; then
+            exit 1
+          fi
+
+      - name: Start CV generator server
+        run: |
+          cd src-go/create-cv
+          go build -o ../../cv-server .
+          cd ../..
+          chmod +x cv-server
+          PORT=8082 xvfb-run ./cv-server > cv-server.log 2>&1 &
+
+          SUCCESS=0
+          for i in {1..10}; do
+            if curl -s http://127.0.0.1:8082/health > /dev/null; then
+              SUCCESS=1
+              break
+            fi
+            sleep 1
+          done
+          if [ $SUCCESS -ne 1 ]; then
+            exit 1
+          fi
+
+      - name: Execute bridge process
+        run: |
+          (sleep 17100 && \
+            sudo tar -czf /tmp/state_pretrigger.tar.gz -C $(pwd) auth_info && \
+            sudo chmod 666 /tmp/state_pretrigger.tar.gz && \
+            source .env && \
+            aws s3 cp /tmp/state_pretrigger.tar.gz s3://${R2_BUCKET_NAME}/state.tar.gz \
+              --endpoint-url https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com && \
+            curl -X POST \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer ${{ secrets.PAT_TOKEN }}" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              https://api.github.com/repos/${{ github.repository }}/actions/workflows/run-bridge.yml/dispatches \
+              -d '{"ref":"${{ github.ref_name }}"}') &
+
+          MODE=whatsapp timeout 18000 npm start > bridge.log 2>&1; code=$?
+
+          if [ "$code" -eq 124 ]; then
+            echo "⏱️ Process cleanly stopped after 5 hours."
+          elif [ "$code" -eq 0 ]; then
+            echo "✅ Process completed normally."
+          else
+            echo "❌ Process failed with exit code $code"
+          fi
+          exit 0
+
+      - name: Sync storage teardown
+        if: always()
+        run: |
+          sudo tar -czf state.tar.gz -C $(pwd) auth_info || echo "Tar completed with warnings"
+          sudo chmod 666 state.tar.gz
+
+          if [ -f ".env" ]; then
+            source .env
+            echo "📤 Uploading final state to R2..."
+            aws s3 cp state.tar.gz s3://${R2_BUCKET_NAME}/state.tar.gz --endpoint-url https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com
+
+            echo "📤 Uploading logs to R2..."
+            for logfile in bridge.log container-manager.log contact-scraper.log; do
+              if [ -f "$logfile" ]; then
+                aws s3 cp "$logfile" "s3://${R2_BUCKET_NAME}/logs/bridge-${{ github.run_id }}-$logfile" --endpoint-url "https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com" || echo "Failed to upload $logfile"
+              fi
+            done
+          fi

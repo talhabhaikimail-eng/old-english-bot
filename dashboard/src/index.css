@@ -1,0 +1,365 @@
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 300 700;
+  font-display: swap;
+  src: url('./assets/fonts/inter-latin.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 400 500;
+  font-display: swap;
+  src: url('./assets/fonts/jetbrains-mono-latin.woff2') format('woff2');
+}
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   HIGH-CONTRAST BLACK & WHITE THEMING VARIABLES
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+:root {
+  /* Light Mode (Stark High Contrast) */
+  --bg-main: #ffffff;
+  --bg-sidebar: #f4f4f5;
+  --text-main: #000000;
+  --text-muted: #3f3f46;
+  --text-subtle: #71717a;
+
+  --card-bg: #ffffff;
+  --card-border: #000000;
+
+  --input-bg: #ffffff;
+  --input-border: #000000;
+  --input-text: #000000;
+  --input-placeholder: #71717a;
+
+  --btn-secondary-bg: #f4f4f5;
+  --btn-secondary-hover: #e4e4e7;
+  --btn-secondary-border: #000000;
+
+  --shadow-color: rgba(0, 0, 0, 0.15);
+
+  --accent-active-bg: #000000;
+  --accent-active-text: #ffffff;
+  --accent-active-border: #000000;
+
+  --code-bg: #f4f4f5;
+
+  --background: #ffffff;
+  --foreground: #000000;
+  --card: #ffffff;
+  --card-foreground: #000000;
+  --popover: #ffffff;
+  --popover-foreground: #000000;
+  --primary: #000000;
+  --primary-foreground: #ffffff;
+  --secondary: #f4f4f5;
+  --secondary-foreground: #000000;
+  --muted: #f4f4f5;
+  --muted-foreground: #52525b;
+  --accent: #000000;
+  --accent-foreground: #ffffff;
+  --destructive: #000000;
+  --destructive-foreground: #ffffff;
+  --border: #000000;
+  --input: #000000;
+  --ring: #000000;
+  --radius: 0px;
+  --sidebar: #f4f4f5;
+  --sidebar-foreground: #000000;
+  --sidebar-primary: #000000;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #000000;
+  --sidebar-accent-foreground: #ffffff;
+  --sidebar-border: #000000;
+  --sidebar-ring: #000000;
+}
+
+.dark {
+  /* Dark Mode (Pure Pitch Black & Sharp White) */
+  --bg-main: #000000;
+  --bg-sidebar: #09090b;
+  --text-main: #ffffff;
+  --text-muted: #a1a1aa;
+  --text-subtle: #71717a;
+
+  --card-bg: #0c0c0e;
+  --card-border: #27272a;
+
+  --input-bg: #09090b;
+  --input-border: #27272a;
+  --input-text: #ffffff;
+  --input-placeholder: #52525b;
+
+  --btn-secondary-bg: #18181b;
+  --btn-secondary-hover: #27272a;
+  --btn-secondary-border: #3f3f46;
+
+  --shadow-color: rgba(0, 0, 0, 0.8);
+
+  --accent-active-bg: #ffffff;
+  --accent-active-text: #000000;
+  --accent-active-border: #ffffff;
+
+  --code-bg: #09090b;
+
+  --background: #000000;
+  --foreground: #ffffff;
+  --card: #0c0c0e;
+  --card-foreground: #ffffff;
+  --popover: #09090b;
+  --popover-foreground: #ffffff;
+  --primary: #ffffff;
+  --primary-foreground: #000000;
+  --secondary: #18181b;
+  --secondary-foreground: #ffffff;
+  --muted: #18181b;
+  --muted-foreground: #a1a1aa;
+  --accent: #ffffff;
+  --accent-foreground: #000000;
+  --destructive: #ffffff;
+  --destructive-foreground: #000000;
+  --border: #27272a;
+  --input: #27272a;
+  --ring: #ffffff;
+  --radius: 0px;
+  --sidebar: #09090b;
+  --sidebar-foreground: #ffffff;
+  --sidebar-primary: #ffffff;
+  --sidebar-primary-foreground: #000000;
+  --sidebar-accent: #ffffff;
+  --sidebar-accent-foreground: #000000;
+  --sidebar-border: #27272a;
+  --sidebar-ring: #ffffff;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   GLOBAL STRICT ZERO BORDER RADIUS & BASE RULES
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+*,
+*::before,
+*::after {
+  border-radius: 0 !important;
+}
+
+@layer base {
+  html, body {
+    overscroll-behavior: none;
+    overflow: hidden;
+    height: 100%;
+    width: 100%;
+  }
+
+  body {
+    background-color: var(--bg-main) !important;
+    color: var(--text-main) !important;
+    font-family: 'Inter', sans-serif;
+    transition: background-color 0.15s ease, color 0.15s ease;
+    @apply bg-background text-foreground;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html {
+    @apply font-sans;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   HIGH-CONTRAST MONOCHROME UTILITIES
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+@layer utilities {
+  .glass {
+    background: var(--card-bg) !important;
+    border: 1px solid var(--card-border) !important;
+    box-shadow: none !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+
+  .glass-hover {
+    transition: border-color 0.15s ease, background-color 0.15s ease !important;
+  }
+
+  .glass-hover:hover {
+    background: var(--btn-secondary-hover) !important;
+    border-color: var(--primary) !important;
+  }
+
+  /* Universal Background mappings for legacy components */
+  .bg-\[\#0A0E17\],
+  .bg-\[\#0d1117\],
+  .bg-\[\#0f0f13\],
+  .bg-\[\#000000\] {
+    background-color: var(--bg-main) !important;
+  }
+
+  .bg-\[\#151922\],
+  .bg-\[\#151922\]\/90,
+  .bg-\[\#121824\] {
+    background-color: var(--bg-sidebar) !important;
+  }
+
+  .bg-\[\#1E2330\],
+  .bg-\[\#11151F\],
+  .bg-\[\#1E2330\]\/50 {
+    background-color: var(--card-bg) !important;
+    border-color: var(--input-border) !important;
+  }
+
+  .bg-black\/30,
+  .bg-black\/20 {
+    background-color: var(--code-bg) !important;
+    border-color: var(--card-border) !important;
+  }
+
+  .bg-white\/\[0\.02\],
+  .bg-white\/\[0\.03\],
+  .bg-white\/\[0\.04\],
+  .bg-white\/\[0\.05\],
+  .bg-white\/\[0\.08\] {
+    background-color: var(--btn-secondary-bg) !important;
+  }
+
+  /* High contrast action colors */
+  .bg-\[\#0061FF\],
+  .bg-gradient-to-r,
+  .bg-gradient-to-br {
+    background-color: var(--primary) !important;
+    background-image: none !important;
+    color: var(--primary-foreground) !important;
+  }
+
+  .hover\:bg-\[\#004ecb\]:hover {
+    background-color: var(--text-muted) !important;
+  }
+
+  .text-\[\#0061FF\],
+  .text-\[\#00E5FF\],
+  .text-\[\#a8a3ff\],
+  .text-teal-300,
+  .text-teal-400,
+  .text-teal-500,
+  .text-cyan-400,
+  .text-indigo-400 {
+    color: var(--text-main) !important;
+  }
+
+  /* High contrast badge states */
+  .bg-\[\#0061FF\]\/10,
+  .bg-\[\#0061FF\]\/20,
+  .bg-\[\#0061FF\]\/25,
+  .bg-\[\#0061FF\]\/30,
+  .bg-\[\#00E5FF\]\/10,
+  .bg-\[\#00E5FF\]\/5,
+  .bg-emerald-500\/10,
+  .bg-indigo-500\/10,
+  .bg-amber-500\/10,
+  .bg-purple-500\/10 {
+    background-color: var(--btn-secondary-bg) !important;
+  }
+
+  .border-\[\#0061FF\]\/30,
+  .border-\[\#0061FF\]\/25,
+  .border-\[\#0061FF\]\/20,
+  .border-\[\#00E5FF\]\/30,
+  .border-\[\#00E5FF\]\/20,
+  .border-\[\#00E5FF\]\/10,
+  .border-emerald-500\/20,
+  .border-indigo-500\/20,
+  .border-amber-500\/20,
+  .border-purple-500\/20 {
+    border-color: var(--card-border) !important;
+  }
+
+  /* Text color overrides */
+  .text-white {
+    color: var(--text-main) !important;
+  }
+
+  .text-white\/80,
+  .text-white\/70,
+  .text-white\/60,
+  .text-white\/50 {
+    color: var(--text-muted) !important;
+  }
+
+  .text-white\/40,
+  .text-white\/35,
+  .text-white\/30,
+  .text-white\/20,
+  .text-white\/10 {
+    color: var(--text-subtle) !important;
+  }
+
+  /* Border color overrides */
+  .border-white\/20,
+  .border-white\/15,
+  .border-white\/10,
+  .border-white\/5,
+  .border-white\/\[0\.08\],
+  .border-white\/\[0\.07\],
+  .border-white\/\[0\.06\],
+  .border-white\/\[0\.05\],
+  .border-white\/\[0\.04\] {
+    border-color: var(--card-border) !important;
+  }
+
+  /* Form elements */
+  input, textarea, select {
+    color: var(--input-text) !important;
+    background-color: var(--input-bg) !important;
+    border: 1px solid var(--input-border) !important;
+    border-radius: 0 !important;
+  }
+
+  input:focus, textarea:focus, select:focus {
+    outline: 2px solid var(--primary) !important;
+    outline-offset: -1px;
+    border-color: var(--primary) !important;
+  }
+
+  input::placeholder, textarea::placeholder {
+    color: var(--input-placeholder) !important;
+  }
+
+  /* High contrast scrollbars */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: var(--bg-main);
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: var(--card-border);
+    border-radius: 0 !important;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--text-muted);
+  }
+
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
+
+  .scrollbar-none {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+}

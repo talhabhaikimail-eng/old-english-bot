@@ -1,0 +1,54 @@
+{
+  "name": "discord-whatsapp-bridge",
+  "version": "1.0.0",
+  "description": "Bridge Discord messages to WhatsApp",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "postbuild": "node -e \"const{mkdirSync,copyFileSync}=require('fs');mkdirSync('dist/libs',{recursive:true});\" ",
+    "start": "node dist/index.js",
+    "dev": "ts-node src/index.ts",
+    "sync-r2": "ts-node src/scripts/sync-r2.ts",
+    "clean-r2": "ts-node src/scripts/clean-r2.ts",
+    "send-emails": "ts-node -e \"require('dotenv').config(); require('./src/libs/direct-apply-service').processDirectApplications()\"",
+    "dashboard:install": "cd dashboard && npm install --legacy-peer-deps",
+    "dashboard:build": "cd dashboard && npm run build"
+  },
+  "keywords": [
+    "discord",
+    "whatsapp",
+    "bridge"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1044.0",
+    "@google/genai": "^2.10.0",
+    "@hapi/boom": "^10.0.1",
+    "@types/nodemailer": "^8.0.1",
+    "@whiskeysockets/baileys": "^6.7.5",
+    "ab-downloader": "^1.0.2",
+    "btch-downloader": "^6.0.27",
+    "cookie": "^0.6.0",
+    "corrosion": "^1.0.0",
+    "discord.js": "^14.14.1",
+    "dom-to-semantic-markdown": "^1.5.0",
+    "dotenv": "^16.4.5",
+    "jsdom": "^29.1.1",
+    "libphonenumber-js": "^1.13.7",
+    "nodemailer": "^9.0.1",
+    "p-limit": "^7.3.0",
+    "pino": "^8.19.0",
+    "puppeteer-core": "^24.43.0",
+    "qrcode-terminal": "^0.12.0",
+    "sharp": "^0.34.5",
+    "youtube-dl-exec": "^3.1.5",
+    "youtubei.js": "^17.0.1",
+    "yt-search": "^2.13.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.19",
+    "@types/qrcode-terminal": "^0.12.2",
+    "typescript": "^7.0.1-rc"
+  }
+}
