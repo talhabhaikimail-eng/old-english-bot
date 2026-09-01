@@ -677,17 +677,19 @@ except Exception as e:
 def worker_status():
     """
     Worker Health & Disk Metric (ENOSPC prevention)
-    Returns worker ID, status ('idle' | 'busy'), disk metrics, concurrency limit, and active job ID.
+    Returns worker ID, status ('idle' | 'busy'), disk metrics, concurrency limit, active jobs count, and list of active job IDs.
     """
     disk = get_disk_metrics()
-    active_job_id = course_manager.get_active_job_id()
+    active_job_ids = course_manager.get_active_job_ids()
     return {
         "workerId": WORKER_ID,
         "status": course_manager.get_status(),
         "disk": disk,
         "concurrencyLimit": DEFAULT_CONCURRENCY,
-        "activeJob": active_job_id,
-        "activeJobId": active_job_id,
+        "activeJobsCount": len(active_job_ids),
+        "activeJob": active_job_ids[0] if active_job_ids else None,
+        "activeJobId": active_job_ids[0] if active_job_ids else None,
+        "activeJobIds": active_job_ids,
     }
 
 
@@ -695,18 +697,12 @@ def worker_status():
 async def dispatch_course_job(req: CourseJobRequest, request: Request):
     """
     Dispatch Course Download & Extraction Job to this isolated worker node.
-    Returns 202 Accepted if queued, or 409 Conflict if already busy.
+    Accepts job and runs in isolated directory; Hub controls concurrency and limits.
     """
     if WORKER_API_SECRET:
         auth_header = request.headers.get("authorization", "")
         if auth_header != f"Bearer {WORKER_API_SECRET}":
             raise HTTPException(status_code=401, detail="Unauthorized")
-
-    if course_manager.is_busy():
-        return JSONResponse(
-            status_code=409,
-            content={"error": "Worker is currently busy with another job"}
-        )
 
     try:
         course_manager.start_job(req)
@@ -716,12 +712,13 @@ async def dispatch_course_job(req: CourseJobRequest, request: Request):
                 "success": True,
                 "jobId": req.jobId,
                 "status": "accepted",
-                "message": "Job accepted. Worker transitioning to 'busy'."
+                "activeJobsCount": len(course_manager.active_jobs),
+                "message": f"Job accepted. Running {len(course_manager.active_jobs)} concurrent jobs on worker."
             }
         )
     except RuntimeError as e:
         return JSONResponse(
-            status_code=409,
+            status_code=400,
             content={"error": str(e)}
         )
 

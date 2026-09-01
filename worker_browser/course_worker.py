@@ -128,64 +128,67 @@ async def post_webhook(url: str, payload: Dict[str, Any], timeout: float = 10.0)
 
 
 # ---------------------------------------------------------------------------
-# Course Job Manager Singleton
+# Course Job Manager Singleton (Unlimited Jobs - Managed by Central Hub)
 # ---------------------------------------------------------------------------
 class CourseJobManager:
     def __init__(self):
-        self.active_job: Optional[Dict[str, Any]] = None
-        self.cancel_event = asyncio.Event()
-        self.current_task: Optional[asyncio.Task] = None
-        self.current_proc: Optional[asyncio.subprocess.Process] = None
+        self.active_jobs: Dict[str, Dict[str, Any]] = {}
+        self.cancel_events: Dict[str, asyncio.Event] = {}
+        self.current_tasks: Dict[str, asyncio.Task] = {}
+        self.current_procs: Dict[str, asyncio.subprocess.Process] = {}
 
     def is_busy(self) -> bool:
-        return self.active_job is not None
+        # Hub manages concurrency; worker accepts jobs without arbitrary hard limit
+        return False
 
     def get_active_job_id(self) -> Optional[str]:
-        return self.active_job["jobId"] if self.active_job else None
+        return next(iter(self.active_jobs.keys()), None)
+
+    def get_active_job_ids(self) -> List[str]:
+        return list(self.active_jobs.keys())
 
     def get_status(self) -> str:
-        return "busy" if self.is_busy() else "idle"
+        return "busy" if self.active_jobs else "idle"
 
     async def cancel_job(self, job_id: str) -> bool:
         """Force cancels an active job and purges disk immediately."""
-        if not self.active_job or self.active_job.get("jobId") != job_id:
-            # Clean directory if it exists anyway
+        if job_id not in self.active_jobs:
             job_dir = os.path.join(JOBS_BASE_DIR, job_id)
             if os.path.exists(job_dir):
                 shutil.rmtree(job_dir, ignore_errors=True)
             return False
 
         print(f"🛑 [course_worker] Cancelling job {job_id}...")
-        self.cancel_event.set()
+        ev = self.cancel_events.get(job_id)
+        if ev:
+            ev.set()
 
-        # Kill any active extraction subprocess
-        if self.current_proc and self.current_proc.returncode is None:
+        proc = self.current_procs.get(job_id)
+        if proc and proc.returncode is None:
             try:
-                self.current_proc.kill()
+                proc.kill()
             except Exception:
                 pass
 
-        # Cancel async task
-        if self.current_task and not self.current_task.done():
-            self.current_task.cancel()
+        task = self.current_tasks.get(job_id)
+        if task and not task.done():
+            task.cancel()
 
-        # Purge job directory
         job_dir = os.path.join(JOBS_BASE_DIR, job_id)
         if os.path.exists(job_dir):
             shutil.rmtree(job_dir, ignore_errors=True)
 
-        self.active_job = None
-        self.current_task = None
-        self.current_proc = None
+        self.active_jobs.pop(job_id, None)
+        self.cancel_events.pop(job_id, None)
+        self.current_tasks.pop(job_id, None)
+        self.current_procs.pop(job_id, None)
         return True
 
     def start_job(self, req: CourseJobRequest):
         """Initializes job state and schedules asynchronous background processing."""
-        if self.is_busy():
-            raise RuntimeError("Worker is currently busy with another job")
-
-        self.cancel_event.clear()
-        self.active_job = {
+        cancel_ev = asyncio.Event()
+        self.cancel_events[req.jobId] = cancel_ev
+        self.active_jobs[req.jobId] = {
             "jobId": req.jobId,
             "courseName": req.courseName,
             "status": "accepted",
@@ -193,9 +196,10 @@ class CourseJobManager:
             "startTime": time.time(),
         }
 
-        self.current_task = asyncio.create_task(self._execute_job_lifecycle(req))
+        task = asyncio.create_task(self._execute_job_lifecycle(req, cancel_ev))
+        self.current_tasks[req.jobId] = task
 
-    async def _execute_job_lifecycle(self, req: CourseJobRequest):
+    async def _execute_job_lifecycle(self, req: CourseJobRequest, cancel_event: asyncio.Event):
         job_id = req.jobId
         start_time = time.time()
         job_dir = os.path.join(JOBS_BASE_DIR, job_id)
@@ -210,17 +214,19 @@ class CourseJobManager:
             # STAGE 1: CONCURRENT DOWNLOAD WITH 5GB DISK PROTECTION & 1000ms WEBHOOK
             # ---------------------------------------------------------------
             print(f"📥 [course_worker] [Job {job_id}] STAGE 1: Downloading {len(req.archiveUrls)} parts...")
-            self.active_job["phase"] = "downloading"
-            await self._download_parts(req, parts_dir)
+            if job_id in self.active_jobs:
+                self.active_jobs[job_id]["phase"] = "downloading"
+            await self._download_parts(req, parts_dir, cancel_event)
 
-            if self.cancel_event.is_set():
+            if cancel_event.is_set():
                 raise asyncio.CancelledError(f"Job {job_id} cancelled.")
 
             # ---------------------------------------------------------------
             # STAGE 2: ARCHIVE EXTRACTION (UNRAR / 7Z / TAR / ZIP)
             # ---------------------------------------------------------------
             print(f"📦 [course_worker] [Job {job_id}] STAGE 2: Extracting archives to {extracted_dir}...")
-            self.active_job["phase"] = "extracting"
+            if job_id in self.active_jobs:
+                self.active_jobs[job_id]["phase"] = "extracting"
             await post_webhook(req.callbackUrl, {
                 "jobId": job_id,
                 "workerId": WORKER_ID,
@@ -228,30 +234,32 @@ class CourseJobManager:
                 "message": f"Extracting archive volumes into {extracted_dir}...",
             })
 
-            await self._extract_archives(parts_dir, extracted_dir)
+            await self._extract_archives(parts_dir, extracted_dir, job_id, cancel_event)
 
-            if self.cancel_event.is_set():
+            if cancel_event.is_set():
                 raise asyncio.CancelledError(f"Job {job_id} cancelled.")
 
             # ---------------------------------------------------------------
             # STAGE 3: PART RECLAMATION (CRUCIAL DISK FREEING)
             # ---------------------------------------------------------------
             print(f"🧹 [course_worker] [Job {job_id}] STAGE 3: Purging parts directory to reclaim disk...")
-            self.active_job["phase"] = "reclaiming_disk"
+            if job_id in self.active_jobs:
+                self.active_jobs[job_id]["phase"] = "reclaiming_disk"
             shutil.rmtree(parts_dir, ignore_errors=True)
 
             # Check available disk after parts purge
             disk_info = get_disk_metrics(JOBS_BASE_DIR)
             print(f"✅ [course_worker] [Job {job_id}] Parts purged! Current free disk: {disk_info['freeGB']} GB")
 
-            if self.cancel_event.is_set():
+            if cancel_event.is_set():
                 raise asyncio.CancelledError(f"Job {job_id} cancelled.")
 
             # ---------------------------------------------------------------
             # STAGE 4: PROGRESSIVE UPLOAD & IMMEDIATE UNLINK
             # ---------------------------------------------------------------
             print(f"☁️ [course_worker] [Job {job_id}] STAGE 4: Progressive upload to Drive & immediate unlinking...")
-            self.active_job["phase"] = "uploading"
+            if job_id in self.active_jobs:
+                self.active_jobs[job_id]["phase"] = "uploading"
             total_uploaded = await self._upload_and_unlink_files(extracted_dir, req)
 
             # ---------------------------------------------------------------
@@ -296,14 +304,15 @@ class CourseJobManager:
                 "error": err_msg,
             })
         finally:
-            self.active_job = None
-            self.current_task = None
-            self.current_proc = None
+            self.active_jobs.pop(job_id, None)
+            self.cancel_events.pop(job_id, None)
+            self.current_tasks.pop(job_id, None)
+            self.current_procs.pop(job_id, None)
 
     # -----------------------------------------------------------------------
     # Stage 1 Details: Concurrent Download & 1000ms Throttled Reports
     # -----------------------------------------------------------------------
-    async def _download_parts(self, req: CourseJobRequest, parts_dir: str):
+    async def _download_parts(self, req: CourseJobRequest, parts_dir: str, cancel_event: asyncio.Event):
         job_id = req.jobId
         urls = req.archiveUrls
         total_parts = len(urls)
@@ -333,7 +342,7 @@ class CourseJobManager:
 
         async def reporter_loop():
             nonlocal last_progress_time
-            while not self.cancel_event.is_set():
+            while not cancel_event.is_set():
                 await asyncio.sleep(1.0)
                 now = time.time()
                 elapsed = max(0.1, now - start_t)
@@ -373,7 +382,7 @@ class CourseJobManager:
 
         async def download_single_part(part: Dict[str, Any]):
             async with sem:
-                if self.cancel_event.is_set():
+                if cancel_event.is_set():
                     return
 
                 part["status"] = "downloading"
@@ -398,7 +407,7 @@ class CourseJobManager:
                         bytes_dl = 0
                         with open(dest, "wb") as f:
                             async for chunk in resp.aiter_bytes(chunk_size=256 * 1024):
-                                if self.cancel_event.is_set():
+                                if cancel_event.is_set():
                                     part["status"] = "failed"
                                     return
 
@@ -437,7 +446,7 @@ class CourseJobManager:
     # -----------------------------------------------------------------------
     # Stage 2 Details: Extraction (unrar / 7z / tar / zip) + Recursive Unpacking
     # -----------------------------------------------------------------------
-    async def _extract_archives(self, parts_dir: str, extracted_dir: str):
+    async def _extract_archives(self, parts_dir: str, extracted_dir: str, job_id: str, cancel_event: asyncio.Event):
         # 1. Inspect parts folder to locate primary archive volume
         files = [f for f in os.listdir(parts_dir) if os.path.isfile(os.path.join(parts_dir, f))]
         files.sort(key=natural_sort_key)
@@ -467,14 +476,14 @@ class CourseJobManager:
             primary_archive = files[0]
 
         primary_path = os.path.join(parts_dir, primary_archive)
-        print(f"📦 [course_worker] Extracting primary archive: {primary_path}...")
+        print(f"📦 [course_worker] [Job {job_id}] Extracting primary archive: {primary_path}...")
 
-        await self._extract_single_archive(primary_path, extracted_dir)
+        await self._extract_single_archive(primary_path, extracted_dir, job_id)
 
         # 2. Recursive extraction for any nested .zip, .rar, .7z, .tar in extracted_dir
         await self._recursive_extract(extracted_dir)
 
-    async def _extract_single_archive(self, archive_path: str, output_dir: str):
+    async def _extract_single_archive(self, archive_path: str, output_dir: str, job_id: str):
         """Extract an archive file using unrar, 7z, tar, or Python fallback."""
         lower = archive_path.lower()
         cmd = None
@@ -498,15 +507,15 @@ class CourseJobManager:
                 cmd = ["unzip", "-o", "-q", archive_path, "-d", output_dir]
 
         if cmd:
-            print(f"⚡ [course_worker] Executing command: {' '.join(cmd)}")
+            print(f"⚡ [course_worker] [Job {job_id}] Executing command: {' '.join(cmd)}")
             proc = await asyncio.create_subprocess_exec(
                 cmd[0], *cmd[1:],
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
-            self.current_proc = proc
+            self.current_procs[job_id] = proc
             stdout, stderr = await proc.communicate()
-            self.current_proc = None
+            self.current_procs.pop(job_id, None)
 
             if proc.returncode != 0:
                 err_text = stderr.decode(errors="replace") or stdout.decode(errors="replace")
