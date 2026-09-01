@@ -425,6 +425,20 @@ class CourseJobManager:
                                         f"dropped below 5 GB safety threshold."
                                     )
 
+                        if bytes_dl < 1024:
+                            if os.path.exists(dest):
+                                try: os.remove(dest)
+                                except Exception: pass
+                            part["status"] = "failed"
+                            raise RuntimeError(f"Downloaded file {part['fileName']} is empty ({bytes_dl} bytes). Download failed.")
+
+                        if total_bytes > 0 and bytes_dl < (total_bytes * 0.95):
+                            if os.path.exists(dest):
+                                try: os.remove(dest)
+                                except Exception: pass
+                            part["status"] = "failed"
+                            raise RuntimeError(f"Incomplete download for {part['fileName']}: received {bytes_dl}/{total_bytes} bytes.")
+
                         part["percent"] = 100.0
                         part["status"] = "completed"
 
@@ -454,11 +468,17 @@ class CourseJobManager:
         if not files:
             raise RuntimeError("No archive files found in parts directory to extract.")
 
+        # Verify no 0 KB empty parts exist before attempting extraction
+        for f in files:
+            p = os.path.join(parts_dir, f)
+            if os.path.getsize(p) < 1024:
+                raise RuntimeError(f"Cannot extract: Archive part '{f}' is empty (0 KB). Corrupted download.")
+
         # Find primary multi-part archive file
         primary_archive = None
         for f in files:
             lower = f.lower()
-            if ".part01.rar" in lower or ".part1.rar" in lower or ".part001.rar" in lower:
+            if ".part1" in lower or ".part01" in lower or ".part001" in lower:
                 primary_archive = f
                 break
             if ".7z.001" in lower or ".001" in lower:
@@ -484,65 +504,67 @@ class CourseJobManager:
         await self._recursive_extract(extracted_dir)
 
     async def _extract_single_archive(self, archive_path: str, output_dir: str, job_id: str):
-        """Extract an archive file using unrar, 7z, tar, or Python fallback."""
+        """Extract an archive file using unrar, 7z, tar, or Python fallback with password rotation."""
         lower = archive_path.lower()
-        cmd = None
+        passwords = ["www.downloadly.ir", "www.downloadlynet.ir", "downloadly.ir", ""]
 
-        if lower.endswith(".rar") or ".part" in lower:
-            if shutil.which("unrar"):
-                cmd = ["unrar", "x", "-o+", "-inul", archive_path, f"{output_dir}/"]
-            elif shutil.which("7z"):
-                cmd = ["7z", "x", "-y", f"-o{output_dir}", archive_path]
-            elif shutil.which("7za"):
-                cmd = ["7za", "x", "-y", f"-o{output_dir}", archive_path]
-        elif lower.endswith(".7z") or ".7z." in lower or lower.endswith(".001"):
-            if shutil.which("7z"):
-                cmd = ["7z", "x", "-y", f"-o{output_dir}", archive_path]
-            elif shutil.which("7za"):
-                cmd = ["7za", "x", "-y", f"-o{output_dir}", archive_path]
-        elif lower.endswith(".zip"):
-            if shutil.which("7z"):
-                cmd = ["7z", "x", "-y", f"-o{output_dir}", archive_path]
-            elif shutil.which("unzip"):
-                cmd = ["unzip", "-o", "-q", archive_path, "-d", output_dir]
+        # Build list of archivers available on worker node
+        archivers = []
+        if shutil.which("unrar"):
+            archivers.append("unrar")
+        if shutil.which("7z"):
+            archivers.append("7z")
+        elif shutil.which("7za"):
+            archivers.append("7za")
 
-        if cmd:
-            print(f"⚡ [course_worker] [Job {job_id}] Executing command: {' '.join(cmd)}")
-            proc = await asyncio.create_subprocess_exec(
-                cmd[0], *cmd[1:],
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            self.current_procs[job_id] = proc
-            stdout, stderr = await proc.communicate()
-            self.current_procs.pop(job_id, None)
+        last_error = ""
 
-            if proc.returncode != 0:
-                err_text = stderr.decode(errors="replace") or stdout.decode(errors="replace")
-                print(f"⚠️ [course_worker] Extractor command failed (code {proc.returncode}): {err_text[:200]}")
-                # Fall back to Python libraries if applicable
-                if lower.endswith(".zip"):
-                    self._extract_zip_python(archive_path, output_dir)
-                elif lower.endswith(".tar") or lower.endswith(".tar.gz") or lower.endswith(".tgz"):
-                    self._extract_tar_python(archive_path, output_dir)
-                else:
-                    raise RuntimeError(f"Extraction failed: {err_text}")
-        else:
-            # Python built-in fallbacks
-            if lower.endswith(".zip"):
-                self._extract_zip_python(archive_path, output_dir)
-            elif lower.endswith(".tar") or lower.endswith(".tar.gz") or lower.endswith(".tgz"):
-                self._extract_tar_python(archive_path, output_dir)
-            elif shutil.which("tar"):
-                tar_cmd = ["tar", "-xf", archive_path, "-C", output_dir]
-                proc = await asyncio.create_subprocess_exec(*tar_cmd)
-                await proc.communicate()
-                if proc.returncode != 0:
-                    raise RuntimeError(f"tar command failed to extract {archive_path}")
-            else:
-                raise RuntimeError(
-                    f"No suitable archiver (unrar / 7z / unzip) found to extract {os.path.basename(archive_path)}."
+        # Try archivers with known downloadly passwords
+        for archiver in archivers:
+            for pwd in passwords:
+                cmd = []
+                if archiver == "unrar":
+                    p_arg = f"-p{pwd}" if pwd else "-p-"
+                    cmd = ["unrar", "x", "-o+", "-y", p_arg, archive_path, f"{output_dir}/"]
+                elif archiver in ("7z", "7za"):
+                    p_arg = f"-p{pwd}" if pwd else "-p-"
+                    cmd = [archiver, "x", "-y", "-aoa", p_arg, f"-o{output_dir}", archive_path]
+
+                if not cmd:
+                    continue
+
+                print(f"⚡ [course_worker] [Job {job_id}] Trying {archiver} (pwd: '{pwd}'): {' '.join(cmd[:4])}...")
+                proc = await asyncio.create_subprocess_exec(
+                    cmd[0], *cmd[1:],
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
                 )
+                self.current_procs[job_id] = proc
+                stdout, stderr = await proc.communicate()
+                self.current_procs.pop(job_id, None)
+
+                if proc.returncode == 0:
+                    print(f"🎉 [course_worker] [Job {job_id}] Extraction succeeded with {archiver} (password: '{pwd}')!")
+                    return
+                else:
+                    err_text = stderr.decode(errors="replace") or stdout.decode(errors="replace")
+                    last_error = err_text.strip()
+
+        # Fallbacks for zip / tar
+        if lower.endswith(".zip"):
+            try:
+                self._extract_zip_python(archive_path, output_dir)
+                return
+            except Exception as e:
+                last_error = str(e)
+        elif lower.endswith(".tar") or lower.endswith(".tar.gz") or lower.endswith(".tgz"):
+            try:
+                self._extract_tar_python(archive_path, output_dir)
+                return
+            except Exception as e:
+                last_error = str(e)
+
+        raise RuntimeError(f"Extraction failed for {os.path.basename(archive_path)}: {last_error[:350]}")
 
     def _extract_zip_python(self, zip_path: str, output_dir: str):
         import zipfile
