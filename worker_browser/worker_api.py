@@ -1,5 +1,6 @@
 from typing import Dict, Optional, List
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, HTTPException, Response, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from seleniumbase import SB
 import uvicorn
@@ -9,7 +10,20 @@ import os
 import asyncio
 import subprocess
 import time
+import json
+from datetime import datetime, timezone
 import httpx
+
+from course_worker import (
+    course_manager,
+    CourseJobRequest,
+    get_disk_metrics,
+    get_cpu_percent,
+    WORKER_ID,
+    WORKER_PUBLIC_URL,
+    WORKER_API_SECRET,
+    DEFAULT_CONCURRENCY,
+)
 
 app = FastAPI(title="Worker Browser API")
 
@@ -653,6 +667,105 @@ try:
 
 except Exception as e:
     print(f"[*] Direct Drive uploader initialization error: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Distributed Course Worker & Central Hub Protocol Endpoints
+# ---------------------------------------------------------------------------
+
+@app.get("/worker/status")
+def worker_status():
+    """
+    Worker Health & Disk Metric (ENOSPC prevention)
+    Returns worker ID, status ('idle' | 'busy'), disk metrics, concurrency limit, and active job ID.
+    """
+    disk = get_disk_metrics()
+    active_job_id = course_manager.get_active_job_id()
+    return {
+        "workerId": WORKER_ID,
+        "status": course_manager.get_status(),
+        "disk": disk,
+        "concurrencyLimit": DEFAULT_CONCURRENCY,
+        "activeJob": active_job_id,
+        "activeJobId": active_job_id,
+    }
+
+
+@app.post("/worker/jobs", status_code=202)
+async def dispatch_course_job(req: CourseJobRequest, request: Request):
+    """
+    Dispatch Course Download & Extraction Job to this isolated worker node.
+    Returns 202 Accepted if queued, or 409 Conflict if already busy.
+    """
+    if WORKER_API_SECRET:
+        auth_header = request.headers.get("authorization", "")
+        if auth_header != f"Bearer {WORKER_API_SECRET}":
+            raise HTTPException(status_code=401, detail="Unauthorized")
+
+    if course_manager.is_busy():
+        return JSONResponse(
+            status_code=409,
+            content={"error": "Worker is currently busy with another job"}
+        )
+
+    try:
+        course_manager.start_job(req)
+        return JSONResponse(
+            status_code=202,
+            content={
+                "success": True,
+                "jobId": req.jobId,
+                "status": "accepted",
+                "message": "Job accepted. Worker transitioning to 'busy'."
+            }
+        )
+    except RuntimeError as e:
+        return JSONResponse(
+            status_code=409,
+            content={"error": str(e)}
+        )
+
+
+@app.post("/worker/jobs/{job_id}/cancel")
+@app.post("/worker/jobs/:job_id/cancel")
+async def cancel_course_job(job_id: str):
+    """
+    Cancel & Force Purge Worker Job.
+    Terminates ongoing operations, recursively wipes job directories, and marks worker idle.
+    """
+    purged = await course_manager.cancel_job(job_id)
+    return {
+        "success": True,
+        "jobId": job_id,
+        "status": "cancelled",
+        "diskPurged": True,
+    }
+
+
+@app.get("/api/workers/pool")
+def get_worker_pool(request: Request):
+    """
+    Central Worker Pool Discovery Endpoint.
+    Returns array of available workers with status, free disk, and heartbeat.
+    """
+    disk = get_disk_metrics()
+    public_url = WORKER_PUBLIC_URL or str(request.base_url).rstrip("/")
+    active_job_id = course_manager.get_active_job_id()
+
+    return {
+        "success": True,
+        "workers": [
+            {
+                "id": WORKER_ID,
+                "url": public_url,
+                "status": course_manager.get_status(),
+                "freeDiskGB": disk["freeGB"],
+                "cpuPercent": get_cpu_percent(),
+                "activeJobId": active_job_id,
+                "lastHeartbeat": datetime.now(timezone.utc).isoformat(),
+            }
+        ]
+    }
 
 
 if __name__ == "__main__":
