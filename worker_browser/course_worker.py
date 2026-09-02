@@ -33,6 +33,16 @@ try:
 except ImportError:
     psutil = None
 
+try:
+    from dlengine import DLEngine, ProgressEvent, DownloadEngineError
+except ImportError:
+    try:
+        from worker_browser.dlengine import DLEngine, ProgressEvent, DownloadEngineError
+    except ImportError:
+        DLEngine = None
+        ProgressEvent = None
+        DownloadEngineError = None
+
 # ---------------------------------------------------------------------------
 # Structured Logging Setup
 # ---------------------------------------------------------------------------
@@ -50,7 +60,7 @@ WORKER_ID = os.environ.get("WORKER_ID") or f"worker-{socket.gethostname()[:12]}"
 WORKER_PUBLIC_URL = os.environ.get("WORKER_PUBLIC_URL", "").rstrip("/")
 WORKER_API_SECRET = os.environ.get("WORKER_API_SECRET", "")
 DEFAULT_CONCURRENCY = int(os.environ.get("CONCURRENCY_LIMIT", "10"))
-MAX_CONCURRENT_JOBS = int(os.environ.get("MAX_CONCURRENT_JOBS", "2"))
+MAX_CONCURRENT_JOBS = int(os.environ.get("MAX_CONCURRENT_JOBS", "6"))
 EXTRACTION_TIMEOUT_SEC = float(os.environ.get("EXTRACTION_TIMEOUT_SEC", "3600.0"))
 SAFETY_DISK_MIN_BYTES = int(os.environ.get("SAFETY_DISK_MIN_BYTES", str(5 * 1024 * 1024 * 1024))) # 5 GB
 UPLOAD_CONCURRENCY = int(os.environ.get("UPLOAD_CONCURRENCY", "6"))
@@ -495,6 +505,16 @@ class CourseJobManager:
         sem = asyncio.Semaphore(concurrency)
         start_t = time.time()
 
+        # Initialize High-Speed Go Multi-Part Engine if available
+        engine: Optional[Any] = None
+        if DLEngine and DLEngine.is_available():
+            try:
+                engine = DLEngine()
+                logger.info(f"⚡ [Job {job_id}] High-Speed Go Multi-Part Engine active ({engine.bin_path})")
+            except Exception as e:
+                logger.warning(f"⚠️ [Job {job_id}] Could not initialize Go downloader: {e}")
+                engine = None
+
         async def reporter_loop():
             while not cancel_event.is_set():
                 await asyncio.sleep(1.0)
@@ -548,7 +568,47 @@ class CourseJobManager:
                     "Referer": "https://downloadlynet.ir/",
                 }
 
-                # Up to 3 resilient retry attempts per part
+                # Upfront disk space verification
+                usage = shutil.disk_usage(parts_dir)
+                if usage.free < SAFETY_DISK_MIN_BYTES:
+                    raise RuntimeError(
+                        f"Insufficient disk space: free space ({usage.free / (1024**3):.2f} GB) "
+                        f"dropped below 5 GB safety threshold."
+                    )
+
+                # Attempt fast multi-part download via Go binary
+                if engine:
+                    def on_go_progress(evt: ProgressEvent):
+                        part["downloadedBytes"] = evt.downloaded_bytes
+                        part["totalBytes"] = evt.total_bytes
+                        part["percent"] = evt.percent
+                        part["speedBps"] = int(evt.speed_bytes_sec)
+
+                    try:
+                        logger.info(f"⚡ [Job {job_id}] Downloading {part['fileName']} via Go Multi-Part Engine (16 chunks)...")
+                        result = await engine.download_async(
+                            url=url,
+                            output_path=dest,
+                            concurrency=16,
+                            chunk_size="8MB",
+                            retries=5,
+                            headers=headers,
+                            on_progress=on_go_progress,
+                            cancel_event=cancel_event,
+                        )
+                        part["downloadedBytes"] = result.total_bytes
+                        part["totalBytes"] = result.total_bytes
+                        part["percent"] = 100.0
+                        part["status"] = "completed"
+                        logger.info(f"✅ [Job {job_id}] Part {part['fileName']} completed in {result.elapsed_seconds:.1f}s ({result.avg_speed_mb_s:.2f} MB/s)")
+                        return
+                    except Exception as go_err:
+                        if cancel_event.is_set():
+                            part["status"] = "failed"
+                            return
+                        logger.warning(f"⚠️ [Job {job_id}] Go downloader failed for {part['fileName']} ({go_err}), falling back to stream download...")
+
+                # Fallback: Resilient single-stream download via httpx
                 max_retries = 3
                 for attempt in range(max_retries):
                     if cancel_event.is_set():
@@ -617,7 +677,7 @@ class CourseJobManager:
                             return  # Success!
 
                     except Exception as part_err:
-                        logger.warning(f"⚠️ [Job {job_id}] Part {part['fileName']} download attempt {attempt + 1}/{max_retries} failed: {part_err}")
+                        logger.warning(f"⚠️ [Job {job_id}] Part {part['fileName']} stream download attempt {attempt + 1}/{max_retries} failed: {part_err}")
                         if attempt == max_retries - 1:
                             part["status"] = "failed"
                             raise RuntimeError(f"Download failed for {part['fileName']} after {max_retries} attempts: {part_err}")

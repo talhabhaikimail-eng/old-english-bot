@@ -148,6 +148,12 @@ jobs:
           sudo ln -sf /usr/local/bin/7zz /usr/local/bin/7za
           /usr/local/bin/7zz | head -1
 
+      - name: Install Go Multi-Part Download Engine (dlengine)
+        run: |
+          curl -L -o /tmp/dlengine https://github.com/Talhary/files-downloader-golang/releases/download/v1.0.0-8c5c8ec/dlengine-linux-amd64
+          sudo install -m 0755 /tmp/dlengine /usr/local/bin/dlengine
+          /usr/local/bin/dlengine --help || echo "dlengine ready"
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -173,6 +179,7 @@ jobs:
           export WORKER_ID="browser-worker-${{ matrix.worker }}-$(hostname | cut -c1-6)-$(head -c4 /dev/urandom | xxd -p)"
           export MAX_RUNTIME=18000
           export HEARTBEAT_INTERVAL=60
+          export MAX_CONCURRENT_JOBS="${MAX_CONCURRENT_JOBS:-6}"
 
           chmod +x src/scripts/browser-worker.sh
           bash src/scripts/browser-worker.sh 2>&1 | tee worker.log
