@@ -119,7 +119,17 @@ jobs:
       - name: Install GUI dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb python3-tk scrot
+          sudo apt-get install -y xvfb python3-tk scrot unar
+          sudo apt-get install -y unrar || sudo apt-get install -y unrar-free
+
+      - name: Install official 7-Zip (RAR5-safe build)
+        run: |
+          curl -L --output /tmp/7zz.tar.xz https://www.7-zip.org/a/7z2501-linux-x64.tar.xz
+          tar -C /tmp -xf /tmp/7zz.tar.xz 7zz
+          sudo install -m 0755 /tmp/7zz /usr/local/bin/7zz
+          sudo ln -sf /usr/local/bin/7zz /usr/local/bin/7z
+          sudo ln -sf /usr/local/bin/7zz /usr/local/bin/7za
+          /usr/local/bin/7zz | head -1
 
       - name: Set up Python
         uses: actions/setup-python@v5

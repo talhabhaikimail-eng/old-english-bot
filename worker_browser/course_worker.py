@@ -716,7 +716,11 @@ class CourseJobManager:
         if unrar_bin:
             archivers.append(("unrar", unrar_bin))
 
-        sevenz_bin = shutil.which("7z") or shutil.which("7za")
+        unar_bin = shutil.which("unar")
+        if unar_bin:
+            archivers.append(("unar", unar_bin))
+
+        sevenz_bin = shutil.which("7z") or shutil.which("7za") or shutil.which("7zz")
         if sevenz_bin:
             archivers.append(("7z", sevenz_bin))
 
@@ -728,7 +732,12 @@ class CourseJobManager:
                 if arch_type == "unrar":
                     p_arg = f"-p{pwd}" if pwd else "-p-"
                     cmd = [bin_path, "x", "-o+", "-y", p_arg, archive_path, f"{output_dir}/"]
-                elif arch_type in ("7z", "7za"):
+                elif arch_type == "unar":
+                    if pwd:
+                        cmd = [bin_path, "-o", output_dir, "-f", "-p", pwd, archive_path]
+                    else:
+                        cmd = [bin_path, "-o", output_dir, "-f", archive_path]
+                elif arch_type in ("7z", "7za", "7zz"):
                     p_arg = f"-p{pwd}" if pwd else "-p"
                     cmd = [bin_path, "x", "-y", "-aoa", p_arg, f"-o{output_dir}", archive_path]
 
@@ -753,6 +762,13 @@ class CourseJobManager:
                     else:
                         summary = self._summarize_extractor_output(stdout, stderr)
                         attempt_errors.append(f"[{arch_type} pwd='{pwd}' rc={proc.returncode}] {summary}")
+                        if proc.returncode < 0:
+                            # Negative rc = tool was killed by a signal (e.g. SIGSEGV = -11).
+                            # That is a tool/build crash, not a wrong password: retrying the
+                            # same tool with other passwords will crash again. Skip to next tool.
+                            logger.warning(f"💥 [Job {job_id}] {arch_type} CRASHED (signal {-proc.returncode}) pwd='{pwd}': {summary}")
+                            attempt_errors.append(f"[{arch_type} pwd='{pwd}'] tool crashed (signal {-proc.returncode}); skipped remaining passwords")
+                            break
                         logger.warning(f"⚠️ [Job {job_id}] {arch_type} (pwd: '{pwd}') failed rc={proc.returncode}: {summary}")
                 except asyncio.TimeoutError:
                     if job_id in self.current_procs:
