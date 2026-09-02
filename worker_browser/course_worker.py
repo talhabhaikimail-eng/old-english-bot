@@ -738,8 +738,10 @@ class CourseJobManager:
                     else:
                         cmd = [bin_path, "-o", output_dir, "-f", archive_path]
                 elif arch_type in ("7z", "7za", "7zz"):
-                    p_arg = f"-p{pwd}" if pwd else "-p"
-                    cmd = [bin_path, "x", "-y", "-aoa", p_arg, f"-o{output_dir}", archive_path]
+                    cmd = [bin_path, "x", "-y", "-aoa"]
+                    if pwd:
+                        cmd.append(f"-p{pwd}")
+                    cmd.extend([f"-o{output_dir}", archive_path])
 
                 if not cmd:
                     continue
