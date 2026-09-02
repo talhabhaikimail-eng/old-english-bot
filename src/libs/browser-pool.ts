@@ -567,7 +567,7 @@ class BrowserPool {
       }
     }
 
-    // Auto-scaling: If active browsers drop below 3, and total browsers are below 30 (max limit of jobs for workers), trigger new spawn.
+    // Auto-scaling: If active browsers drop below 3, and total browsers are below 30, trigger new spawn.
     const activeCount = this.getActive().length;
     const MAX_TOTAL_BROWSERS = 30;
     if (activeCount < 3 && this.browsers.size < MAX_TOTAL_BROWSERS) {
