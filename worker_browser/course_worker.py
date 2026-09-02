@@ -64,6 +64,8 @@ MAX_CONCURRENT_JOBS = int(os.environ.get("MAX_CONCURRENT_JOBS", "6"))
 EXTRACTION_TIMEOUT_SEC = float(os.environ.get("EXTRACTION_TIMEOUT_SEC", "3600.0"))
 SAFETY_DISK_MIN_BYTES = int(os.environ.get("SAFETY_DISK_MIN_BYTES", str(5 * 1024 * 1024 * 1024))) # 5 GB
 UPLOAD_CONCURRENCY = int(os.environ.get("UPLOAD_CONCURRENCY", "6"))
+DOWNLOAD_FILE_TIMEOUT_SEC = float(os.environ.get("DOWNLOAD_FILE_TIMEOUT_SEC", os.environ.get("DOWNLOAD_PART_TIMEOUT_SEC", "1800.0"))) # 30 min per file
+DOWNLOAD_STALL_TIMEOUT_SEC = float(os.environ.get("DOWNLOAD_STALL_TIMEOUT_SEC", "60.0")) # 60s stall/inactivity timeout
 
 # Base temporary jobs directory (e.g., /tmp/jobs or system temp)
 if os.path.exists("/tmp") and os.access("/tmp", os.W_OK):
@@ -106,6 +108,8 @@ class CourseJobRequest(BaseModel):
     callbackUrl: str
     password: Optional[str] = None
     tokenRefreshUrl: Optional[str] = None
+    downloadTimeoutSec: Optional[float] = None
+    downloadStallTimeoutSec: Optional[float] = None
 
 
 # ---------------------------------------------------------------------------
@@ -554,6 +558,9 @@ class CourseJobManager:
 
         reporter_task = asyncio.create_task(reporter_loop())
 
+        file_timeout = getattr(req, "downloadTimeoutSec", None) or DOWNLOAD_FILE_TIMEOUT_SEC
+        stall_timeout = getattr(req, "downloadStallTimeoutSec", None) or DOWNLOAD_STALL_TIMEOUT_SEC
+
         async def download_single_part(part: Dict[str, Any]):
             async with sem:
                 if cancel_event.is_set():
@@ -578,15 +585,20 @@ class CourseJobManager:
 
                 # Attempt fast multi-part download via Go binary
                 if engine:
+                    part_cancel_event = asyncio.Event()
+                    start_dl_time = time.time()
+                    last_activity_time = time.time()
+
                     def on_go_progress(evt: ProgressEvent):
+                        nonlocal last_activity_time
+                        last_activity_time = time.time()
                         part["downloadedBytes"] = evt.downloaded_bytes
                         part["totalBytes"] = evt.total_bytes
                         part["percent"] = evt.percent
                         part["speedBps"] = int(evt.speed_bytes_sec)
 
-                    try:
-                        logger.info(f"⚡ [Job {job_id}] Downloading {part['fileName']} via Go Multi-Part Engine (16 chunks)...")
-                        result = await engine.download_async(
+                    async def run_go_download():
+                        return await engine.download_async(
                             url=url,
                             output_path=dest,
                             concurrency=16,
@@ -594,8 +606,46 @@ class CourseJobManager:
                             retries=5,
                             headers=headers,
                             on_progress=on_go_progress,
-                            cancel_event=cancel_event,
+                            cancel_event=part_cancel_event,
                         )
+
+                    dl_task = asyncio.create_task(run_go_download())
+
+                    try:
+                        logger.info(f"⚡ [Job {job_id}] Downloading {part['fileName']} via Go Multi-Part Engine (16 chunks, timeout={file_timeout:.0f}s, stall_timeout={stall_timeout:.0f}s)...")
+
+                        while not dl_task.done():
+                            done, _ = await asyncio.wait({dl_task}, timeout=1.0)
+                            if done:
+                                break
+
+                            if cancel_event.is_set():
+                                part_cancel_event.set()
+                                dl_task.cancel()
+                                await asyncio.gather(dl_task, return_exceptions=True)
+                                part["status"] = "failed"
+                                return
+
+                            now = time.time()
+                            # Check stall timeout (waiting for files to return data/progress)
+                            if stall_timeout > 0 and (now - last_activity_time) >= stall_timeout:
+                                part_cancel_event.set()
+                                dl_task.cancel()
+                                await asyncio.gather(dl_task, return_exceptions=True)
+                                raise TimeoutError(
+                                    f"Download stalled: no data returned for {stall_timeout:.0f}s (file: {part['fileName']})"
+                                )
+
+                            # Check total file download timeout
+                            if file_timeout > 0 and (now - start_dl_time) >= file_timeout:
+                                part_cancel_event.set()
+                                dl_task.cancel()
+                                await asyncio.gather(dl_task, return_exceptions=True)
+                                raise TimeoutError(
+                                    f"Download timed out: exceeded maximum duration of {file_timeout:.0f}s (file: {part['fileName']})"
+                                )
+
+                        result = await dl_task
                         part["downloadedBytes"] = result.total_bytes
                         part["totalBytes"] = result.total_bytes
                         part["percent"] = 100.0
@@ -621,7 +671,8 @@ class CourseJobManager:
                         req_headers["Range"] = f"bytes={existing_bytes}-"
 
                     try:
-                        async with HTTP_CLIENT.stream("GET", url, headers=req_headers) as resp:
+                        stream_timeout = httpx.Timeout(connect=15.0, read=stall_timeout, write=30.0, pool=30.0)
+                        async with HTTP_CLIENT.stream("GET", url, headers=req_headers, timeout=stream_timeout) as resp:
                             if resp.status_code not in (200, 206):
                                 raise RuntimeError(f"HTTP {resp.status_code} returned by CDN")
 
@@ -642,11 +693,25 @@ class CourseJobManager:
 
                             chunk_count = 0
                             last_disk_check = time.time()
+                            stream_start = time.time()
+                            chunk_iter = resp.aiter_bytes(chunk_size=256 * 1024).__aiter__()
+
                             with open(dest, file_mode) as f:
-                                async for chunk in resp.aiter_bytes(chunk_size=256 * 1024):
+                                while True:
                                     if cancel_event.is_set():
                                         part["status"] = "failed"
                                         return
+
+                                    now = time.time()
+                                    if file_timeout > 0 and (now - stream_start) >= file_timeout:
+                                        raise TimeoutError(f"Stream download exceeded maximum timeout of {file_timeout:.0f}s")
+
+                                    try:
+                                        chunk = await asyncio.wait_for(chunk_iter.__anext__(), timeout=stall_timeout)
+                                    except StopAsyncIteration:
+                                        break
+                                    except asyncio.TimeoutError:
+                                        raise TimeoutError(f"Stream download stalled: no data received for {stall_timeout:.0f}s")
 
                                     f.write(chunk)
                                     bytes_dl += len(chunk)
