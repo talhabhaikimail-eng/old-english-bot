@@ -449,21 +449,37 @@ class CourseJobManager:
                     "Referer": "https://downloadlynet.ir/",
                 }
 
+                existing_bytes = os.path.getsize(dest) if os.path.exists(dest) else 0
+                if existing_bytes > 0:
+                    headers["Range"] = f"bytes={existing_bytes}-"
+
                 # Stream with httpx
                 async with httpx.AsyncClient(timeout=httpx.Timeout(connect=30.0, read=120.0, write=30.0, pool=30.0), follow_redirects=True) as client:
                     async with client.stream("GET", url, headers=headers) as resp:
-                        if resp.status_code != 200:
+                        if resp.status_code not in (200, 206):
                             part["status"] = "failed"
                             raise RuntimeError(f"Download failed for {part['fileName']} (HTTP {resp.status_code})")
 
-                        c_len = resp.headers.get("content-length")
-                        total_bytes = int(c_len) if c_len and c_len.isdigit() else 0
-                        part["totalBytes"] = total_bytes
+                        is_resumed = (resp.status_code == 206)
+                        file_mode = "ab" if is_resumed else "wb"
+                        bytes_dl = existing_bytes if is_resumed else 0
 
-                        bytes_dl = 0
+                        cr_header = resp.headers.get("content-range")
+                        if cr_header and "/" in cr_header:
+                            total_str = cr_header.split("/")[-1].strip()
+                            total_bytes = int(total_str) if total_str.isdigit() else 0
+                        else:
+                            c_len = resp.headers.get("content-length")
+                            total_bytes = (bytes_dl + int(c_len)) if c_len and c_len.isdigit() else 0
+
+                        part["totalBytes"] = total_bytes
+                        part["downloadedBytes"] = bytes_dl
+                        if total_bytes > 0 and bytes_dl > 0:
+                            part["percent"] = round((bytes_dl / total_bytes) * 100, 1)
+
                         chunk_count = 0
                         last_disk_check = time.time()
-                        with open(dest, "wb") as f:
+                        with open(dest, file_mode) as f:
                             async for chunk in resp.aiter_bytes(chunk_size=256 * 1024):
                                 if cancel_event.is_set():
                                     part["status"] = "failed"
@@ -565,6 +581,43 @@ class CourseJobManager:
         # 2. Recursive extraction for any nested .zip, .rar, .7z, .tar in extracted_dir
         await self._recursive_extract(extracted_dir, job_id, password)
 
+    @staticmethod
+    def _summarize_extractor_output(stdout: Optional[bytes], stderr: Optional[bytes]) -> str:
+        """Combine stdout+stderr of unrar/7z and surface the real error lines.
+
+        7-Zip prints its banner + 'Scanning the drive' + 'Extracting archive:'
+        BEFORE the actual 'ERROR: ...' diagnostics, so naive head-truncation
+        always hides the root cause. Filter for the diagnostic lines instead;
+        fall back to the tail of the raw output for unrecognized formats.
+        """
+        parts: List[str] = []
+        if stderr:
+            parts.append(stderr.decode(errors="replace"))
+        if stdout:
+            parts.append(stdout.decode(errors="replace"))
+        combined = "\n".join(parts)
+        lines = [ln.strip() for ln in combined.splitlines() if ln.strip()]
+
+        key_markers = (
+            "ERROR", "Can not open", "Cannot open", "Can not find", "Cannot find",
+            "missing volume", "Wrong password", "CRC failed", "Data Error",
+            "Unexpected end", "is corrupt", "is not supported", "checksum error",
+            "Break signaled", "Cannot create", "Disk full", "No space",
+        )
+        key_lines: List[str] = []
+        for i, ln in enumerate(lines):
+            if any(m in ln for m in key_markers):
+                key_lines.append(ln)
+                # 7z prints the affected file/path on the line AFTER the
+                # ERROR line (e.g. "ERROR: Cannot find volume" + volume path).
+                if ln.startswith("ERROR") and i + 1 < len(lines) and len(key_lines) < 6:
+                    key_lines.append(lines[i + 1])
+            if len(key_lines) >= 6:
+                break
+        if key_lines:
+            return " | ".join(key_lines[:6])
+        return " | ".join(lines[-5:]) if lines else "no output captured"
+
     async def _extract_single_archive(self, archive_path: str, output_dir: str, job_id: str, password: Optional[str] = None):
         """Extract an archive file using unrar, 7z, tar, or Python fallback with password rotation."""
         lower = archive_path.lower()
@@ -584,7 +637,7 @@ class CourseJobManager:
         elif shutil.which("7za"):
             archivers.append("7za")
 
-        last_error = ""
+        attempt_errors: List[str] = []
 
         # Try archivers with passwords
         for archiver in archivers:
@@ -594,7 +647,10 @@ class CourseJobManager:
                     p_arg = f"-p{pwd}" if pwd else "-p-"
                     cmd = ["unrar", "x", "-o+", "-y", p_arg, archive_path, f"{output_dir}/"]
                 elif archiver in ("7z", "7za"):
-                    p_arg = f"-p{pwd}" if pwd else "-p-"
+                    # NOTE: bare "-p" = empty password for 7-Zip. The previous
+                    # "-p-" was unrar syntax and made 7z try the literal
+                    # password "-".
+                    p_arg = f"-p{pwd}" if pwd else "-p"
                     cmd = [archiver, "x", "-y", "-aoa", p_arg, f"-o{output_dir}", archive_path]
 
                 if not cmd:
@@ -616,16 +672,17 @@ class CourseJobManager:
                         print(f"🎉 [course_worker] [Job {job_id}] Extraction succeeded with {archiver} (password: '{pwd}')!")
                         return
                     else:
-                        err_text = stderr.decode(errors="replace") or stdout.decode(errors="replace")
-                        last_error = err_text.strip()
+                        summary = self._summarize_extractor_output(stdout, stderr)
+                        attempt_errors.append(f"[{archiver} pwd='{pwd}' rc={proc.returncode}] {summary}")
+                        print(f"⚠️ [course_worker] [Job {job_id}] {archiver} (pwd: '{pwd}') failed rc={proc.returncode}: {summary}")
                 except asyncio.TimeoutError:
                     if job_id in self.current_procs:
                         try: self.current_procs[job_id].kill()
                         except Exception: pass
                         self.current_procs.pop(job_id, None)
-                    last_error = f"{archiver} extraction timed out after 900s"
+                    attempt_errors.append(f"[{archiver} pwd='{pwd}'] extraction timed out after 900s")
                 except Exception as ex:
-                    last_error = str(ex)
+                    attempt_errors.append(f"[{archiver} pwd='{pwd}'] {ex}")
 
         # Fallbacks for zip / tar
         if lower.endswith(".zip"):
@@ -633,15 +690,19 @@ class CourseJobManager:
                 self._extract_zip_python(archive_path, output_dir)
                 return
             except Exception as e:
-                last_error = str(e)
+                attempt_errors.append(f"[python-zip] {e}")
         elif lower.endswith(".tar") or lower.endswith(".tar.gz") or lower.endswith(".tgz"):
             try:
                 self._extract_tar_python(archive_path, output_dir)
                 return
             except Exception as e:
-                last_error = str(e)
+                attempt_errors.append(f"[python-tar] {e}")
 
-        raise RuntimeError(f"Extraction failed for {os.path.basename(archive_path)}: {last_error[:350]}")
+        detail = " || ".join(attempt_errors) if attempt_errors else "unknown error (no archiver available or no output captured)"
+        raise RuntimeError(
+            f"Extraction failed for {os.path.basename(archive_path)} "
+            f"({len(attempt_errors)} attempt(s) tried): {detail[:1200]}"
+        )
 
     def _extract_zip_python(self, zip_path: str, output_dir: str):
         import zipfile
@@ -815,12 +876,32 @@ class CourseJobManager:
         return uploaded_count
 
     async def _create_drive_subfolder(self, name: str, parent_id: str, access_token: str) -> str:
-        """Creates a folder in Google Drive using REST API with retries and supportsAllDrives."""
-        url = "https://www.googleapis.com/drive/v3/files?supportsAllDrives=true"
+        """Creates or retrieves a subfolder in Google Drive idempotently with retries and supportsAllDrives."""
         headers = {
             "Authorization": f"Bearer {access_token}",
             "Content-Type": "application/json",
         }
+
+        # Idempotency check: search if folder already exists under parent_id
+        safe_name = name.replace("'", "\\'")
+        q = f"mimeType = 'application/vnd.google-apps.folder' and name = '{safe_name}' and trashed = false"
+        if parent_id:
+            q += f" and '{parent_id}' in parents"
+        list_url = f"https://www.googleapis.com/drive/v3/files?q={urllib.parse.quote(q)}&fields=files(id,name)&supportsAllDrives=true&includeItemsFromAllDrives=true"
+
+        for attempt in range(3):
+            try:
+                async with httpx.AsyncClient(timeout=15.0) as client:
+                    list_resp = await client.get(list_url, headers=headers)
+                    if list_resp.status_code == 200:
+                        existing = list_resp.json().get("files", [])
+                        if existing:
+                            return existing[0]["id"]
+                    break
+            except Exception:
+                pass
+
+        url = "https://www.googleapis.com/drive/v3/files?supportsAllDrives=true"
         body = {
             "name": name,
             "mimeType": "application/vnd.google-apps.folder",
@@ -878,6 +959,23 @@ class CourseJobManager:
             total_bytes = raw_size + 16
         else:
             total_bytes = raw_size
+
+        # 0. Idempotency Check: Skip upload if file already exists in target folder with identical size
+        if folder_id:
+            safe_fname = final_file_name.replace("'", "\\'")
+            check_q = f"name = '{safe_fname}' and '{folder_id}' in parents and trashed = false"
+            check_url = f"https://www.googleapis.com/drive/v3/files?q={urllib.parse.quote(check_q)}&fields=files(id,name,size)&supportsAllDrives=true&includeItemsFromAllDrives=true"
+            try:
+                chk_res = requests.get(check_url, headers={"Authorization": f"Bearer {access_token}"}, timeout=15)
+                if chk_res.status_code == 200:
+                    existing_files = chk_res.json().get("files", [])
+                    if existing_files:
+                        ef = existing_files[0]
+                        if int(ef.get("size", -1)) == total_bytes:
+                            print(f"✨ [course_worker] File '{final_file_name}' already uploaded to Drive ({ef['id']}). Skipping re-upload.")
+                            return ef
+            except Exception as chk_err:
+                print(f"⚠️ [course_worker] Pre-upload existence check notice: {chk_err}")
 
         # 1. Initialize Resumable Upload Session
         init_headers = {

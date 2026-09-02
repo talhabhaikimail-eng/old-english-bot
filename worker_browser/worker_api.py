@@ -725,11 +725,17 @@ async def dispatch_course_job(req: CourseJobRequest, request: Request):
 
 
 @app.post("/worker/jobs/{job_id}/cancel")
-async def cancel_course_job(job_id: str):
+async def cancel_course_job(job_id: str, request: Request):
     """
     Cancel & Force Purge Worker Job.
     Terminates ongoing operations, recursively wipes job directories, and marks worker idle.
     """
+    if WORKER_API_SECRET:
+        auth_header = request.headers.get("authorization", "")
+        secret_header = request.headers.get("x-worker-secret", "")
+        if auth_header != f"Bearer {WORKER_API_SECRET}" and secret_header != WORKER_API_SECRET:
+            raise HTTPException(status_code=401, detail="Unauthorized")
+
     purged = await course_manager.cancel_job(job_id)
     return {
         "success": True,
