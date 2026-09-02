@@ -53,7 +53,7 @@ DEFAULT_CONCURRENCY = int(os.environ.get("CONCURRENCY_LIMIT", "10"))
 MAX_CONCURRENT_JOBS = int(os.environ.get("MAX_CONCURRENT_JOBS", "2"))
 EXTRACTION_TIMEOUT_SEC = float(os.environ.get("EXTRACTION_TIMEOUT_SEC", "3600.0"))
 SAFETY_DISK_MIN_BYTES = int(os.environ.get("SAFETY_DISK_MIN_BYTES", str(5 * 1024 * 1024 * 1024))) # 5 GB
-UPLOAD_CONCURRENCY = int(os.environ.get("UPLOAD_CONCURRENCY", "3"))
+UPLOAD_CONCURRENCY = int(os.environ.get("UPLOAD_CONCURRENCY", "6"))
 
 # Base temporary jobs directory (e.g., /tmp/jobs or system temp)
 if os.path.exists("/tmp") and os.access("/tmp", os.W_OK):
@@ -223,6 +223,40 @@ async def fetch_refreshed_token(job_id: str, callback_url: str, account_id: Opti
                 continue
     except Exception as e:
         logger.warning(f"Could not refresh access token from Hub: {e}")
+    return None
+
+
+def fetch_refreshed_token_sync(job_id: str, callback_url: str, account_id: Optional[str] = None, token_refresh_url: Optional[str] = None) -> Optional[str]:
+    """Synchronously requests a freshly minted Google OAuth token from the Central Hub in worker threads."""
+    try:
+        headers = {}
+        if WORKER_API_SECRET:
+            headers["X-Worker-Secret"] = WORKER_API_SECRET
+            headers["Authorization"] = f"Bearer {WORKER_API_SECRET}"
+
+        endpoints = []
+        if token_refresh_url:
+            endpoints.append(token_refresh_url)
+
+        parsed = urllib.parse.urlparse(callback_url)
+        base_hub_url = f"{parsed.scheme}://{parsed.netloc}"
+        endpoints.append(f"{base_hub_url}/api/courses/{job_id}/refresh-token")
+        if account_id:
+            endpoints.append(f"{base_hub_url}/api/accounts/{account_id}/token")
+
+        for ep in endpoints:
+            try:
+                res = requests.get(ep, headers=headers, timeout=10)
+                if res.status_code == 200:
+                    data = res.json()
+                    token = data.get("accessToken") or data.get("token")
+                    if token:
+                        logger.info(f"🔑 Successfully refreshed Google Drive access token from Hub ({ep})")
+                        return token
+            except Exception:
+                continue
+    except Exception as e:
+        logger.warning(f"Could not refresh access token synchronously from Hub: {e}")
     return None
 
 
@@ -926,6 +960,7 @@ class CourseJobManager:
                 return current_parent
 
         uploaded_count = 0
+        count_lock = asyncio.Lock()
         upload_sem = asyncio.Semaphore(UPLOAD_CONCURRENCY)
 
         async def upload_worker(index: int, item: Tuple[str, str, str]):
@@ -966,7 +1001,10 @@ class CourseJobManager:
             except Exception as unl_err:
                 logger.warning(f"⚠️ [Job {job_id}] Failed to unlink {full_path}: {unl_err}")
 
-            uploaded_count += 1
+            async with count_lock:
+                uploaded_count += 1
+                current_count = uploaded_count
+
             drive_file_id = file_result.get("id", "")
             drive_view_link = f"https://drive.google.com/file/d/{drive_file_id}/view" if drive_file_id else ""
 
@@ -974,7 +1012,7 @@ class CourseJobManager:
                 "jobId": job_id,
                 "workerId": WORKER_ID,
                 "phase": "uploading",
-                "currentFileIndex": index + 1,
+                "currentFileIndex": current_count,
                 "totalFiles": total_files,
                 "currentFileName": fname,
                 "currentRelativePath": rel_path.replace("\\", "/"),
@@ -985,8 +1023,8 @@ class CourseJobManager:
                 "driveViewLink": drive_view_link,
             })
 
-        for i, item in enumerate(all_files):
-            await upload_worker(i, item)
+        tasks = [upload_worker(i, item) for i, item in enumerate(all_files)]
+        await asyncio.gather(*tasks)
 
         return uploaded_count
 
@@ -1050,8 +1088,9 @@ class CourseJobManager:
         token_refresh_url: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        Uploads a local file to Google Drive using Resumable Upload with exact 256KiB/16-byte
-        AES-CTR alignment, proper HTTP 308 Range parsing, and token refreshes.
+        Uploads a local file to Google Drive using either fast single-request Multipart Upload
+        (for files < 5 MB like subtitles, notes, small assets) or chunked Resumable Upload
+        (for larger files) with exact 256KiB/16-byte AES-CTR alignment and token refreshes.
         """
         raw_size = os.path.getsize(file_path)
         final_file_name = file_name
@@ -1074,23 +1113,71 @@ class CourseJobManager:
         else:
             total_bytes = raw_size
 
-        # 0. Idempotency Check: Skip upload if identical file already exists in target folder
-        if folder_id:
-            safe_fname = final_file_name.replace('\\', '\\\\').replace("'", "\\'")
-            check_q = f"name = '{safe_fname}' and '{folder_id}' in parents and trashed = false"
-            check_url = f"https://www.googleapis.com/drive/v3/files?q={urllib.parse.quote(check_q)}&fields=files(id,name,size)&supportsAllDrives=true&includeItemsFromAllDrives=true"
+        # -------------------------------------------------------------
+        # FAST PATH: Single-request Multipart Upload for files < 5 MB
+        # Drastically speeds up uploads for subtitles (.vtt, .srt), notes, and small files
+        # -------------------------------------------------------------
+        if raw_size < 5 * 1024 * 1024:
             try:
-                chk_res = requests.get(check_url, headers={"Authorization": f"Bearer {access_token}"}, timeout=15)
-                if chk_res.status_code == 200:
-                    existing_files = chk_res.json().get("files", [])
-                    if existing_files:
-                        ef = existing_files[0]
-                        if int(ef.get("size", -1)) == total_bytes:
-                            logger.info(f"✨ File '{final_file_name}' already exists on Drive ({ef['id']}). Skipping re-upload.")
-                            return ef
-            except Exception as chk_err:
-                logger.warning(f"Pre-upload existence check notice: {chk_err}")
+                boundary = f"-------DriveDirectUpload_{int(time.time()*1000)}"
+                if encrypt and encryptor:
+                    with open(file_path, "rb") as f:
+                        raw_data = f.read()
+                    file_payload = iv + encryptor.update(raw_data) + encryptor.finalize()
+                else:
+                    with open(file_path, "rb") as f:
+                        file_payload = f.read()
 
+                metadata = {
+                    "name": final_file_name,
+                    "parents": [folder_id] if folder_id else [],
+                }
+                metadata_json = json.dumps(metadata)
+
+                body = (
+                    f"--{boundary}\r\n"
+                    f"Content-Type: application/json; charset=UTF-8\r\n\r\n"
+                    f"{metadata_json}\r\n"
+                    f"--{boundary}\r\n"
+                    f"Content-Type: application/octet-stream\r\n\r\n"
+                ).encode("utf-8") + file_payload + f"\r\n--{boundary}--\r\n".encode("utf-8")
+
+                direct_headers = {
+                    "Authorization": f"Bearer {access_token}",
+                    "Content-Type": f"multipart/related; boundary={boundary}",
+                    "Content-Length": str(len(body)),
+                }
+                direct_url = "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true"
+
+                for attempt in range(3):
+                    try:
+                        d_res = requests.post(direct_url, headers=direct_headers, data=body, timeout=45)
+                        if d_res.status_code in (200, 201):
+                            return d_res.json()
+                        elif d_res.status_code == 401 and job_id and callback_url:
+                            fresh_tok = fetch_refreshed_token_sync(job_id, callback_url, account_id, token_refresh_url)
+                            if fresh_tok:
+                                access_token = fresh_tok
+                                direct_headers["Authorization"] = f"Bearer {access_token}"
+                        else:
+                            if attempt == 2:
+                                raise RuntimeError(f"Drive direct multipart upload failed ({d_res.status_code}): {d_res.text}")
+                            time.sleep(1.5 * (attempt + 1))
+                    except requests.RequestException:
+                        if attempt == 2:
+                            raise
+                        time.sleep(1.5 * (attempt + 1))
+            except Exception as direct_err:
+                logger.warning(f"⚠️ Direct multipart upload failed for {final_file_name}, falling back to resumable: {direct_err}")
+                # Reset encryption state for fallback
+                if encrypt and encryption_key and key_bytes:
+                    iv = os.urandom(16)
+                    cipher = Cipher(algorithms.AES(key_bytes), modes.CTR(iv))
+                    encryptor = cipher.encryptor()
+
+        # -------------------------------------------------------------
+        # RESUMABLE PATH: Chunked Streaming Upload for files >= 5 MB
+        # -------------------------------------------------------------
         # 1. Initialize Resumable Upload Session
         init_headers = {
             "Authorization": f"Bearer {access_token}",
@@ -1107,7 +1194,7 @@ class CourseJobManager:
         # Handle 401 token expiration on session init
         if init_res.status_code == 401 and job_id and callback_url:
             logger.info("🔄 Token expired during resumable upload init, refreshing...")
-            fresh_tok = asyncio.run(fetch_refreshed_token(job_id, callback_url, account_id, token_refresh_url))
+            fresh_tok = fetch_refreshed_token_sync(job_id, callback_url, account_id, token_refresh_url)
             if fresh_tok:
                 access_token = fresh_tok
                 init_headers["Authorization"] = f"Bearer {access_token}"
@@ -1197,7 +1284,7 @@ class CourseJobManager:
                             break
                         elif put_res.status_code == 401 and job_id and callback_url:
                             logger.info("🔄 Token expired mid-upload, refreshing...")
-                            fresh_tok = asyncio.run(fetch_refreshed_token(job_id, callback_url, account_id, token_refresh_url))
+                            fresh_tok = fetch_refreshed_token_sync(job_id, callback_url, account_id, token_refresh_url)
                             if fresh_tok:
                                 access_token = fresh_tok
                         else:
