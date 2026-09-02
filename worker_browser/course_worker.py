@@ -47,6 +47,14 @@ else:
     JOBS_BASE_DIR = os.environ.get("JOBS_BASE_DIR", os.path.join(tempfile.gettempdir(), "jobs"))
 
 
+# Prime psutil CPU percent counter on module load
+if psutil:
+    try:
+        psutil.cpu_percent(interval=None)
+    except Exception:
+        pass
+
+
 # ---------------------------------------------------------------------------
 # Pydantic Schemas
 # ---------------------------------------------------------------------------
@@ -55,6 +63,7 @@ class DriveUploadConfig(BaseModel):
     parentFolderId: str
     encrypt: Optional[bool] = True
     encryptionKey: Optional[str] = None
+    accountId: Optional[str] = None
 
 
 class CourseJobRequest(BaseModel):
@@ -64,6 +73,8 @@ class CourseJobRequest(BaseModel):
     concurrency: Optional[int] = DEFAULT_CONCURRENCY
     drive: DriveUploadConfig
     callbackUrl: str
+    password: Optional[str] = None
+    tokenRefreshUrl: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -91,11 +102,12 @@ def get_disk_metrics(target_path: Optional[str] = None) -> Dict[str, float]:
         }
     except Exception as e:
         print(f"[course_worker] Error reading disk metrics: {e}")
+        # Guard: Report 0GB free so ENOSPC safety triggers instead of masking exhaustion
         return {
-            "totalGB": 64.0,
-            "freeGB": 50.0,
-            "usedGB": 14.0,
-            "usedPercent": 21.8,
+            "totalGB": 0.0,
+            "freeGB": 0.0,
+            "usedGB": 0.0,
+            "usedPercent": 100.0,
         }
 
 
@@ -114,17 +126,62 @@ def natural_sort_key(s: str) -> List[Any]:
     return [int(text) if text.isdigit() else text.lower() for text in re.split(r'(\d+)', s)]
 
 
+def add_blocks_to_iv_py(iv: bytes, block_count: int) -> bytes:
+    """Increment a 16-byte IV by a 128-bit block count in Big-Endian."""
+    iv_int = int.from_bytes(iv, byteorder="big")
+    new_iv_int = (iv_int + block_count) % (1 << 128)
+    return new_iv_int.to_bytes(16, byteorder="big")
+
+
 async def post_webhook(url: str, payload: Dict[str, Any], timeout: float = 10.0):
-    """Deliver webhook updates to Central Hub with timeout and error handling."""
+    """Deliver webhook updates to Central Hub with timeout, auth, and error handling."""
     if not url:
         return
+    headers = {"Content-Type": "application/json"}
+    if WORKER_API_SECRET:
+        headers["X-Worker-Secret"] = WORKER_API_SECRET
+        headers["Authorization"] = f"Bearer {WORKER_API_SECRET}"
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.post(url, json=payload)
+            resp = await client.post(url, json=payload, headers=headers)
             if resp.status_code >= 400:
                 print(f"[course_worker] Webhook callback returned HTTP {resp.status_code}: {resp.text[:120]}")
     except Exception as e:
         print(f"[course_worker] Webhook callback failed for {url}: {e}")
+
+
+def fetch_refreshed_token(job_id: str, callback_url: str, account_id: Optional[str] = None, token_refresh_url: Optional[str] = None) -> Optional[str]:
+    """Requests a freshly minted Google OAuth token from the Central Hub."""
+    try:
+        headers = {}
+        if WORKER_API_SECRET:
+            headers["X-Worker-Secret"] = WORKER_API_SECRET
+            headers["Authorization"] = f"Bearer {WORKER_API_SECRET}"
+
+        endpoints = []
+        if token_refresh_url:
+            endpoints.append(token_refresh_url)
+
+        parsed = urllib.parse.urlparse(callback_url)
+        base_hub_url = f"{parsed.scheme}://{parsed.netloc}"
+        endpoints.append(f"{base_hub_url}/api/courses/{job_id}/refresh-token")
+        if account_id:
+            endpoints.append(f"{base_hub_url}/api/accounts/{account_id}/token")
+
+        for ep in endpoints:
+            try:
+                res = requests.get(ep, headers=headers, timeout=10)
+                if res.status_code == 200:
+                    data = res.json()
+                    token = data.get("accessToken") or data.get("token")
+                    if token:
+                        print(f"🔑 [course_worker] Successfully refreshed Google Drive access token from Hub ({ep})")
+                        return token
+            except Exception:
+                continue
+    except Exception as e:
+        print(f"⚠️ [course_worker] Could not refresh access token from Hub: {e}")
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -152,37 +209,35 @@ class CourseJobManager:
 
     async def cancel_job(self, job_id: str) -> bool:
         """Force cancels an active job and purges disk immediately."""
-        if job_id not in self.active_jobs:
-            job_dir = os.path.join(JOBS_BASE_DIR, job_id)
-            if os.path.exists(job_dir):
-                shutil.rmtree(job_dir, ignore_errors=True)
-            return False
+        found = False
+        if job_id in self.active_jobs:
+            found = True
+            print(f"🛑 [course_worker] Cancelling active job {job_id}...")
+            ev = self.cancel_events.get(job_id)
+            if ev:
+                ev.set()
 
-        print(f"🛑 [course_worker] Cancelling job {job_id}...")
-        ev = self.cancel_events.get(job_id)
-        if ev:
-            ev.set()
+            proc = self.current_procs.get(job_id)
+            if proc and proc.returncode is None:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
 
-        proc = self.current_procs.get(job_id)
-        if proc and proc.returncode is None:
-            try:
-                proc.kill()
-            except Exception:
-                pass
-
-        task = self.current_tasks.get(job_id)
-        if task and not task.done():
-            task.cancel()
+            task = self.current_tasks.get(job_id)
+            if task and not task.done():
+                task.cancel()
 
         job_dir = os.path.join(JOBS_BASE_DIR, job_id)
         if os.path.exists(job_dir):
             shutil.rmtree(job_dir, ignore_errors=True)
+            found = True
 
         self.active_jobs.pop(job_id, None)
         self.cancel_events.pop(job_id, None)
         self.current_tasks.pop(job_id, None)
         self.current_procs.pop(job_id, None)
-        return True
+        return found
 
     def start_job(self, req: CourseJobRequest):
         """Initializes job state and schedules asynchronous background processing."""
@@ -234,7 +289,7 @@ class CourseJobManager:
                 "message": f"Extracting archive volumes into {extracted_dir}...",
             })
 
-            await self._extract_archives(parts_dir, extracted_dir, job_id, cancel_event)
+            await self._extract_archives(parts_dir, extracted_dir, job_id, cancel_event, req.password)
 
             if cancel_event.is_set():
                 raise asyncio.CancelledError(f"Job {job_id} cancelled.")
@@ -260,7 +315,7 @@ class CourseJobManager:
             print(f"☁️ [course_worker] [Job {job_id}] STAGE 4: Progressive upload to Drive & immediate unlinking...")
             if job_id in self.active_jobs:
                 self.active_jobs[job_id]["phase"] = "uploading"
-            total_uploaded = await self._upload_and_unlink_files(extracted_dir, req)
+            total_uploaded = await self._upload_and_unlink_files(extracted_dir, req, cancel_event)
 
             # ---------------------------------------------------------------
             # STAGE 5: FULL WIPE & IDLE TRANSITION
@@ -390,7 +445,8 @@ class CourseJobManager:
                 dest = part["destPath"]
 
                 headers = {
-                    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                    "Referer": "https://downloadlynet.ir/",
                 }
 
                 # Stream with httpx
@@ -405,6 +461,8 @@ class CourseJobManager:
                         part["totalBytes"] = total_bytes
 
                         bytes_dl = 0
+                        chunk_count = 0
+                        last_disk_check = time.time()
                         with open(dest, "wb") as f:
                             async for chunk in resp.aiter_bytes(chunk_size=256 * 1024):
                                 if cancel_event.is_set():
@@ -413,26 +471,30 @@ class CourseJobManager:
 
                                 f.write(chunk)
                                 bytes_dl += len(chunk)
+                                chunk_count += 1
                                 part["downloadedBytes"] = bytes_dl
                                 if total_bytes > 0:
                                     part["percent"] = round((bytes_dl / total_bytes) * 100, 1)
 
-                                # ENOSPC Guard: Check free disk space every chunk
-                                usage = shutil.disk_usage(parts_dir)
-                                if usage.free < SAFETY_DISK_MIN_BYTES:
-                                    raise RuntimeError(
-                                        f"Insufficient disk space: free space ({usage.free / (1024**3):.2f} GB) "
-                                        f"dropped below 5 GB safety threshold."
-                                    )
+                                # ENOSPC Guard: Throttled disk space check (at most once every 5 seconds)
+                                now = time.time()
+                                if chunk_count % 20 == 0 or (now - last_disk_check) >= 5.0:
+                                    last_disk_check = now
+                                    usage = shutil.disk_usage(parts_dir)
+                                    if usage.free < SAFETY_DISK_MIN_BYTES:
+                                        raise RuntimeError(
+                                            f"Insufficient disk space: free space ({usage.free / (1024**3):.2f} GB) "
+                                            f"dropped below 5 GB safety threshold."
+                                        )
 
-                        if bytes_dl < 1024:
+                        if bytes_dl == 0:
                             if os.path.exists(dest):
                                 try: os.remove(dest)
                                 except Exception: pass
                             part["status"] = "failed"
-                            raise RuntimeError(f"Downloaded file {part['fileName']} is empty ({bytes_dl} bytes). Download failed.")
+                            raise RuntimeError(f"Downloaded file {part['fileName']} is empty (0 bytes). Download failed.")
 
-                        if total_bytes > 0 and bytes_dl < (total_bytes * 0.95):
+                        if total_bytes > 0 and bytes_dl < total_bytes:
                             if os.path.exists(dest):
                                 try: os.remove(dest)
                                 except Exception: pass
@@ -460,7 +522,7 @@ class CourseJobManager:
     # -----------------------------------------------------------------------
     # Stage 2 Details: Extraction (unrar / 7z / tar / zip) + Recursive Unpacking
     # -----------------------------------------------------------------------
-    async def _extract_archives(self, parts_dir: str, extracted_dir: str, job_id: str, cancel_event: asyncio.Event):
+    async def _extract_archives(self, parts_dir: str, extracted_dir: str, job_id: str, cancel_event: asyncio.Event, password: Optional[str] = None):
         # 1. Inspect parts folder to locate primary archive volume
         files = [f for f in os.listdir(parts_dir) if os.path.isfile(os.path.join(parts_dir, f))]
         files.sort(key=natural_sort_key)
@@ -468,20 +530,20 @@ class CourseJobManager:
         if not files:
             raise RuntimeError("No archive files found in parts directory to extract.")
 
-        # Verify no 0 KB empty parts exist before attempting extraction
+        # Verify no genuine 0 KB empty parts exist before attempting extraction
         for f in files:
             p = os.path.join(parts_dir, f)
-            if os.path.getsize(p) < 1024:
+            if os.path.getsize(p) == 0:
                 raise RuntimeError(f"Cannot extract: Archive part '{f}' is empty (0 KB). Corrupted download.")
 
         # Find primary multi-part archive file
         primary_archive = None
         for f in files:
             lower = f.lower()
-            if ".part1" in lower or ".part01" in lower or ".part001" in lower:
+            if re.search(r'\.(part0*1|r00|001)\.(rar|7z|zip)$', lower) or ".part1." in lower or ".part01." in lower or ".part001." in lower:
                 primary_archive = f
                 break
-            if ".7z.001" in lower or ".001" in lower:
+            if ".7z.001" in lower or lower.endswith(".001"):
                 primary_archive = f
                 break
 
@@ -498,15 +560,20 @@ class CourseJobManager:
         primary_path = os.path.join(parts_dir, primary_archive)
         print(f"📦 [course_worker] [Job {job_id}] Extracting primary archive: {primary_path}...")
 
-        await self._extract_single_archive(primary_path, extracted_dir, job_id)
+        await self._extract_single_archive(primary_path, extracted_dir, job_id, password)
 
         # 2. Recursive extraction for any nested .zip, .rar, .7z, .tar in extracted_dir
-        await self._recursive_extract(extracted_dir)
+        await self._recursive_extract(extracted_dir, job_id, password)
 
-    async def _extract_single_archive(self, archive_path: str, output_dir: str, job_id: str):
+    async def _extract_single_archive(self, archive_path: str, output_dir: str, job_id: str, password: Optional[str] = None):
         """Extract an archive file using unrar, 7z, tar, or Python fallback with password rotation."""
         lower = archive_path.lower()
-        passwords = ["www.downloadly.ir", "www.downloadlynet.ir", "downloadly.ir", ""]
+        passwords = []
+        if password and str(password).strip():
+            passwords.append(str(password).strip())
+        for default_pwd in ["www.downloadly.ir", "www.downloadlynet.ir", "downloadly.ir", ""]:
+            if default_pwd not in passwords:
+                passwords.append(default_pwd)
 
         # Build list of archivers available on worker node
         archivers = []
@@ -519,7 +586,7 @@ class CourseJobManager:
 
         last_error = ""
 
-        # Try archivers with known downloadly passwords
+        # Try archivers with passwords
         for archiver in archivers:
             for pwd in passwords:
                 cmd = []
@@ -534,21 +601,31 @@ class CourseJobManager:
                     continue
 
                 print(f"⚡ [course_worker] [Job {job_id}] Trying {archiver} (pwd: '{pwd}'): {' '.join(cmd[:4])}...")
-                proc = await asyncio.create_subprocess_exec(
-                    cmd[0], *cmd[1:],
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE
-                )
-                self.current_procs[job_id] = proc
-                stdout, stderr = await proc.communicate()
-                self.current_procs.pop(job_id, None)
+                try:
+                    proc = await asyncio.create_subprocess_exec(
+                        cmd[0], *cmd[1:],
+                        stdin=asyncio.subprocess.DEVNULL,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE
+                    )
+                    self.current_procs[job_id] = proc
+                    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=900.0)
+                    self.current_procs.pop(job_id, None)
 
-                if proc.returncode == 0:
-                    print(f"🎉 [course_worker] [Job {job_id}] Extraction succeeded with {archiver} (password: '{pwd}')!")
-                    return
-                else:
-                    err_text = stderr.decode(errors="replace") or stdout.decode(errors="replace")
-                    last_error = err_text.strip()
+                    if proc.returncode == 0:
+                        print(f"🎉 [course_worker] [Job {job_id}] Extraction succeeded with {archiver} (password: '{pwd}')!")
+                        return
+                    else:
+                        err_text = stderr.decode(errors="replace") or stdout.decode(errors="replace")
+                        last_error = err_text.strip()
+                except asyncio.TimeoutError:
+                    if job_id in self.current_procs:
+                        try: self.current_procs[job_id].kill()
+                        except Exception: pass
+                        self.current_procs.pop(job_id, None)
+                    last_error = f"{archiver} extraction timed out after 900s"
+                except Exception as ex:
+                    last_error = str(ex)
 
         # Fallbacks for zip / tar
         if lower.endswith(".zip"):
@@ -568,15 +645,28 @@ class CourseJobManager:
 
     def _extract_zip_python(self, zip_path: str, output_dir: str):
         import zipfile
+        abs_output = os.path.abspath(output_dir)
         with zipfile.ZipFile(zip_path, 'r') as z:
+            for member in z.infolist():
+                target_path = os.path.abspath(os.path.join(output_dir, member.filename))
+                if not target_path.startswith(abs_output):
+                    raise RuntimeError(f"Zip slip path traversal detected: {member.filename}")
             z.extractall(output_dir)
 
     def _extract_tar_python(self, tar_path: str, output_dir: str):
         import tarfile
+        abs_output = os.path.abspath(output_dir)
         with tarfile.open(tar_path, 'r:*') as t:
-            t.extractall(output_dir)
+            if hasattr(tarfile, 'data_filter'):
+                t.extractall(output_dir, filter='data')
+            else:
+                for member in t.getmembers():
+                    target_path = os.path.abspath(os.path.join(output_dir, member.name))
+                    if not target_path.startswith(abs_output):
+                        raise RuntimeError(f"Tar path traversal detected: {member.name}")
+                t.extractall(output_dir)
 
-    async def _recursive_extract(self, root_dir: str, max_depth: int = 5):
+    async def _recursive_extract(self, root_dir: str, job_id: str, password: Optional[str] = None, max_depth: int = 5):
         """Recursively scan for inner archives and unpack them in place, deleting inner archives."""
         for depth in range(max_depth):
             nested_archives = []
@@ -593,7 +683,7 @@ class CourseJobManager:
             for inner_archive in nested_archives:
                 target_dir = os.path.dirname(inner_archive)
                 try:
-                    await self._extract_single_archive(inner_archive, target_dir)
+                    await self._extract_single_archive(inner_archive, target_dir, job_id, password)
                     os.remove(inner_archive)
                 except Exception as e:
                     print(f"⚠️ [course_worker] Nested archive extract error for {inner_archive}: {e}")
@@ -601,13 +691,18 @@ class CourseJobManager:
     # -----------------------------------------------------------------------
     # Stage 4 Details: Progressive Resumable Upload & Immediate Unlink
     # -----------------------------------------------------------------------
-    async def _upload_and_unlink_files(self, extracted_dir: str, req: CourseJobRequest) -> int:
+    async def _upload_and_unlink_files(self, extracted_dir: str, req: CourseJobRequest, cancel_event: asyncio.Event) -> int:
         job_id = req.jobId
         drive_cfg = req.drive
         access_token = drive_cfg.accessToken
         root_parent_id = drive_cfg.parentFolderId
         encrypt = bool(drive_cfg.encrypt and drive_cfg.encryptionKey)
         encryption_key = drive_cfg.encryptionKey
+
+        # Refresh access token before multi-file upload stage begins
+        refreshed_token = fetch_refreshed_token(job_id, req.callbackUrl, drive_cfg.accountId, req.tokenRefreshUrl)
+        if refreshed_token:
+            access_token = refreshed_token
 
         # 1. Collect all extracted files
         all_files = []
@@ -626,8 +721,10 @@ class CourseJobManager:
             print("⚠️ [course_worker] No files found in extracted directory to upload.")
             return 0
 
-        # Subfolder cache: rel_dir -> drive_folder_id
+        # Subfolder cache & mutex: rel_dir -> drive_folder_id
         folder_cache: Dict[str, str] = {"": root_parent_id, ".": root_parent_id}
+        folder_locks: Dict[str, asyncio.Lock] = {}
+        master_folder_lock = asyncio.Lock()
 
         async def ensure_drive_folder(rel_dir: str) -> str:
             rel_dir = rel_dir.replace("\\", "/").strip("/")
@@ -636,32 +733,42 @@ class CourseJobManager:
             if rel_dir in folder_cache:
                 return folder_cache[rel_dir]
 
-            parts = rel_dir.split("/")
-            current_path = ""
-            current_parent = root_parent_id
+            async with master_folder_lock:
+                if rel_dir not in folder_locks:
+                    folder_locks[rel_dir] = asyncio.Lock()
+                lock = folder_locks[rel_dir]
 
-            for part in parts:
-                current_path = f"{current_path}/{part}" if current_path else part
-                if current_path in folder_cache:
-                    current_parent = folder_cache[current_path]
-                else:
-                    # Create subfolder on Google Drive
-                    sub_id = await self._create_drive_subfolder(part, current_parent, access_token)
-                    folder_cache[current_path] = sub_id
-                    current_parent = sub_id
+            async with lock:
+                if rel_dir in folder_cache:
+                    return folder_cache[rel_dir]
 
-            return current_parent
+                parts = rel_dir.split("/")
+                current_path = ""
+                current_parent = root_parent_id
+
+                for part in parts:
+                    current_path = f"{current_path}/{part}" if current_path else part
+                    if current_path in folder_cache:
+                        current_parent = folder_cache[current_path]
+                    else:
+                        # Create subfolder on Google Drive
+                        sub_id = await self._create_drive_subfolder(part, current_parent, access_token)
+                        folder_cache[current_path] = sub_id
+                        current_parent = sub_id
+
+                return current_parent
 
         uploaded_count = 0
 
         # Process and upload files progressively
         for i, (full_path, rel_path, fname) in enumerate(all_files):
-            if self.cancel_event.is_set():
+            if cancel_event.is_set():
                 raise asyncio.CancelledError(f"Job {job_id} cancelled.")
 
             if not os.path.exists(full_path):
                 continue
 
+            file_size = os.path.getsize(full_path)
             rel_dir = os.path.dirname(rel_path)
             target_folder_id = await ensure_drive_folder(rel_dir)
 
@@ -674,6 +781,9 @@ class CourseJobManager:
                 access_token=access_token,
                 encrypt=encrypt,
                 encryption_key=encryption_key,
+                job_id=job_id,
+                callback_url=req.callbackUrl,
+                account_id=drive_cfg.accountId,
             )
 
             # CRUCIAL DISK RULE: Immediately unlink file after upload!
@@ -694,6 +804,9 @@ class CourseJobManager:
                 "currentFileIndex": i + 1,
                 "totalFiles": total_files,
                 "currentFileName": fname,
+                "currentRelativePath": rel_path.replace("\\", "/"),
+                "sizeBytes": file_size,
+                "sizeMB": f"{file_size / (1024 * 1024):.2f}",
                 "filePercent": 100.0,
                 "driveFileId": drive_file_id,
                 "driveViewLink": drive_view_link,
@@ -702,8 +815,8 @@ class CourseJobManager:
         return uploaded_count
 
     async def _create_drive_subfolder(self, name: str, parent_id: str, access_token: str) -> str:
-        """Creates a folder in Google Drive using REST API."""
-        url = "https://www.googleapis.com/drive/v3/files"
+        """Creates a folder in Google Drive using REST API with retries and supportsAllDrives."""
+        url = "https://www.googleapis.com/drive/v3/files?supportsAllDrives=true"
         headers = {
             "Authorization": f"Bearer {access_token}",
             "Content-Type": "application/json",
@@ -714,13 +827,19 @@ class CourseJobManager:
             "parents": [parent_id] if parent_id else [],
         }
 
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.post(url, headers=headers, json=body)
-            if resp.status_code in (200, 201):
-                return resp.json().get("id", parent_id)
-            else:
-                print(f"⚠️ [course_worker] Subfolder creation failed ({resp.status_code}): {resp.text[:150]}")
-                return parent_id
+        last_err = ""
+        for attempt in range(3):
+            try:
+                async with httpx.AsyncClient(timeout=20.0) as client:
+                    resp = await client.post(url, headers=headers, json=body)
+                    if resp.status_code in (200, 201):
+                        return resp.json().get("id", parent_id)
+                    last_err = f"HTTP {resp.status_code}: {resp.text[:150]}"
+            except Exception as e:
+                last_err = str(e)
+            await asyncio.sleep(1.5 * (attempt + 1))
+
+        raise RuntimeError(f"Failed to create Drive subfolder '{name}' under parent '{parent_id}': {last_err}")
 
     def _upload_single_file_to_drive(
         self,
@@ -731,18 +850,26 @@ class CourseJobManager:
         encrypt: bool,
         encryption_key: Optional[str],
         chunk_size: int = 16 * 1024 * 1024,
+        job_id: Optional[str] = None,
+        callback_url: Optional[str] = None,
+        account_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Uploads a local file to Google Drive using the Resumable Upload API with
-        optional AES-256-CTR streaming encryption.
+        optional AES-256-CTR streaming encryption, HTTP 308 offset parsing, and 401 token refresh.
         """
         raw_size = os.path.getsize(file_path)
         final_file_name = file_name
         iv = None
         encryptor = None
+        key_bytes = None
 
         if encrypt and encryption_key:
-            key_bytes = bytes.fromhex(encryption_key)
+            if len(encryption_key) == 64 and all(c in "0123456789abcdefABCDEF" for c in encryption_key):
+                key_bytes = bytes.fromhex(encryption_key)
+            else:
+                import hashlib
+                key_bytes = hashlib.sha256(encryption_key.encode("utf-8")).digest()
             iv = os.urandom(16)
             cipher = Cipher(algorithms.AES(key_bytes), modes.CTR(iv))
             encryptor = cipher.encryptor()
@@ -762,8 +889,17 @@ class CourseJobManager:
             "name": final_file_name,
             "parents": [folder_id] if folder_id else [],
         }
-        init_url = "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable"
+        init_url = "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true"
         init_res = requests.post(init_url, headers=init_headers, json=metadata, timeout=20)
+
+        # Handle 401 token expiration on session init
+        if init_res.status_code == 401 and job_id and callback_url:
+            print("🔄 [course_worker] Token expired during resumable upload init, refreshing...")
+            fresh_tok = fetch_refreshed_token(job_id, callback_url, account_id)
+            if fresh_tok:
+                access_token = fresh_tok
+                init_headers["Authorization"] = f"Bearer {access_token}"
+                init_res = requests.post(init_url, headers=init_headers, json=metadata, timeout=20)
 
         if init_res.status_code not in (200, 201):
             raise RuntimeError(f"Drive resumable upload init failed ({init_res.status_code}): {init_res.text}")
@@ -772,8 +908,19 @@ class CourseJobManager:
         if not resumable_uri:
             raise RuntimeError("Drive did not return a resumable upload URI.")
 
-        # 2. Upload file in chunks
-        # Ensure chunk_size is multiple of 256 KiB
+        # 2. Handle 0-byte files explicitly
+        if total_bytes == 0:
+            zero_headers = {
+                "Authorization": f"Bearer {access_token}",
+                "Content-Length": "0",
+                "Content-Range": "bytes */0",
+            }
+            z_res = requests.put(resumable_uri, headers=zero_headers, timeout=30)
+            if z_res.status_code in (200, 201):
+                return z_res.json()
+            return {"status": "uploaded", "id": z_res.json().get("id", "")}
+
+        # 3. Upload file in chunks
         chunk_size = (max(chunk_size, 256 * 1024) // (256 * 1024)) * (256 * 1024)
         bytes_uploaded = 0
 
@@ -782,7 +929,6 @@ class CourseJobManager:
             while bytes_uploaded < total_bytes:
                 # Prepare chunk
                 if is_first_chunk and iv:
-                    # Prepend 16-byte IV header to first chunk
                     needed_raw = chunk_size - 16
                     raw_data = f.read(needed_raw)
                     enc_data = encryptor.update(raw_data) if encryptor else raw_data
@@ -818,8 +964,26 @@ class CourseJobManager:
                             bytes_uploaded += chunk_len
                             return put_res.json()
                         elif put_res.status_code == 308:
-                            bytes_uploaded += chunk_len
+                            range_header = put_res.headers.get("Range")
+                            if range_header:
+                                bytes_uploaded = int(range_header.split("-")[1]) + 1
+                                if encrypt and iv and key_bytes:
+                                    plain_offset = max(0, bytes_uploaded - 16)
+                                    f.seek(plain_offset)
+                                    counter_iv = add_blocks_to_iv_py(iv, plain_offset // 16)
+                                    cipher = Cipher(algorithms.AES(key_bytes), modes.CTR(counter_iv))
+                                    encryptor = cipher.encryptor()
+                                    is_first_chunk = False
+                                else:
+                                    f.seek(bytes_uploaded)
+                            else:
+                                bytes_uploaded += chunk_len
                             break
+                        elif put_res.status_code == 401 and job_id and callback_url:
+                            print("🔄 [course_worker] Token expired mid-upload, refreshing...")
+                            fresh_tok = fetch_refreshed_token(job_id, callback_url, account_id)
+                            if fresh_tok:
+                                access_token = fresh_tok
                         else:
                             if attempt == 2:
                                 raise RuntimeError(f"Drive chunk upload failed ({put_res.status_code}): {put_res.text}")

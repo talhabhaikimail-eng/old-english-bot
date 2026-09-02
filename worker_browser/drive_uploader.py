@@ -54,7 +54,11 @@ def stream_upload_to_drive(
         encryptor = None
         iv = None
         if encryption_key_hex:
-            key_bytes = bytes.fromhex(encryption_key_hex)
+            if len(encryption_key_hex) == 64 and all(c in "0123456789abcdefABCDEF" for c in encryption_key_hex):
+                key_bytes = bytes.fromhex(encryption_key_hex)
+            else:
+                import hashlib
+                key_bytes = hashlib.sha256(encryption_key_hex.encode("utf-8")).digest()
             iv = os.urandom(16)
             cipher = Cipher(algorithms.AES(key_bytes), modes.CTR(iv))
             encryptor = cipher.encryptor()
@@ -83,8 +87,8 @@ def stream_upload_to_drive(
             "X-Upload-Content-Type": "application/octet-stream",
         }
 
-        init_url = "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable"
-        init_res = requests.post(init_url, headers=init_headers, json=metadata, timeout=15)
+        init_url = "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true"
+        init_res = requests.post(init_url, headers=init_headers, json=metadata, timeout=20)
 
         if init_res.status_code not in (200, 201):
             raise RuntimeError(f"Google Drive initialization failed ({init_res.status_code}): {init_res.text}")
@@ -147,7 +151,19 @@ def stream_upload_to_drive(
                 "Content-Range": f"bytes {chunk_start}-{chunk_end}/{total_str}",
             }
 
-            put_res = requests.put(resumable_uri, headers=chunk_headers, data=current_chunk, timeout=60)
+            put_res = None
+            for attempt in range(3):
+                try:
+                    put_res = requests.put(resumable_uri, headers=chunk_headers, data=current_chunk, timeout=60)
+                    if put_res.status_code in (200, 201, 308):
+                        break
+                    if attempt == 2:
+                        raise RuntimeError(f"Google Drive chunk upload failed ({put_res.status_code}): {put_res.text}")
+                    time.sleep(2)
+                except requests.RequestException as req_err:
+                    if attempt == 2:
+                        raise
+                    time.sleep(2)
 
             if put_res.status_code in (200, 201):
                 drive_response_data = put_res.json()
@@ -163,7 +179,11 @@ def stream_upload_to_drive(
                 }
                 break
             elif put_res.status_code == 308:
-                bytes_uploaded += chunk_len
+                range_header = put_res.headers.get("Range")
+                if range_header:
+                    bytes_uploaded = int(range_header.split("-")[1]) + 1
+                else:
+                    bytes_uploaded += chunk_len
                 elapsed = time.time() - start_time
                 speed_mbps = round((bytes_uploaded / (1024 * 1024)) / elapsed, 2) if elapsed > 0 else 0
                 progress_pct = round((bytes_uploaded / total_bytes_count) * 100, 2) if total_bytes_count else None

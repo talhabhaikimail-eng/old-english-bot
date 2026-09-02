@@ -701,7 +701,8 @@ async def dispatch_course_job(req: CourseJobRequest, request: Request):
     """
     if WORKER_API_SECRET:
         auth_header = request.headers.get("authorization", "")
-        if auth_header != f"Bearer {WORKER_API_SECRET}":
+        secret_header = request.headers.get("x-worker-secret", "")
+        if auth_header != f"Bearer {WORKER_API_SECRET}" and secret_header != WORKER_API_SECRET:
             raise HTTPException(status_code=401, detail="Unauthorized")
 
     try:
@@ -724,7 +725,6 @@ async def dispatch_course_job(req: CourseJobRequest, request: Request):
 
 
 @app.post("/worker/jobs/{job_id}/cancel")
-@app.post("/worker/jobs/:job_id/cancel")
 async def cancel_course_job(job_id: str):
     """
     Cancel & Force Purge Worker Job.
@@ -735,7 +735,7 @@ async def cancel_course_job(job_id: str):
         "success": True,
         "jobId": job_id,
         "status": "cancelled",
-        "diskPurged": True,
+        "diskPurged": purged,
     }
 
 
@@ -744,26 +744,39 @@ def get_worker_pool(request: Request):
     """
     Central Worker Pool Discovery Endpoint.
     Returns array of available workers with status, free disk, and heartbeat.
+    Supplies both 'workers' and 'browsers' keys for full backward/forward compatibility.
     """
     disk = get_disk_metrics()
     public_url = WORKER_PUBLIC_URL or str(request.base_url).rstrip("/")
     active_job_id = course_manager.get_active_job_id()
+    status_val = course_manager.get_status()
+
+    worker_entry = {
+        "id": WORKER_ID,
+        "url": public_url,
+        "status": status_val,
+        "freeDiskGB": disk["freeGB"],
+        "cpuPercent": get_cpu_percent(),
+        "activeJobId": active_job_id,
+        "lastHeartbeat": datetime.now(timezone.utc).isoformat(),
+    }
+
+    browser_entry = {
+        "workerId": WORKER_ID,
+        "apiUrl": public_url,
+        "status": "active" if status_val in ("idle", "busy") else "offline",
+        "freeDiskGB": disk["freeGB"],
+        "cpuPercent": get_cpu_percent(),
+        "activeJobId": active_job_id,
+        "lastHeartbeat": datetime.now(timezone.utc).isoformat(),
+    }
 
     return {
         "success": True,
-        "workers": [
-            {
-                "id": WORKER_ID,
-                "url": public_url,
-                "status": course_manager.get_status(),
-                "freeDiskGB": disk["freeGB"],
-                "cpuPercent": get_cpu_percent(),
-                "activeJobId": active_job_id,
-                "lastHeartbeat": datetime.now(timezone.utc).isoformat(),
-            }
-        ]
+        "workers": [worker_entry],
+        "browsers": [browser_entry],
     }
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8000)

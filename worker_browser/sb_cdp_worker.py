@@ -109,6 +109,9 @@ def start_chrome_process():
         "--disable-features=IsolateOrigins,site-per-process,Translate,InsecureDownloadWarnings,DownloadBubble,DownloadBubbleV2,OptimizationTargetPrediction,OptimizationGuideModelDownloading,SidePanelPinning,UserAgentClientHint,PrivacySandboxSettings4,OptimizationHintsFetching,InterestFeedContentSuggestions,ComponentUpdater,NetworkPrediction,DisableLoadExtensionCommandLineSwitch,WebAuthentication,OmniboxUIFeedback,OmniboxPopupShortcut,PasskeyAuth,MediaRouter,DialMediaRouteProvider,WebRtcHideLocalIpsWithMdns",
     ]
 
+    if sys.platform != "win32" and not os.environ.get("DISPLAY"):
+        cmd.append("--headless=new")
+
     proc = subprocess.Popen(
         cmd,
         stdin=subprocess.DEVNULL,
