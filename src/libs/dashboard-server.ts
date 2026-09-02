@@ -520,56 +520,70 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
       pathname !== '/api/browser/cookie-search' && 
       pathname !== '/api/scrape/google' && 
       pathname !== '/api/scrape/indeed' && 
-      pathname !== '/api/browsers/pool' && 
       pathname !== '/api/browsers/webhook' &&
       pathname !== '/api/media/download' &&
       pathname !== '/api/webhook/inbound-email' &&
       !pathname.startsWith('/api/webhook/docker/') &&
       !pathname.startsWith('/api/portfolio')) {
-    if (usernameEnv && passwordEnv) {
-      const expectedToken = Buffer.from(`${usernameEnv}:${passwordEnv}`).toString('base64');
-      let providedToken: string | null = null;
+    if (!usernameEnv || !passwordEnv) {
+      console.error('❌ Server authentication credentials not configured in environment (DASHBOARD_USERNAME/PASSWORD).');
+      err(res, 'Server authentication not configured', 500);
+      return;
+    }
 
-      // 1. Check Authorization or x-dashboard-token header
-      const authHeader = req.headers['authorization'] || req.headers['x-dashboard-token'];
-      if (authHeader && typeof authHeader === 'string') {
+    const expectedToken = Buffer.from(`${usernameEnv}:${passwordEnv}`).toString('base64');
+    let providedToken: string | null = null;
+
+    // Check X-Worker-Secret header or Bearer WORKER_API_SECRET
+    const workerSecret = req.headers['x-worker-secret'];
+    const workerSecretEnv = process.env.WORKER_API_SECRET || process.env.WEBHOOK_SECRET;
+    if (workerSecretEnv && workerSecret && typeof workerSecret === 'string' && safeCompare(workerSecret, workerSecretEnv)) {
+      providedToken = expectedToken;
+    }
+
+    // 1. Check Authorization or x-dashboard-token header
+    const authHeader = req.headers['authorization'] || req.headers['x-dashboard-token'];
+    if (!providedToken && authHeader && typeof authHeader === 'string') {
+      if (workerSecretEnv && authHeader.startsWith('Bearer ') && safeCompare(authHeader.slice(7).trim(), workerSecretEnv)) {
+        providedToken = expectedToken;
+      } else {
         providedToken = authHeader.startsWith('Basic ') ? authHeader.substring(6) : authHeader;
       }
+    }
 
-      // 2. Check token query parameter in the URL
-      if (!providedToken && req.url) {
-        try {
-          const parsedUrl = new URL(req.url, 'http://localhost');
-          const tokenParam = parsedUrl.searchParams.get('token');
-          if (tokenParam) providedToken = tokenParam;
-        } catch {
-          const match = req.url.match(/[?&]token=([^&]+)/);
-          if (match) providedToken = decodeURIComponent(match[1]);
-        }
+    // 2. Check token query parameter in the URL
+    if (!providedToken && req.url) {
+      try {
+        const parsedUrl = new URL(req.url, 'http://localhost');
+        const tokenParam = parsedUrl.searchParams.get('token');
+        if (tokenParam) providedToken = tokenParam;
+      } catch {
+        const match = req.url.match(/[?&]token=([^&]+)/);
+        if (match) providedToken = decodeURIComponent(match[1]);
       }
+    }
 
-      // 3. Check dashboard_token cookie
-      if (!providedToken) {
-        const cookieHeader = req.headers['cookie'] || req.headers['Cookie'];
-        if (cookieHeader && typeof cookieHeader === 'string') {
-          const match = cookieHeader.match(/(?:^|;\s*)dashboard_token=([^;]+)/);
-          if (match) providedToken = match[1];
-        }
+    // 3. Check dashboard_token cookie
+    if (!providedToken) {
+      const cookieHeader = req.headers['cookie'] || req.headers['Cookie'];
+      if (cookieHeader && typeof cookieHeader === 'string') {
+        const match = cookieHeader.match(/(?:^|;\s*)dashboard_token=([^;]+)/);
+        if (match) providedToken = match[1];
       }
+    }
 
-      if (safeCompare(providedToken, expectedToken)) {
-        // Correctly authorized!
-        // Ensure the client has the dashboard_token cookie so subresources load successfully
-        const cookieHeader = req.headers['cookie'] || req.headers['Cookie'];
-        const hasMatchingCookie = cookieHeader && typeof cookieHeader === 'string' &&
-          cookieHeader.includes(`dashboard_token=${expectedToken}`);
-        if (!hasMatchingCookie) {
-          res.setHeader('Set-Cookie', `dashboard_token=${expectedToken}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000`);
-        }
-      } else {
-        err(res, 'Unauthorized', 401);
-        return;
+    if (safeCompare(providedToken, expectedToken)) {
+      // Correctly authorized!
+      // Ensure the client has the dashboard_token cookie so subresources load successfully
+      const cookieHeader = req.headers['cookie'] || req.headers['Cookie'];
+      const hasMatchingCookie = cookieHeader && typeof cookieHeader === 'string' &&
+        cookieHeader.includes(`dashboard_token=${expectedToken}`);
+      if (!hasMatchingCookie) {
+        res.setHeader('Set-Cookie', `dashboard_token=${expectedToken}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000`);
       }
+    } else {
+      err(res, 'Unauthorized', 401);
+      return;
     }
   }
 
@@ -1664,9 +1678,17 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
     try {
       const urlObj = new URL(url, 'http://localhost');
       const secretParam = urlObj.searchParams.get('secret');
-      const expectedSecret = process.env.WEBHOOK_SECRET || process.env.DASHBOARD_PASSWORD;
+      const expectedSecret = process.env.WEBHOOK_SECRET || process.env.DASHBOARD_PASSWORD || process.env.WORKER_API_SECRET;
 
-      if (expectedSecret && !safeCompare(secretParam, expectedSecret)) {
+      if (!expectedSecret) {
+        return err(res, 'Server webhook secret not configured', 500);
+      }
+
+      const authHdr = req.headers['authorization'];
+      const headerSecret = req.headers['x-worker-secret'] || (typeof authHdr === 'string' && authHdr.startsWith('Bearer ') ? authHdr.slice(7).trim() : null);
+      const secretToTest = (typeof headerSecret === 'string' ? headerSecret : null) || secretParam;
+
+      if (!safeCompare(secretToTest, expectedSecret)) {
         return err(res, 'Invalid or missing webhook secret', 401);
       }
 
