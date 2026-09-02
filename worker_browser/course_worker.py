@@ -552,6 +552,25 @@ class CourseJobManager:
             if os.path.getsize(p) == 0:
                 raise RuntimeError(f"Cannot extract: Archive part '{f}' is empty (0 KB). Corrupted download.")
 
+        # Normalize non-standard split volume filenames for 7-Zip & unrar compatibility.
+        # e.g. "X.part1_Downloadly.ir.rar" causes 7z Linux to segfault (rc=-11) because 7z cannot
+        # locate next volumes unless the volume indicator is immediately before the extension (.part1.rar).
+        for f in list(files):
+            new_name = re.sub(r'\.part(\d+)_([^/\\]+)\.(rar|7z|zip)$', r'_\2.part\1.\3', f, flags=re.IGNORECASE)
+            if new_name != f:
+                old_p = os.path.join(parts_dir, f)
+                new_p = os.path.join(parts_dir, new_name)
+                try:
+                    if not os.path.exists(new_p):
+                        os.rename(old_p, new_p)
+                        print(f"🔄 [course_worker] [Job {job_id}] Normalized volume name: '{f}' -> '{new_name}'")
+                except Exception as ren_err:
+                    print(f"⚠️ [course_worker] [Job {job_id}] Could not rename '{f}': {ren_err}")
+
+        # Re-read files after normalization
+        files = [f for f in os.listdir(parts_dir) if os.path.isfile(os.path.join(parts_dir, f))]
+        files.sort(key=natural_sort_key)
+
         # Find primary multi-part archive file
         primary_archive = None
         for f in files:
@@ -623,7 +642,9 @@ class CourseJobManager:
         lower = archive_path.lower()
         passwords = []
         if password and str(password).strip():
-            passwords.append(str(password).strip())
+            cleaned_pwd = str(password).replace("&nbsp;", "").strip()
+            if cleaned_pwd and cleaned_pwd.lower() not in ("none", "null", "undefined", ""):
+                passwords.append(cleaned_pwd)
         for default_pwd in ["www.downloadly.ir", "www.downloadlynet.ir", "downloadly.ir", ""]:
             if default_pwd not in passwords:
                 passwords.append(default_pwd)
