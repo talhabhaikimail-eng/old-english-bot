@@ -1195,6 +1195,8 @@ class CourseJobManager:
 
         # Package all non-video files and folders into 1GB split zip parts
         if discovered_materials:
+            if os.path.exists(materials_staging_dir):
+                shutil.rmtree(materials_staging_dir, ignore_errors=True)
             os.makedirs(materials_staging_dir, exist_ok=True)
             mat_count = len(discovered_materials)
             mat_bytes = sum(os.path.getsize(fp) for fp, _, _, _ in discovered_materials if os.path.exists(fp))
@@ -1279,6 +1281,10 @@ class CourseJobManager:
 
             if proc.returncode != 0:
                 logger.warning(f"⚠️ [Job {job_id}] 7z exited code {proc.returncode}. Fallback to standard zip...")
+                for partial_f in os.listdir(materials_staging_dir):
+                    if partial_f != "filelist.txt":
+                        try: os.remove(os.path.join(materials_staging_dir, partial_f))
+                        except: pass
                 zip_cmd = f"zip -s 1024m -r {shlex.quote(zip_out_path)} -@ < {shlex.quote(filelist_path)}"
                 proc_zip = await asyncio.create_subprocess_shell(
                     zip_cmd,
