@@ -1418,6 +1418,28 @@ class CourseJobManager:
             total_bytes = raw_size
 
         # -------------------------------------------------------------
+        # IDEMPOTENCY: Check if file already exists in Drive with matching size
+        # Prevents duplicate uploads and skips already-uploaded files on retries
+        # -------------------------------------------------------------
+        try:
+            safe_name = final_file_name.replace('\\', '\\\\').replace("'", "\\'")
+            q = f"name = '{safe_name}' and trashed = false"
+            if folder_id:
+                q += f" and '{folder_id}' in parents"
+            chk_url = f"https://www.googleapis.com/drive/v3/files?q={urllib.parse.quote(q)}&fields=files(id,name,size)&supportsAllDrives=true&includeItemsFromAllDrives=true"
+            chk_res = session.get(chk_url, headers={"Authorization": f"Bearer {access_token}"}, timeout=15)
+            if chk_res.status_code == 200:
+                files_found = chk_res.json().get("files", [])
+                if files_found:
+                    ex_file = files_found[0]
+                    ex_size = int(ex_file.get("size", 0))
+                    if ex_size in (total_bytes, raw_size):
+                        logger.info(f"⏩ [Idempotency] '{final_file_name}' already exists in Drive folder (ID: {ex_file['id']}). Skipping re-upload!")
+                        return ex_file
+        except Exception as chk_err:
+            logger.debug(f"Drive existence check skipped ({chk_err})")
+
+        # -------------------------------------------------------------
         # FAST PATH: Single-request Multipart Upload for files < 5 MB
         # -------------------------------------------------------------
         if raw_size < 5 * 1024 * 1024:
@@ -1463,8 +1485,10 @@ class CourseJobManager:
                                 access_token = fresh_tok
                                 direct_headers["Authorization"] = f"Bearer {access_token}"
                         elif d_res.status_code in (403, 429, 500, 502, 503, 504):
-                            logger.warning(f"⚠️ Drive multipart upload got HTTP {d_res.status_code}, retrying ({attempt + 1}/4)...")
-                            time.sleep(2 ** attempt + random.uniform(0.5, 1.5))
+                            is_rate_limit = "rateLimit" in d_res.text or "userRateLimit" in d_res.text
+                            cooldown = min(60, 15 * (attempt + 1)) if is_rate_limit else (2 ** attempt + random.uniform(0.5, 1.5))
+                            logger.warning(f"⚠️ Drive multipart upload got HTTP {d_res.status_code}, cooling down {cooldown:.1f}s (attempt {attempt + 1}/4)...")
+                            time.sleep(cooldown)
                         else:
                             if attempt == 3:
                                 raise RuntimeError(f"Drive direct multipart upload failed ({d_res.status_code}): {d_res.text[:200]}")
@@ -1512,8 +1536,10 @@ class CourseJobManager:
                         access_token = fresh_tok
                         init_headers["Authorization"] = f"Bearer {access_token}"
                 elif init_res.status_code in (403, 429, 500, 502, 503, 504):
-                    logger.warning(f"⚠️ Drive resumable init got HTTP {init_res.status_code}, retrying ({attempt + 1}/4)...")
-                    time.sleep(2 ** attempt + random.uniform(0.5, 1.5))
+                    is_rate_limit = "rateLimit" in init_res.text or "userRateLimit" in init_res.text
+                    cooldown = min(60, 15 * (attempt + 1)) if is_rate_limit else (2 ** attempt + random.uniform(0.5, 1.5))
+                    logger.warning(f"⚠️ Drive resumable init got HTTP {init_res.status_code}, cooling down {cooldown:.1f}s (attempt {attempt + 1}/4)...")
+                    time.sleep(cooldown)
                 else:
                     if attempt == 3:
                         raise RuntimeError(f"Drive resumable upload init failed ({init_res.status_code}): {init_res.text[:200]}")
@@ -1596,8 +1622,10 @@ class CourseJobManager:
                             chunk_ok = True
                             break
                         elif put_res.status_code in (403, 429, 500, 502, 503, 504):
-                            logger.warning(f"⚠️ Drive chunk upload got HTTP {put_res.status_code}, backing off (attempt {attempt + 1}/5)...")
-                            time.sleep(2 ** attempt + random.uniform(1.0, 2.5))
+                            is_rate_limit = "rateLimit" in put_res.text or "userRateLimit" in put_res.text
+                            cooldown = min(60, 15 * (attempt + 1)) if is_rate_limit else (2 ** attempt + random.uniform(1.0, 2.5))
+                            logger.warning(f"⚠️ Drive chunk upload got HTTP {put_res.status_code}, cooling down {cooldown:.1f}s (attempt {attempt + 1}/5)...")
+                            time.sleep(cooldown)
                         elif put_res.status_code == 401 and job_id and callback_url:
                             logger.info("🔄 Token expired mid-upload, refreshing...")
                             fresh_tok = fetch_refreshed_token_sync(job_id, callback_url, account_id, token_refresh_url)
