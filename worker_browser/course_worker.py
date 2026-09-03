@@ -1221,30 +1221,86 @@ class CourseJobManager:
                 for _, rel_p, _, _ in discovered_materials:
                     fl.write(f"{rel_p}\n")
 
-            # Use zip with -s 1024m -r -@ to create 1GB split volumes
-            zip_cmd = f"zip -s 1024m -r {shlex.quote(zip_out_path)} -@ < {shlex.quote(filelist_path)}"
+            # PRIMARY: Use 7-Zip with multi-threading (-mmt=on) and real-time progress (-bsp1)
+            cmd_7z = f"7z a -tzip -v1024m -mmt=on -bsp1 -y {shlex.quote(zip_out_path)} @{shlex.quote(filelist_path)}"
             proc = await asyncio.create_subprocess_shell(
-                zip_cmd,
+                cmd_7z,
                 cwd=scan_dir,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout, stderr = await proc.communicate()
+
+            start_time = time.time()
+            last_report = 0.0
+            last_pct = 0.0
+
+            async def read_7z_progress():
+                nonlocal last_report, last_pct
+                buf = b""
+                while True:
+                    chunk = await proc.stdout.read(512)
+                    if not chunk:
+                        break
+                    buf += chunk
+                    text = buf.decode("utf-8", errors="ignore")
+                    matches = re.findall(r"(\d+)%", text)
+                    if matches:
+                        try:
+                            pct = float(matches[-1])
+                            now = time.time()
+                            if pct != last_pct and (now - last_report >= 1.5 or pct >= 100):
+                                last_pct = pct
+                                last_report = now
+                                elapsed = max(0.5, now - start_time)
+                                proc_bytes = mat_bytes * (pct / 100.0)
+                                speed_bps = proc_bytes / elapsed
+                                rem_bytes = max(0, mat_bytes - proc_bytes)
+                                eta_s = int(rem_bytes / speed_bps) if speed_bps > 0 else 0
+                                eta_fmt = f"{eta_s // 60}m {eta_s % 60}s" if eta_s >= 60 else f"{eta_s}s"
+                                await post_webhook(req.callbackUrl, {
+                                    "jobId": job_id,
+                                    "workerId": WORKER_ID,
+                                    "phase": "packaging",
+                                    "packagingPercent": round(pct, 1),
+                                    "speedBps": round(speed_bps),
+                                    "speedMBs": f"{speed_bps / (1024 * 1024):.2f}",
+                                    "etaSeconds": eta_s,
+                                    "etaFormatted": eta_fmt,
+                                    "materialsCount": mat_count,
+                                    "materialsMB": mat_mb,
+                                    "message": f"Packaging materials: {pct:.1f}% ({speed_bps / (1024 * 1024):.1f} MB/s · ETA {eta_fmt})",
+                                })
+                        except Exception:
+                            pass
+                    if len(buf) > 4096:
+                        buf = buf[-1024:]
+
+            await asyncio.gather(read_7z_progress(), proc.wait())
 
             if proc.returncode != 0:
-                logger.warning(f"⚠️ [Job {job_id}] zip command exited code {proc.returncode}: {stderr.decode(errors='ignore')}. Retrying with 7z...")
-                cmd_7z = f"7z a -tzip -v1024m {shlex.quote(zip_out_path)} @{shlex.quote(filelist_path)}"
-                proc_7z = await asyncio.create_subprocess_shell(
-                    cmd_7z,
+                logger.warning(f"⚠️ [Job {job_id}] 7z exited code {proc.returncode}. Fallback to standard zip...")
+                zip_cmd = f"zip -s 1024m -r {shlex.quote(zip_out_path)} -@ < {shlex.quote(filelist_path)}"
+                proc_zip = await asyncio.create_subprocess_shell(
+                    zip_cmd,
                     cwd=scan_dir,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                 )
-                await proc_7z.communicate()
+                await proc_zip.communicate()
 
             if os.path.exists(filelist_path):
                 try: os.remove(filelist_path)
                 except: pass
+
+            # Single volume normalization: if only .001 exists and no .002, rename .zip.001 to .zip
+            single_vol = f"{zip_out_path}.001"
+            second_vol = f"{zip_out_path}.002"
+            if os.path.exists(single_vol) and not os.path.exists(second_vol):
+                try:
+                    os.rename(single_vol, zip_out_path)
+                    logger.info(f"Renamed single split volume {single_vol} -> {zip_out_path}")
+                except Exception as r_err:
+                    logger.debug(f"Could not rename single 7z volume to .zip: {r_err}")
 
             # Reclaim disk: unlink all raw source non-video files immediately
             for fp, _, _, _ in discovered_materials:
@@ -1310,7 +1366,7 @@ class CourseJobManager:
                 return current_parent
 
         # Pre-resolve and create all unique directories upfront to eliminate runtime lock contention
-        unique_dirs = sorted(list(set(os.path.dirname(rel_path).replace("\\", "/").strip("/") for _, rel_path, _ in all_files if rel_path)))
+        unique_dirs = sorted(list(set(os.path.dirname(rel_path).replace("\\", "/").strip("/") for _, rel_path, _, _ in all_files if rel_path)))
         for udir in unique_dirs:
             if udir and udir != ".":
                 try:
