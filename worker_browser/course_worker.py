@@ -12,6 +12,7 @@ Adheres strictly to the 5-Stage Worker Disk Protocol (Preventing ENOSPC):
 import os
 import sys
 import re
+import html
 import time
 import shutil
 import socket
@@ -969,12 +970,30 @@ class CourseJobManager:
         if refreshed_token:
             access_token = refreshed_token
 
+        # Check if the extracted directory contains a single top-level folder
+        # (e.g. archive extracted as extracted_dir/<Course Name>/...)
+        # If so, unwrap that single top-level folder so files live directly under root_parent_id
+        scan_dir = extracted_dir
+        try:
+            top_entries = [
+                e for e in os.listdir(extracted_dir)
+                if not e.startswith('.') and e not in ('__MACOSX', 'Thumbs.db')
+            ]
+            if len(top_entries) == 1:
+                candidate_dir = os.path.join(extracted_dir, top_entries[0])
+                if os.path.isdir(candidate_dir):
+                    scan_dir = candidate_dir
+                    logger.info(f"📁 [Job {job_id}] Unwrapped single top-level archive directory: '{top_entries[0]}'")
+        except Exception as unwrap_err:
+            logger.warning(f"⚠️ [Job {job_id}] Notice checking top entries for unwrapping: {unwrap_err}")
+
         all_files = []
-        for root, _, filenames in os.walk(extracted_dir):
+        for root, _, filenames in os.walk(scan_dir):
             for fname in filenames:
+                clean_fname = html.unescape(fname).strip()
                 full_path = os.path.join(root, fname)
-                rel_path = os.path.relpath(full_path, extracted_dir)
-                all_files.append((full_path, rel_path, fname))
+                rel_path = os.path.relpath(full_path, scan_dir)
+                all_files.append((full_path, rel_path, clean_fname))
 
         all_files.sort(key=lambda x: natural_sort_key(x[1]))
         total_files = len(all_files)
@@ -985,38 +1004,34 @@ class CourseJobManager:
             return 0
 
         folder_cache: Dict[str, str] = {"": root_parent_id, ".": root_parent_id}
-        folder_locks: Dict[str, asyncio.Lock] = {}
         master_folder_lock = asyncio.Lock()
 
         async def ensure_drive_folder(rel_dir: str) -> str:
             rel_dir = rel_dir.replace("\\", "/").strip("/")
-            if not rel_dir:
+            if not rel_dir or rel_dir == ".":
                 return root_parent_id
             if rel_dir in folder_cache:
                 return folder_cache[rel_dir]
 
             async with master_folder_lock:
-                if rel_dir not in folder_locks:
-                    folder_locks[rel_dir] = asyncio.Lock()
-                lock = folder_locks[rel_dir]
-
-            async with lock:
                 if rel_dir in folder_cache:
                     return folder_cache[rel_dir]
 
-                parts = rel_dir.split("/")
+                parts = [p for p in rel_dir.split("/") if p and p != "."]
                 current_path = ""
                 current_parent = root_parent_id
 
                 for part in parts:
-                    current_path = f"{current_path}/{part}" if current_path else part
+                    clean_part = html.unescape(part).strip()
+                    current_path = f"{current_path}/{clean_part}" if current_path else clean_part
                     if current_path in folder_cache:
                         current_parent = folder_cache[current_path]
                     else:
-                        sub_id = await self._create_drive_subfolder(part, current_parent, access_token)
+                        sub_id = await self._create_drive_subfolder(clean_part, current_parent, access_token)
                         folder_cache[current_path] = sub_id
                         current_parent = sub_id
 
+                folder_cache[rel_dir] = current_parent
                 return current_parent
 
         uploaded_count = 0
@@ -1090,13 +1105,14 @@ class CourseJobManager:
 
     async def _create_drive_subfolder(self, name: str, parent_id: str, access_token: str) -> str:
         """Creates or retrieves a subfolder in Google Drive idempotently with proper query escaping."""
+        clean_name = html.unescape(name).strip()
         headers = {
             "Authorization": f"Bearer {access_token}",
             "Content-Type": "application/json",
         }
 
         # Escape backslashes and single quotes for Google Drive API queries
-        safe_name = name.replace('\\', '\\\\').replace("'", "\\'")
+        safe_name = clean_name.replace('\\', '\\\\').replace("'", "\\'")
         q = f"mimeType = 'application/vnd.google-apps.folder' and name = '{safe_name}' and trashed = false"
         if parent_id:
             q += f" and '{parent_id}' in parents"
@@ -1115,7 +1131,7 @@ class CourseJobManager:
 
         url = "https://www.googleapis.com/drive/v3/files?supportsAllDrives=true"
         body = {
-            "name": name,
+            "name": clean_name,
             "mimeType": "application/vnd.google-apps.folder",
             "parents": [parent_id] if parent_id else [],
         }
