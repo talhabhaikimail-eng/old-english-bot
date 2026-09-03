@@ -10,6 +10,7 @@ import sys
 import json
 import time
 import requests
+import random
 from typing import Optional, Dict, Any, Generator
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
@@ -23,59 +24,48 @@ if sys.platform == "win32":
 
 
 def stream_upload_to_drive(
-    source_url: str,
+    file_url: str,
     file_name: str,
     folder_id: str,
     access_token: str,
-    encryption_key_hex: Optional[str] = None,
-    chunk_size: int = 16 * 1024 * 1024  # 16 MB chunks (must be multiple of 256 KiB)
+    encrypt: bool = False,
+    encryption_key: Optional[str] = None,
+    chunk_size: int = 1024 * 1024 * 8, # 8 MB chunks
+    headers_to_forward: Optional[Dict[str, str]] = None
 ) -> Generator[Dict[str, Any], None, None]:
-    """
-    Generator that streams a file URL directly into Google Drive with AES-256-CTR encryption
-    and yields real-time JSON progress dictionaries for each uploaded chunk.
-    """
-    # Ensure chunk_size is a multiple of 256 KB
-    chunk_size = (max(chunk_size, 256 * 1024) // (256 * 1024)) * (256 * 1024)
     start_time = time.time()
+    session = requests.Session()
 
     try:
-        # 1. Inspect source stream
-        yield {"status": "connecting", "message": f"Connecting to source URL: {source_url[:80]}..."}
-        head_resp = requests.get(source_url, stream=True, timeout=25)
+        # 1. Probe remote file length
+        head_headers = headers_to_forward.copy() if headers_to_forward else {}
+        head_resp = session.get(file_url, headers=head_headers, stream=True, timeout=30)
         head_resp.raise_for_status()
 
-        content_len = head_resp.headers.get("content-length")
-        source_size = int(content_len) if content_len and content_len.isdigit() else None
+        raw_size = int(head_resp.headers.get("content-length", 0))
 
+        # 2. Setup AES-256-CTR Encryption if requested
+        final_size = raw_size
         final_file_name = file_name
-        final_size = None
-
-        # 2. Setup AES-256-CTR Encryption
-        encryptor = None
         iv = None
-        if encryption_key_hex:
-            if len(encryption_key_hex) == 64 and all(c in "0123456789abcdefABCDEF" for c in encryption_key_hex):
-                key_bytes = bytes.fromhex(encryption_key_hex)
+        encryptor = None
+
+        if encrypt and encryption_key:
+            if len(encryption_key) == 64 and all(c in "0123456789abcdefABCDEF" for c in encryption_key):
+                key_bytes = bytes.fromhex(encryption_key)
             else:
                 import hashlib
-                key_bytes = hashlib.sha256(encryption_key_hex.encode("utf-8")).digest()
+                key_bytes = hashlib.sha256(encryption_key.encode("utf-8")).digest()
+
             iv = os.urandom(16)
             cipher = Cipher(algorithms.AES(key_bytes), modes.CTR(iv))
             encryptor = cipher.encryptor()
+
             if not final_file_name.endswith(".enc"):
                 final_file_name = f"{final_file_name}.enc"
-            if source_size is not None:
-                final_size = source_size + 16  # 16-byte random IV prepended header
+            final_size = raw_size + 16
 
-        yield {
-            "status": "starting",
-            "fileName": final_file_name,
-            "originalFileName": file_name,
-            "totalBytes": final_size or source_size,
-            "isEncrypted": bool(encryption_key_hex),
-        }
-
-        # 3. Create Google Drive Resumable Upload Session (Dynamic streaming mode)
+        # 3. Initiate Google Drive Resumable Upload Session with retries
         metadata = {
             "name": final_file_name,
             "parents": [folder_id] if folder_id else []
@@ -88,14 +78,27 @@ def stream_upload_to_drive(
         }
 
         init_url = "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true"
-        init_res = requests.post(init_url, headers=init_headers, json=metadata, timeout=20)
+        resumable_uri = None
+        for attempt in range(4):
+            try:
+                init_res = session.post(init_url, headers=init_headers, json=metadata, timeout=30)
+                if init_res.status_code in (200, 201):
+                    resumable_uri = init_res.headers.get("Location")
+                    if resumable_uri:
+                        break
+                elif init_res.status_code in (403, 429, 500, 502, 503, 504):
+                    time.sleep(2 ** attempt + random.uniform(0.5, 1.5))
+                else:
+                    if attempt == 3:
+                        raise RuntimeError(f"Google Drive initialization failed ({init_res.status_code}): {init_res.text[:200]}")
+                    time.sleep(2)
+            except (requests.RequestException, Exception) as err:
+                if attempt == 3:
+                    raise RuntimeError(f"Google Drive initialization connection failed: {err}")
+                time.sleep(2 ** attempt + random.uniform(0.5, 1.5))
 
-        if init_res.status_code not in (200, 201):
-            raise RuntimeError(f"Google Drive initialization failed ({init_res.status_code}): {init_res.text}")
-
-        resumable_uri = init_res.headers.get("Location")
         if not resumable_uri:
-            raise RuntimeError("Google Drive did not return a resumable upload URI.")
+            raise RuntimeError("Google Drive did not return a resumable upload URI after retries.")
 
         # 4. Stream & Encrypt Chunks Directly to Google Drive
         bytes_uploaded = 0
@@ -108,7 +111,6 @@ def stream_upload_to_drive(
         drive_response_data = None
 
         while not stream_exhausted or len(buffer) > 0:
-            # Accumulate full chunk_size (or until stream ends)
             while len(buffer) < chunk_size and not stream_exhausted:
                 try:
                     raw_chunk = next(stream_iter)
@@ -138,13 +140,7 @@ def stream_upload_to_drive(
             chunk_start = bytes_uploaded
             chunk_end = bytes_uploaded + chunk_len - 1
 
-            # On the final chunk, declare total bytes; otherwise use '*'
-            if stream_exhausted:
-                total_bytes_count = bytes_uploaded + chunk_len
-                total_str = str(total_bytes_count)
-            else:
-                total_bytes_count = final_size
-                total_str = "*"
+            total_str = str(final_size) if final_size else "*"
 
             chunk_headers = {
                 "Content-Length": str(chunk_len),
@@ -152,18 +148,21 @@ def stream_upload_to_drive(
             }
 
             put_res = None
-            for attempt in range(3):
+            for attempt in range(5):
                 try:
-                    put_res = requests.put(resumable_uri, headers=chunk_headers, data=current_chunk, timeout=60)
+                    put_res = session.put(resumable_uri, headers=chunk_headers, data=current_chunk, timeout=90)
                     if put_res.status_code in (200, 201, 308):
                         break
-                    if attempt == 2:
-                        raise RuntimeError(f"Google Drive chunk upload failed ({put_res.status_code}): {put_res.text}")
-                    time.sleep(2)
+                    if put_res.status_code in (403, 429, 500, 502, 503, 504):
+                        time.sleep(2 ** attempt + random.uniform(1.0, 2.5))
+                    else:
+                        if attempt == 4:
+                            raise RuntimeError(f"Google Drive chunk upload failed ({put_res.status_code}): {put_res.text[:200]}")
+                        time.sleep(2)
                 except requests.RequestException as req_err:
-                    if attempt == 2:
+                    if attempt == 4:
                         raise
-                    time.sleep(2)
+                    time.sleep(2 ** attempt + random.uniform(1.0, 2.5))
 
             if put_res.status_code in (200, 201):
                 drive_response_data = put_res.json()

@@ -23,6 +23,8 @@ import functools
 import tempfile
 import logging
 import urllib.parse
+import threading
+import random
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any, Tuple
@@ -68,8 +70,8 @@ DEFAULT_CONCURRENCY = int(os.environ.get("CONCURRENCY_LIMIT", "10"))
 MAX_CONCURRENT_JOBS = int(os.environ.get("MAX_CONCURRENT_JOBS", "6"))
 EXTRACTION_TIMEOUT_SEC = float(os.environ.get("EXTRACTION_TIMEOUT_SEC", "3600.0"))
 SAFETY_DISK_MIN_BYTES = int(os.environ.get("SAFETY_DISK_MIN_BYTES", str(5 * 1024 * 1024 * 1024))) # 5 GB
-UPLOAD_CONCURRENCY = int(os.environ.get("UPLOAD_CONCURRENCY", "24"))
-MAX_UPLOAD_CONCURRENCY = int(os.environ.get("MAX_UPLOAD_CONCURRENCY", "100"))
+UPLOAD_CONCURRENCY = int(os.environ.get("UPLOAD_CONCURRENCY", "6"))
+MAX_UPLOAD_CONCURRENCY = int(os.environ.get("MAX_UPLOAD_CONCURRENCY", "10"))
 DOWNLOAD_FILE_TIMEOUT_SEC = float(os.environ.get("DOWNLOAD_FILE_TIMEOUT_SEC", os.environ.get("DOWNLOAD_PART_TIMEOUT_SEC", "1800.0"))) # 30 min per file
 DOWNLOAD_STALL_TIMEOUT_SEC = float(os.environ.get("DOWNLOAD_STALL_TIMEOUT_SEC", "60.0")) # 60s stall/inactivity timeout
 
@@ -94,38 +96,41 @@ HTTP_CLIENT = httpx.AsyncClient(
 )
 
 # ---------------------------------------------------------------------------
-# Dedicated upload thread pool + pooled Drive HTTP session
+# Dedicated upload thread pool + Thread-Local Drive HTTP sessions
 # ---------------------------------------------------------------------------
-# asyncio.to_thread() runs on the *default* loop executor, which is capped at
-# min(32, cpu_count()+4) workers regardless of how high UPLOAD_CONCURRENCY is
-# set — so raising the semaphore alone never got past that ceiling. We use a
-# dedicated pool sized to MAX_UPLOAD_CONCURRENCY instead.
+# Bounded to MAX_UPLOAD_CONCURRENCY to strictly prevent Google Drive rate
+# limits and thread-safety / socket pool corruption issues.
 UPLOAD_EXECUTOR = ThreadPoolExecutor(
     max_workers=max(MAX_UPLOAD_CONCURRENCY, UPLOAD_CONCURRENCY, 8),
     thread_name_prefix="drive-upload",
 )
 
-# Every prior requests.post/put call opened a brand-new TCP+TLS connection
-# (bare `requests.post(...)` builds a throwaway Session internally). Reusing
-# one pooled Session with keep-alive lets concurrent upload threads reuse
-# connections to googleapis.com instead of re-handshaking per file/chunk.
+_drive_thread_local = threading.local()
+
+def get_drive_session() -> requests.Session:
+    """Returns a thread-local requests.Session to avoid thread concurrency bugs and connection pool deadlocks."""
+    if not hasattr(_drive_thread_local, "session"):
+        session = requests.Session()
+        adapter = HTTPAdapter(
+            pool_connections=10,
+            pool_maxsize=10,
+            max_retries=0,
+        )
+        session.mount("https://", adapter)
+        session.mount("http://", adapter)
+        _drive_thread_local.session = session
+    return _drive_thread_local.session
+
+# Legacy alias for compatibility if needed
 DRIVE_HTTP_SESSION = requests.Session()
-_drive_adapter = HTTPAdapter(
-    pool_connections=max(MAX_UPLOAD_CONCURRENCY, 20),
-    pool_maxsize=max(MAX_UPLOAD_CONCURRENCY, 20),
-    max_retries=0,
-)
-DRIVE_HTTP_SESSION.mount("https://", _drive_adapter)
-DRIVE_HTTP_SESSION.mount("http://", _drive_adapter)
 
 
 def compute_adaptive_upload_concurrency(file_sizes: List[int], requested: Optional[int] = None) -> int:
     """
-    Picks an upload concurrency level based on the mix of file sizes in the job.
-    Many small files (subtitles, notes) can safely run at very high concurrency
-    since each request is cheap; a batch dominated by large video files is
-    capped lower to avoid saturating bandwidth/memory with giant simultaneous
-    chunk buffers.
+    Picks a safe upload concurrency level based on the mix of file sizes.
+    Google Drive API rate limits user tokens to ~10 requests per second.
+    To avoid 403 userRateLimitExceeded, 429 Too Many Requests, and socket resets,
+    concurrency is strictly capped at a safe maximum (default 6, range 2 to 10).
     """
     cap = MAX_UPLOAD_CONCURRENCY
     if requested:
@@ -136,14 +141,14 @@ def compute_adaptive_upload_concurrency(file_sizes: List[int], requested: Option
 
     avg_size = sum(file_sizes) / len(file_sizes)
 
-    if avg_size <= 2 * 1024 * 1024:          # mostly tiny files -> go wide
-        target = cap
+    if avg_size <= 2 * 1024 * 1024:          # tiny files (< 2 MB)
+        target = min(8, cap)
     elif avg_size <= 20 * 1024 * 1024:       # small/medium files
-        target = max(20, cap // 2)
+        target = min(6, cap)
     elif avg_size <= 200 * 1024 * 1024:      # larger media files
-        target = max(10, cap // 5)
-    else:                                    # very large files
-        target = max(4, cap // 10)
+        target = min(4, cap)
+    else:                                    # very large files (> 200 MB)
+        target = min(3, cap)
 
     return max(1, min(target, cap))
 
@@ -1207,6 +1212,15 @@ class CourseJobManager:
                 folder_cache[rel_dir] = current_parent
                 return current_parent
 
+        # Pre-resolve and create all unique directories upfront to eliminate runtime lock contention
+        unique_dirs = sorted(list(set(os.path.dirname(rel_path).replace("\\", "/").strip("/") for _, rel_path, _ in all_files if rel_path)))
+        for udir in unique_dirs:
+            if udir and udir != ".":
+                try:
+                    await ensure_drive_folder(udir)
+                except Exception as dir_err:
+                    logger.warning(f"⚠️ [Job {job_id}] Pre-creating directory '{udir}' failed: {dir_err}")
+
         uploaded_count = 0
         count_lock = asyncio.Lock()
 
@@ -1236,23 +1250,42 @@ class CourseJobManager:
 
             logger.info(f"📤 [Job {job_id}] [{index + 1}/{total_files}] Uploading '{fname}' ({rel_path})...")
 
-            async with upload_sem:
-                file_result = await loop.run_in_executor(
-                    UPLOAD_EXECUTOR,
-                    functools.partial(
-                        self._upload_single_file_to_drive,
-                        file_path=full_path,
-                        file_name=fname,
-                        folder_id=target_folder_id,
-                        access_token=access_token,
-                        encrypt=encrypt,
-                        encryption_key=encryption_key,
-                        job_id=job_id,
-                        callback_url=req.callbackUrl,
-                        account_id=drive_cfg.accountId,
-                        token_refresh_url=req.tokenRefreshUrl,
-                    ),
-                )
+            file_result = None
+            upload_err = None
+
+            # Resilient per-file upload loop with up to 3 attempts
+            for file_attempt in range(3):
+                if cancel_event.is_set():
+                    raise asyncio.CancelledError(f"Job {job_id} cancelled.")
+                try:
+                    async with upload_sem:
+                        file_result = await loop.run_in_executor(
+                            UPLOAD_EXECUTOR,
+                            functools.partial(
+                                self._upload_single_file_to_drive,
+                                file_path=full_path,
+                                file_name=fname,
+                                folder_id=target_folder_id,
+                                access_token=access_token,
+                                encrypt=encrypt,
+                                encryption_key=encryption_key,
+                                job_id=job_id,
+                                callback_url=req.callbackUrl,
+                                account_id=drive_cfg.accountId,
+                                token_refresh_url=req.tokenRefreshUrl,
+                            ),
+                        )
+                    if file_result is not None:
+                        break
+                except Exception as ex:
+                    upload_err = ex
+                    logger.warning(f"⚠️ [Job {job_id}] Upload attempt {file_attempt + 1}/3 failed for '{fname}': {ex}")
+                    if file_attempt < 2:
+                        await asyncio.sleep(2.0 * (file_attempt + 1))
+
+            if file_result is None:
+                logger.error(f"❌ [Job {job_id}] File '{fname}' failed all 3 upload attempts: {upload_err}. Skipping to preserve job.")
+                return
 
             # CRUCIAL DISK RULE: Immediately unlink file after upload!
             try:
@@ -1284,12 +1317,12 @@ class CourseJobManager:
             })
 
         tasks = [upload_worker(i, item) for i, item in enumerate(all_files)]
-        await asyncio.gather(*tasks)
+        await asyncio.gather(*tasks, return_exceptions=True)
 
         return uploaded_count
 
     async def _create_drive_subfolder(self, name: str, parent_id: str, access_token: str) -> str:
-        """Creates or retrieves a subfolder in Google Drive idempotently with proper query escaping."""
+        """Creates or retrieves a subfolder in Google Drive idempotently with proper query escaping and backoff."""
         clean_name = html.unescape(name).strip()
         headers = {
             "Authorization": f"Bearer {access_token}",
@@ -1303,16 +1336,20 @@ class CourseJobManager:
             q += f" and '{parent_id}' in parents"
         list_url = f"https://www.googleapis.com/drive/v3/files?q={urllib.parse.quote(q)}&fields=files(id,name)&supportsAllDrives=true&includeItemsFromAllDrives=true"
 
-        for attempt in range(3):
+        for attempt in range(4):
             try:
                 list_resp = await HTTP_CLIENT.get(list_url, headers=headers, timeout=15.0)
                 if list_resp.status_code == 200:
                     existing = list_resp.json().get("files", [])
                     if existing:
                         return existing[0]["id"]
-                break
+                    break
+                elif list_resp.status_code in (403, 429, 500, 502, 503, 504):
+                    await asyncio.sleep(2 ** attempt + random.uniform(0.5, 1.5))
+                else:
+                    break
             except Exception:
-                pass
+                await asyncio.sleep(1.0 * (attempt + 1))
 
         url = "https://www.googleapis.com/drive/v3/files?supportsAllDrives=true"
         body = {
@@ -1322,11 +1359,15 @@ class CourseJobManager:
         }
 
         last_err = ""
-        for attempt in range(3):
+        for attempt in range(4):
             try:
                 resp = await HTTP_CLIENT.post(url, headers=headers, json=body, timeout=20.0)
                 if resp.status_code in (200, 201):
                     return resp.json().get("id", parent_id)
+                elif resp.status_code in (403, 429, 500, 502, 503, 504):
+                    last_err = f"HTTP {resp.status_code}: {resp.text[:150]}"
+                    await asyncio.sleep(2 ** attempt + random.uniform(0.5, 1.5))
+                    continue
                 last_err = f"HTTP {resp.status_code}: {resp.text[:150]}"
             except Exception as e:
                 last_err = str(e)
@@ -1352,7 +1393,9 @@ class CourseJobManager:
         Uploads a local file to Google Drive using either fast single-request Multipart Upload
         (for files < 5 MB like subtitles, notes, small assets) or chunked Resumable Upload
         (for larger files) with exact 256KiB/16-byte AES-CTR alignment and token refreshes.
+        Uses thread-local HTTP session to eliminate thread concurrency bugs.
         """
+        session = get_drive_session()
         raw_size = os.path.getsize(file_path)
         final_file_name = file_name
         iv = None
@@ -1376,11 +1419,10 @@ class CourseJobManager:
 
         # -------------------------------------------------------------
         # FAST PATH: Single-request Multipart Upload for files < 5 MB
-        # Drastically speeds up uploads for subtitles (.vtt, .srt), notes, and small files
         # -------------------------------------------------------------
         if raw_size < 5 * 1024 * 1024:
             try:
-                boundary = f"-------DriveDirectUpload_{int(time.time()*1000)}"
+                boundary = f"-------DriveDirectUpload_{int(time.time()*1000)}_{random.randint(1000,9999)}"
                 if encrypt and encryptor:
                     with open(file_path, "rb") as f:
                         raw_data = f.read()
@@ -1410,9 +1452,9 @@ class CourseJobManager:
                 }
                 direct_url = "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true"
 
-                for attempt in range(3):
+                for attempt in range(4):
                     try:
-                        d_res = DRIVE_HTTP_SESSION.post(direct_url, headers=direct_headers, data=body, timeout=45)
+                        d_res = session.post(direct_url, headers=direct_headers, data=body, timeout=45)
                         if d_res.status_code in (200, 201):
                             return d_res.json()
                         elif d_res.status_code == 401 and job_id and callback_url:
@@ -1420,14 +1462,18 @@ class CourseJobManager:
                             if fresh_tok:
                                 access_token = fresh_tok
                                 direct_headers["Authorization"] = f"Bearer {access_token}"
+                        elif d_res.status_code in (403, 429, 500, 502, 503, 504):
+                            logger.warning(f"⚠️ Drive multipart upload got HTTP {d_res.status_code}, retrying ({attempt + 1}/4)...")
+                            time.sleep(2 ** attempt + random.uniform(0.5, 1.5))
                         else:
-                            if attempt == 2:
-                                raise RuntimeError(f"Drive direct multipart upload failed ({d_res.status_code}): {d_res.text}")
+                            if attempt == 3:
+                                raise RuntimeError(f"Drive direct multipart upload failed ({d_res.status_code}): {d_res.text[:200]}")
                             time.sleep(1.5 * (attempt + 1))
-                    except requests.RequestException:
-                        if attempt == 2:
+                    except (requests.RequestException, Exception) as req_err:
+                        if attempt == 3:
                             raise
-                        time.sleep(1.5 * (attempt + 1))
+                        logger.warning(f"⚠️ Drive multipart connection error ({req_err}), retrying ({attempt + 1}/4)...")
+                        time.sleep(2 ** attempt + random.uniform(0.5, 1.5))
             except Exception as direct_err:
                 logger.warning(f"⚠️ Direct multipart upload failed for {final_file_name}, falling back to resumable: {direct_err}")
                 # Reset encryption state for fallback
@@ -1439,7 +1485,7 @@ class CourseJobManager:
         # -------------------------------------------------------------
         # RESUMABLE PATH: Chunked Streaming Upload for files >= 5 MB
         # -------------------------------------------------------------
-        # 1. Initialize Resumable Upload Session
+        # 1. Initialize Resumable Upload Session with retries & backoff
         init_headers = {
             "Authorization": f"Bearer {access_token}",
             "Content-Type": "application/json; charset=UTF-8",
@@ -1450,23 +1496,36 @@ class CourseJobManager:
             "parents": [folder_id] if folder_id else [],
         }
         init_url = "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true"
-        init_res = DRIVE_HTTP_SESSION.post(init_url, headers=init_headers, json=metadata, timeout=20)
 
-        # Handle 401 token expiration on session init
-        if init_res.status_code == 401 and job_id and callback_url:
-            logger.info("🔄 Token expired during resumable upload init, refreshing...")
-            fresh_tok = fetch_refreshed_token_sync(job_id, callback_url, account_id, token_refresh_url)
-            if fresh_tok:
-                access_token = fresh_tok
-                init_headers["Authorization"] = f"Bearer {access_token}"
-                init_res = DRIVE_HTTP_SESSION.post(init_url, headers=init_headers, json=metadata, timeout=20)
+        resumable_uri = None
+        for attempt in range(4):
+            try:
+                init_res = session.post(init_url, headers=init_headers, json=metadata, timeout=30)
+                if init_res.status_code in (200, 201):
+                    resumable_uri = init_res.headers.get("Location")
+                    if resumable_uri:
+                        break
+                elif init_res.status_code == 401 and job_id and callback_url:
+                    logger.info("🔄 Token expired during resumable upload init, refreshing...")
+                    fresh_tok = fetch_refreshed_token_sync(job_id, callback_url, account_id, token_refresh_url)
+                    if fresh_tok:
+                        access_token = fresh_tok
+                        init_headers["Authorization"] = f"Bearer {access_token}"
+                elif init_res.status_code in (403, 429, 500, 502, 503, 504):
+                    logger.warning(f"⚠️ Drive resumable init got HTTP {init_res.status_code}, retrying ({attempt + 1}/4)...")
+                    time.sleep(2 ** attempt + random.uniform(0.5, 1.5))
+                else:
+                    if attempt == 3:
+                        raise RuntimeError(f"Drive resumable upload init failed ({init_res.status_code}): {init_res.text[:200]}")
+                    time.sleep(2)
+            except (requests.RequestException, Exception) as init_err:
+                if attempt == 3:
+                    raise RuntimeError(f"Drive resumable upload init connection failed: {init_err}")
+                logger.warning(f"⚠️ Drive resumable init connection error ({init_err}), retrying ({attempt + 1}/4)...")
+                time.sleep(2 ** attempt + random.uniform(0.5, 1.5))
 
-        if init_res.status_code not in (200, 201):
-            raise RuntimeError(f"Drive resumable upload init failed ({init_res.status_code}): {init_res.text}")
-
-        resumable_uri = init_res.headers.get("Location")
         if not resumable_uri:
-            raise RuntimeError("Drive did not return a resumable upload URI.")
+            raise RuntimeError("Drive did not return a resumable upload URI after retries.")
 
         # 2. Handle 0-byte files explicitly
         if total_bytes == 0:
@@ -1475,7 +1534,7 @@ class CourseJobManager:
                 "Content-Length": "0",
                 "Content-Range": "bytes */0",
             }
-            z_res = DRIVE_HTTP_SESSION.put(resumable_uri, headers=zero_headers, timeout=30)
+            z_res = session.put(resumable_uri, headers=zero_headers, timeout=30)
             if z_res.status_code in (200, 201):
                 return z_res.json()
             return {"status": "uploaded", "id": z_res.json().get("id", "")}
@@ -1485,23 +1544,29 @@ class CourseJobManager:
         bytes_uploaded = 0
 
         with open(file_path, "rb") as f:
-            is_first_chunk = True
             while bytes_uploaded < total_bytes:
-                if is_first_chunk and iv:
-                    needed_raw = chunk_size - 16
-                    raw_data = f.read(needed_raw)
-                    enc_data = encryptor.update(raw_data) if encryptor else raw_data
-                    current_chunk = iv + enc_data
-                    is_first_chunk = False
-                else:
-                    raw_data = f.read(chunk_size)
-                    if encryptor:
-                        if not raw_data:
-                            current_chunk = encryptor.finalize()
-                        else:
-                            current_chunk = encryptor.update(raw_data)
+                if encrypt and iv and key_bytes:
+                    plain_offset = max(0, bytes_uploaded - 16)
+                    block_idx = plain_offset // 16
+                    byte_offset_in_block = plain_offset % 16
+                    f.seek(plain_offset)
+                    counter_iv = add_blocks_to_iv_py(iv, block_idx)
+                    cipher = Cipher(algorithms.AES(key_bytes), modes.CTR(counter_iv))
+                    encryptor = cipher.encryptor()
+                    if byte_offset_in_block > 0:
+                        encryptor.update(b"\x00" * byte_offset_in_block)
+
+                    if bytes_uploaded == 0:
+                        needed_raw = chunk_size - 16
+                        raw_data = f.read(needed_raw)
+                        enc_data = encryptor.update(raw_data) if raw_data else b""
+                        current_chunk = iv + enc_data
                     else:
-                        current_chunk = raw_data
+                        raw_data = f.read(chunk_size)
+                        current_chunk = encryptor.update(raw_data) if raw_data else encryptor.finalize()
+                else:
+                    f.seek(bytes_uploaded)
+                    current_chunk = f.read(chunk_size)
 
                 chunk_len = len(current_chunk)
                 if chunk_len == 0:
@@ -1515,10 +1580,10 @@ class CourseJobManager:
                     "Content-Range": f"bytes {chunk_start}-{chunk_end}/{total_bytes}",
                 }
 
-                # PUT chunk with retries & HTTP 308 handling
-                for attempt in range(3):
+                chunk_ok = False
+                for attempt in range(5):
                     try:
-                        put_res = DRIVE_HTTP_SESSION.put(resumable_uri, headers=chunk_headers, data=current_chunk, timeout=90)
+                        put_res = session.put(resumable_uri, headers=chunk_headers, data=current_chunk, timeout=90)
                         if put_res.status_code in (200, 201):
                             bytes_uploaded += chunk_len
                             return put_res.json()
@@ -1526,40 +1591,65 @@ class CourseJobManager:
                             range_header = put_res.headers.get("Range")
                             if range_header:
                                 bytes_uploaded = int(range_header.split("-")[1]) + 1
-                                if encrypt and iv and key_bytes:
-                                    plain_offset = max(0, bytes_uploaded - 16)
-                                    block_idx = plain_offset // 16
-                                    byte_offset_in_block = plain_offset % 16
-                                    f.seek(plain_offset)
-                                    counter_iv = add_blocks_to_iv_py(iv, block_idx)
-                                    cipher = Cipher(algorithms.AES(key_bytes), modes.CTR(counter_iv))
-                                    encryptor = cipher.encryptor()
-                                    if byte_offset_in_block > 0:
-                                        encryptor.update(b"\x00" * byte_offset_in_block)
-                                    is_first_chunk = False
-                                else:
-                                    f.seek(bytes_uploaded)
                             else:
-                                # 308 with no Range header means 0 bytes were accepted; do NOT advance bytes_uploaded
                                 logger.warning("⚠️ 308 received with no Range header (0 bytes accepted). Retrying current offset...")
+                            chunk_ok = True
                             break
+                        elif put_res.status_code in (403, 429, 500, 502, 503, 504):
+                            logger.warning(f"⚠️ Drive chunk upload got HTTP {put_res.status_code}, backing off (attempt {attempt + 1}/5)...")
+                            time.sleep(2 ** attempt + random.uniform(1.0, 2.5))
                         elif put_res.status_code == 401 and job_id and callback_url:
                             logger.info("🔄 Token expired mid-upload, refreshing...")
                             fresh_tok = fetch_refreshed_token_sync(job_id, callback_url, account_id, token_refresh_url)
                             if fresh_tok:
                                 access_token = fresh_tok
+                            time.sleep(1)
                         else:
-                            if attempt == 2:
-                                raise RuntimeError(f"Drive chunk upload failed ({put_res.status_code}): {put_res.text}")
+                            if attempt == 4:
+                                raise RuntimeError(f"Drive chunk upload failed ({put_res.status_code}): {put_res.text[:200]}")
                             time.sleep(2)
-                    except requests.RequestException as req_err:
-                        if attempt == 2:
+                    except (requests.RequestException, Exception) as req_err:
+                        logger.warning(f"⚠️ Drive chunk upload network error: {req_err} (attempt {attempt + 1}/5)")
+                        if attempt == 4:
                             raise
-                        time.sleep(2)
+                        # Sync confirmed byte position from Drive
+                        try:
+                            chk = session.put(
+                                resumable_uri,
+                                headers={"Content-Range": f"bytes */{total_bytes}"},
+                                timeout=15,
+                            )
+                            if chk.status_code in (200, 201):
+                                return chk.json()
+                            elif chk.status_code == 308:
+                                r_hdr = chk.headers.get("Range")
+                                if r_hdr:
+                                    bytes_uploaded = int(r_hdr.split("-")[1]) + 1
+                                    chunk_ok = True
+                                    break
+                        except Exception:
+                            pass
+                        time.sleep(2 ** attempt + random.uniform(1.0, 2.5))
+
+                if not chunk_ok and bytes_uploaded < total_bytes:
+                    try:
+                        chk = session.put(
+                            resumable_uri,
+                            headers={"Content-Range": f"bytes */{total_bytes}"},
+                            timeout=15,
+                        )
+                        if chk.status_code in (200, 201):
+                            return chk.json()
+                        elif chk.status_code == 308:
+                            r_hdr = chk.headers.get("Range")
+                            if r_hdr:
+                                bytes_uploaded = int(r_hdr.split("-")[1]) + 1
+                    except Exception:
+                        pass
 
         # Fallback: Query upload status to get file ID if stream finished
         try:
-            status_chk = DRIVE_HTTP_SESSION.put(
+            status_chk = session.put(
                 resumable_uri,
                 headers={"Authorization": f"Bearer {access_token}", "Content-Range": f"bytes */{total_bytes}"},
                 timeout=20,
