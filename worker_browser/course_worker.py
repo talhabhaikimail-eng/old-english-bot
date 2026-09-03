@@ -13,19 +13,23 @@ import os
 import sys
 import re
 import html
+import json
 import time
 import shutil
 import socket
 import ipaddress
 import asyncio
+import functools
 import tempfile
 import logging
 import urllib.parse
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any, Tuple
 
 import httpx
 import requests
+from requests.adapters import HTTPAdapter
 from pydantic import BaseModel, Field
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
@@ -64,7 +68,10 @@ DEFAULT_CONCURRENCY = int(os.environ.get("CONCURRENCY_LIMIT", "10"))
 MAX_CONCURRENT_JOBS = int(os.environ.get("MAX_CONCURRENT_JOBS", "6"))
 EXTRACTION_TIMEOUT_SEC = float(os.environ.get("EXTRACTION_TIMEOUT_SEC", "3600.0"))
 SAFETY_DISK_MIN_BYTES = int(os.environ.get("SAFETY_DISK_MIN_BYTES", str(5 * 1024 * 1024 * 1024))) # 5 GB
-UPLOAD_CONCURRENCY = int(os.environ.get("UPLOAD_CONCURRENCY", "6"))
+UPLOAD_CONCURRENCY = int(os.environ.get("UPLOAD_CONCURRENCY", "24"))
+MAX_UPLOAD_CONCURRENCY = int(os.environ.get("MAX_UPLOAD_CONCURRENCY", "100"))
+DOWNLOAD_FILE_TIMEOUT_SEC = float(os.environ.get("DOWNLOAD_FILE_TIMEOUT_SEC", os.environ.get("DOWNLOAD_PART_TIMEOUT_SEC", "1800.0"))) # 30 min per file
+DOWNLOAD_STALL_TIMEOUT_SEC = float(os.environ.get("DOWNLOAD_STALL_TIMEOUT_SEC", "60.0")) # 60s stall/inactivity timeout
 
 # Base temporary jobs directory (e.g., /tmp/jobs or system temp)
 if os.path.exists("/tmp") and os.access("/tmp", os.W_OK):
@@ -85,6 +92,60 @@ HTTP_CLIENT = httpx.AsyncClient(
     limits=httpx.Limits(max_keepalive_connections=50, max_connections=100),
     follow_redirects=True,
 )
+
+# ---------------------------------------------------------------------------
+# Dedicated upload thread pool + pooled Drive HTTP session
+# ---------------------------------------------------------------------------
+# asyncio.to_thread() runs on the *default* loop executor, which is capped at
+# min(32, cpu_count()+4) workers regardless of how high UPLOAD_CONCURRENCY is
+# set — so raising the semaphore alone never got past that ceiling. We use a
+# dedicated pool sized to MAX_UPLOAD_CONCURRENCY instead.
+UPLOAD_EXECUTOR = ThreadPoolExecutor(
+    max_workers=max(MAX_UPLOAD_CONCURRENCY, UPLOAD_CONCURRENCY, 8),
+    thread_name_prefix="drive-upload",
+)
+
+# Every prior requests.post/put call opened a brand-new TCP+TLS connection
+# (bare `requests.post(...)` builds a throwaway Session internally). Reusing
+# one pooled Session with keep-alive lets concurrent upload threads reuse
+# connections to googleapis.com instead of re-handshaking per file/chunk.
+DRIVE_HTTP_SESSION = requests.Session()
+_drive_adapter = HTTPAdapter(
+    pool_connections=max(MAX_UPLOAD_CONCURRENCY, 20),
+    pool_maxsize=max(MAX_UPLOAD_CONCURRENCY, 20),
+    max_retries=0,
+)
+DRIVE_HTTP_SESSION.mount("https://", _drive_adapter)
+DRIVE_HTTP_SESSION.mount("http://", _drive_adapter)
+
+
+def compute_adaptive_upload_concurrency(file_sizes: List[int], requested: Optional[int] = None) -> int:
+    """
+    Picks an upload concurrency level based on the mix of file sizes in the job.
+    Many small files (subtitles, notes) can safely run at very high concurrency
+    since each request is cheap; a batch dominated by large video files is
+    capped lower to avoid saturating bandwidth/memory with giant simultaneous
+    chunk buffers.
+    """
+    cap = MAX_UPLOAD_CONCURRENCY
+    if requested:
+        cap = max(1, min(int(requested), MAX_UPLOAD_CONCURRENCY))
+
+    if not file_sizes:
+        return min(cap, UPLOAD_CONCURRENCY)
+
+    avg_size = sum(file_sizes) / len(file_sizes)
+
+    if avg_size <= 2 * 1024 * 1024:          # mostly tiny files -> go wide
+        target = cap
+    elif avg_size <= 20 * 1024 * 1024:       # small/medium files
+        target = max(20, cap // 2)
+    elif avg_size <= 200 * 1024 * 1024:      # larger media files
+        target = max(10, cap // 5)
+    else:                                    # very large files
+        target = max(4, cap // 10)
+
+    return max(1, min(target, cap))
 
 
 # ---------------------------------------------------------------------------
@@ -107,6 +168,9 @@ class CourseJobRequest(BaseModel):
     callbackUrl: str
     password: Optional[str] = None
     tokenRefreshUrl: Optional[str] = None
+    downloadTimeoutSec: Optional[float] = None
+    downloadStallTimeoutSec: Optional[float] = None
+    uploadConcurrency: Optional[int] = None
 
 
 # ---------------------------------------------------------------------------
@@ -173,6 +237,15 @@ def get_cpu_percent() -> float:
         except Exception:
             pass
     return 0.0
+
+
+class FatalDownloadError(RuntimeError):
+    """
+    Raised only for conditions that must abort the ENTIRE download stage
+    (e.g. disk full) — as opposed to a single link permanently failing,
+    which should not stop other queued links from downloading.
+    """
+    pass
 
 
 def natural_sort_key(s: str) -> List[Any]:
@@ -555,6 +628,9 @@ class CourseJobManager:
 
         reporter_task = asyncio.create_task(reporter_loop())
 
+        file_timeout = getattr(req, "downloadTimeoutSec", None) or DOWNLOAD_FILE_TIMEOUT_SEC
+        stall_timeout = getattr(req, "downloadStallTimeoutSec", None) or DOWNLOAD_STALL_TIMEOUT_SEC
+
         async def download_single_part(part: Dict[str, Any]):
             async with sem:
                 if cancel_event.is_set():
@@ -572,22 +648,27 @@ class CourseJobManager:
                 # Upfront disk space verification
                 usage = shutil.disk_usage(parts_dir)
                 if usage.free < SAFETY_DISK_MIN_BYTES:
-                    raise RuntimeError(
+                    raise FatalDownloadError(
                         f"Insufficient disk space: free space ({usage.free / (1024**3):.2f} GB) "
                         f"dropped below 5 GB safety threshold."
                     )
 
                 # Attempt fast multi-part download via Go binary
                 if engine:
+                    part_cancel_event = asyncio.Event()
+                    start_dl_time = time.time()
+                    last_activity_time = time.time()
+
                     def on_go_progress(evt: ProgressEvent):
+                        nonlocal last_activity_time
+                        last_activity_time = time.time()
                         part["downloadedBytes"] = evt.downloaded_bytes
                         part["totalBytes"] = evt.total_bytes
                         part["percent"] = evt.percent
                         part["speedBps"] = int(evt.speed_bytes_sec)
 
-                    try:
-                        logger.info(f"⚡ [Job {job_id}] Downloading {part['fileName']} via Go Multi-Part Engine (16 chunks)...")
-                        result = await engine.download_async(
+                    async def run_go_download():
+                        return await engine.download_async(
                             url=url,
                             output_path=dest,
                             concurrency=16,
@@ -595,8 +676,46 @@ class CourseJobManager:
                             retries=5,
                             headers=headers,
                             on_progress=on_go_progress,
-                            cancel_event=cancel_event,
+                            cancel_event=part_cancel_event,
                         )
+
+                    dl_task = asyncio.create_task(run_go_download())
+
+                    try:
+                        logger.info(f"⚡ [Job {job_id}] Downloading {part['fileName']} via Go Multi-Part Engine (16 chunks, timeout={file_timeout:.0f}s, stall_timeout={stall_timeout:.0f}s)...")
+
+                        while not dl_task.done():
+                            done, _ = await asyncio.wait({dl_task}, timeout=1.0)
+                            if done:
+                                break
+
+                            if cancel_event.is_set():
+                                part_cancel_event.set()
+                                dl_task.cancel()
+                                await asyncio.gather(dl_task, return_exceptions=True)
+                                part["status"] = "failed"
+                                return
+
+                            now = time.time()
+                            # Check stall timeout (waiting for files to return data/progress)
+                            if stall_timeout > 0 and (now - last_activity_time) >= stall_timeout:
+                                part_cancel_event.set()
+                                dl_task.cancel()
+                                await asyncio.gather(dl_task, return_exceptions=True)
+                                raise TimeoutError(
+                                    f"Download stalled: no data returned for {stall_timeout:.0f}s (file: {part['fileName']})"
+                                )
+
+                            # Check total file download timeout
+                            if file_timeout > 0 and (now - start_dl_time) >= file_timeout:
+                                part_cancel_event.set()
+                                dl_task.cancel()
+                                await asyncio.gather(dl_task, return_exceptions=True)
+                                raise TimeoutError(
+                                    f"Download timed out: exceeded maximum duration of {file_timeout:.0f}s (file: {part['fileName']})"
+                                )
+
+                        result = await dl_task
                         part["downloadedBytes"] = result.total_bytes
                         part["totalBytes"] = result.total_bytes
                         part["percent"] = 100.0
@@ -622,7 +741,8 @@ class CourseJobManager:
                         req_headers["Range"] = f"bytes={existing_bytes}-"
 
                     try:
-                        async with HTTP_CLIENT.stream("GET", url, headers=req_headers) as resp:
+                        stream_timeout = httpx.Timeout(connect=15.0, read=stall_timeout, write=30.0, pool=30.0)
+                        async with HTTP_CLIENT.stream("GET", url, headers=req_headers, timeout=stream_timeout) as resp:
                             if resp.status_code not in (200, 206):
                                 raise RuntimeError(f"HTTP {resp.status_code} returned by CDN")
 
@@ -643,11 +763,25 @@ class CourseJobManager:
 
                             chunk_count = 0
                             last_disk_check = time.time()
+                            stream_start = time.time()
+                            chunk_iter = resp.aiter_bytes(chunk_size=256 * 1024).__aiter__()
+
                             with open(dest, file_mode) as f:
-                                async for chunk in resp.aiter_bytes(chunk_size=256 * 1024):
+                                while True:
                                     if cancel_event.is_set():
                                         part["status"] = "failed"
                                         return
+
+                                    now = time.time()
+                                    if file_timeout > 0 and (now - stream_start) >= file_timeout:
+                                        raise TimeoutError(f"Stream download exceeded maximum timeout of {file_timeout:.0f}s")
+
+                                    try:
+                                        chunk = await asyncio.wait_for(chunk_iter.__anext__(), timeout=stall_timeout)
+                                    except StopAsyncIteration:
+                                        break
+                                    except asyncio.TimeoutError:
+                                        raise TimeoutError(f"Stream download stalled: no data received for {stall_timeout:.0f}s")
 
                                     f.write(chunk)
                                     bytes_dl += len(chunk)
@@ -662,7 +796,7 @@ class CourseJobManager:
                                         last_disk_check = now
                                         usage = shutil.disk_usage(parts_dir)
                                         if usage.free < SAFETY_DISK_MIN_BYTES:
-                                            raise RuntimeError(
+                                            raise FatalDownloadError(
                                                 f"Insufficient disk space: free space ({usage.free / (1024**3):.2f} GB) "
                                                 f"dropped below 5 GB safety threshold."
                                             )
@@ -677,6 +811,9 @@ class CourseJobManager:
                             part["status"] = "completed"
                             return  # Success!
 
+                    except FatalDownloadError:
+                        # Disk-full etc: do not burn retries on this, propagate immediately.
+                        raise
                     except Exception as part_err:
                         logger.warning(f"⚠️ [Job {job_id}] Part {part['fileName']} stream download attempt {attempt + 1}/{max_retries} failed: {part_err}")
                         if attempt == max_retries - 1:
@@ -684,16 +821,51 @@ class CourseJobManager:
                             raise RuntimeError(f"Download failed for {part['fileName']} after {max_retries} attempts: {part_err}")
                         await asyncio.sleep(2.0 * (attempt + 1))
 
-        download_tasks = [asyncio.create_task(download_single_part(p)) for p in parts_state]
+        async def safe_download_part(part: Dict[str, Any]):
+            """
+            Wraps download_single_part so that ONE link permanently failing
+            (timeout, 404, corrupt stream, etc.) only fails that link — it no
+            longer aborts every other in-progress or still-queued download.
+            Only a FatalDownloadError (disk full) is allowed to propagate and
+            stop the whole batch, since that condition affects every part.
+            """
+            try:
+                await download_single_part(part)
+            except FatalDownloadError:
+                part["status"] = "failed"
+                raise
+            except asyncio.CancelledError:
+                part["status"] = "failed"
+                raise
+            except Exception as e:
+                part["status"] = "failed"
+                part["error"] = str(e)
+                logger.error(
+                    f"❌ [Job {job_id}] Part '{part['fileName']}' permanently failed and will be skipped "
+                    f"— remaining queued links continue downloading: {e}"
+                )
+                # Clean up any partial/corrupt bytes left behind by the failed attempt
+                # so a stale file doesn't linger or get mistaken for a real part later.
+                dest_path = part.get("destPath")
+                try:
+                    if dest_path and os.path.exists(dest_path):
+                        os.remove(dest_path)
+                        logger.info(f"🧹 [Job {job_id}] Cleaned up incomplete file for failed part '{part['fileName']}'.")
+                except Exception as cleanup_err:
+                    logger.warning(f"⚠️ [Job {job_id}] Could not clean up partial file for '{part['fileName']}': {cleanup_err}")
+
+        download_tasks = [asyncio.create_task(safe_download_part(p)) for p in parts_state]
         try:
             await asyncio.gather(*download_tasks)
-        except Exception as dl_ex:
+        except FatalDownloadError as fatal_ex:
+            # Only a truly job-wide condition (disk full) reaches here now —
+            # this is the one case where aborting every other download is correct.
             cancel_event.set()
             for t in download_tasks:
                 if not t.done():
                     t.cancel()
             await asyncio.gather(*download_tasks, return_exceptions=True)
-            raise dl_ex
+            raise fatal_ex
         finally:
             reporter_task.cancel()
             try:
@@ -702,9 +874,10 @@ class CourseJobManager:
                 pass
 
         # Verify all parts completed
-        failed = [p["fileName"] for p in parts_state if p["status"] != "completed"]
-        if failed:
-            raise RuntimeError(f"Download incomplete or failed for parts: {', '.join(failed)}")
+        failed_parts = [p for p in parts_state if p["status"] != "completed"]
+        if failed_parts:
+            details = "; ".join(f"{p['fileName']} ({p.get('error', 'unknown error')})" for p in failed_parts)
+            raise RuntimeError(f"Download incomplete or failed for {len(failed_parts)} part(s): {details}")
 
     # -----------------------------------------------------------------------
     # Stage 2 Details: Extraction (unrar / 7z / tar / zip) + Recursive Unpacking
@@ -1036,7 +1209,16 @@ class CourseJobManager:
 
         uploaded_count = 0
         count_lock = asyncio.Lock()
-        upload_sem = asyncio.Semaphore(UPLOAD_CONCURRENCY)
+
+        file_sizes = [os.path.getsize(fp) for fp, _, _ in all_files if os.path.exists(fp)]
+        upload_concurrency = compute_adaptive_upload_concurrency(file_sizes, req.uploadConcurrency)
+        logger.info(
+            f"⚙️ [Job {job_id}] Using upload concurrency={upload_concurrency} "
+            f"for {total_files} files (avg size {(sum(file_sizes) / len(file_sizes) / (1024*1024)):.2f} MB)"
+            if file_sizes else f"⚙️ [Job {job_id}] Using upload concurrency={upload_concurrency}"
+        )
+        upload_sem = asyncio.Semaphore(upload_concurrency)
+        loop = asyncio.get_running_loop()
 
         async def upload_worker(index: int, item: Tuple[str, str, str]):
             nonlocal uploaded_count, access_token
@@ -1055,18 +1237,21 @@ class CourseJobManager:
             logger.info(f"📤 [Job {job_id}] [{index + 1}/{total_files}] Uploading '{fname}' ({rel_path})...")
 
             async with upload_sem:
-                file_result = await asyncio.to_thread(
-                    self._upload_single_file_to_drive,
-                    file_path=full_path,
-                    file_name=fname,
-                    folder_id=target_folder_id,
-                    access_token=access_token,
-                    encrypt=encrypt,
-                    encryption_key=encryption_key,
-                    job_id=job_id,
-                    callback_url=req.callbackUrl,
-                    account_id=drive_cfg.accountId,
-                    token_refresh_url=req.tokenRefreshUrl,
+                file_result = await loop.run_in_executor(
+                    UPLOAD_EXECUTOR,
+                    functools.partial(
+                        self._upload_single_file_to_drive,
+                        file_path=full_path,
+                        file_name=fname,
+                        folder_id=target_folder_id,
+                        access_token=access_token,
+                        encrypt=encrypt,
+                        encryption_key=encryption_key,
+                        job_id=job_id,
+                        callback_url=req.callbackUrl,
+                        account_id=drive_cfg.accountId,
+                        token_refresh_url=req.tokenRefreshUrl,
+                    ),
                 )
 
             # CRUCIAL DISK RULE: Immediately unlink file after upload!
@@ -1227,7 +1412,7 @@ class CourseJobManager:
 
                 for attempt in range(3):
                     try:
-                        d_res = requests.post(direct_url, headers=direct_headers, data=body, timeout=45)
+                        d_res = DRIVE_HTTP_SESSION.post(direct_url, headers=direct_headers, data=body, timeout=45)
                         if d_res.status_code in (200, 201):
                             return d_res.json()
                         elif d_res.status_code == 401 and job_id and callback_url:
@@ -1265,7 +1450,7 @@ class CourseJobManager:
             "parents": [folder_id] if folder_id else [],
         }
         init_url = "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true"
-        init_res = requests.post(init_url, headers=init_headers, json=metadata, timeout=20)
+        init_res = DRIVE_HTTP_SESSION.post(init_url, headers=init_headers, json=metadata, timeout=20)
 
         # Handle 401 token expiration on session init
         if init_res.status_code == 401 and job_id and callback_url:
@@ -1274,7 +1459,7 @@ class CourseJobManager:
             if fresh_tok:
                 access_token = fresh_tok
                 init_headers["Authorization"] = f"Bearer {access_token}"
-                init_res = requests.post(init_url, headers=init_headers, json=metadata, timeout=20)
+                init_res = DRIVE_HTTP_SESSION.post(init_url, headers=init_headers, json=metadata, timeout=20)
 
         if init_res.status_code not in (200, 201):
             raise RuntimeError(f"Drive resumable upload init failed ({init_res.status_code}): {init_res.text}")
@@ -1290,7 +1475,7 @@ class CourseJobManager:
                 "Content-Length": "0",
                 "Content-Range": "bytes */0",
             }
-            z_res = requests.put(resumable_uri, headers=zero_headers, timeout=30)
+            z_res = DRIVE_HTTP_SESSION.put(resumable_uri, headers=zero_headers, timeout=30)
             if z_res.status_code in (200, 201):
                 return z_res.json()
             return {"status": "uploaded", "id": z_res.json().get("id", "")}
@@ -1333,7 +1518,7 @@ class CourseJobManager:
                 # PUT chunk with retries & HTTP 308 handling
                 for attempt in range(3):
                     try:
-                        put_res = requests.put(resumable_uri, headers=chunk_headers, data=current_chunk, timeout=90)
+                        put_res = DRIVE_HTTP_SESSION.put(resumable_uri, headers=chunk_headers, data=current_chunk, timeout=90)
                         if put_res.status_code in (200, 201):
                             bytes_uploaded += chunk_len
                             return put_res.json()
@@ -1374,7 +1559,7 @@ class CourseJobManager:
 
         # Fallback: Query upload status to get file ID if stream finished
         try:
-            status_chk = requests.put(
+            status_chk = DRIVE_HTTP_SESSION.put(
                 resumable_uri,
                 headers={"Authorization": f"Bearer {access_token}", "Content-Range": f"bytes */{total_bytes}"},
                 timeout=20,
