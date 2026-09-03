@@ -12,6 +12,7 @@ Adheres strictly to the 5-Stage Worker Disk Protocol (Preventing ENOSPC):
 import os
 import sys
 import re
+import shlex
 import html
 import json
 import time
@@ -1165,17 +1166,113 @@ class CourseJobManager:
         except Exception as unwrap_err:
             logger.warning(f"⚠️ [Job {job_id}] Notice checking top entries for unwrapping: {unwrap_err}")
 
-        all_files = []
+        # Define video extensions strictly (only videos uploaded directly; all other files including subtitles will be zipped)
+        VIDEO_EXTENSIONS = {
+            '.mp4', '.mkv', '.webm', '.mov', '.avi',
+            '.flv', '.wmv', '.m4v', '.ts'
+        }
+
+        discovered_videos: List[Tuple[str, str, str, bool]] = []
+        discovered_materials: List[Tuple[str, str, str, bool]] = []
+
         for root, _, filenames in os.walk(scan_dir):
             for fname in filenames:
                 clean_fname = html.unescape(fname).strip()
                 full_path = os.path.join(root, fname)
                 rel_path = os.path.relpath(full_path, scan_dir)
-                all_files.append((full_path, rel_path, clean_fname))
+                ext = os.path.splitext(clean_fname)[1].lower()
+                if ext in VIDEO_EXTENSIONS:
+                    discovered_videos.append((full_path, rel_path, clean_fname, False))
+                else:
+                    discovered_materials.append((full_path, rel_path, clean_fname, True))
 
-        all_files.sort(key=lambda x: natural_sort_key(x[1]))
+        discovered_videos.sort(key=lambda x: natural_sort_key(x[1]))
+        discovered_materials.sort(key=lambda x: natural_sort_key(x[1]))
+
+        generated_zip_parts: List[Tuple[str, str, str, bool]] = []
+        job_dir = os.path.dirname(extracted_dir)
+        materials_staging_dir = os.path.join(job_dir, "materials_staging")
+
+        # Package all non-video files and folders into 1GB split zip parts
+        if discovered_materials:
+            os.makedirs(materials_staging_dir, exist_ok=True)
+            mat_count = len(discovered_materials)
+            mat_bytes = sum(os.path.getsize(fp) for fp, _, _, _ in discovered_materials if os.path.exists(fp))
+            mat_mb = f"{mat_bytes / (1024 * 1024):.2f}"
+
+            logger.info(f"📦 [Job {job_id}] Packaging {mat_count} non-video files ({mat_mb} MB) into 1GB split zip archives...")
+
+            # Broadcast packaging phase to Central Hub & WebSockets
+            await post_webhook(req.callbackUrl, {
+                "jobId": job_id,
+                "workerId": WORKER_ID,
+                "phase": "packaging",
+                "message": f"Packaging {mat_count} non-video materials ({mat_mb} MB) into 1GB split zip archives...",
+                "materialsCount": mat_count,
+                "materialsMB": mat_mb,
+            })
+
+            safe_course_title = re.sub(r'[\\/*?:"<>|]', "", req.courseName).strip() or "Course"
+            base_zip_name = f"{safe_course_title}_Materials.zip"
+            zip_out_path = os.path.join(materials_staging_dir, base_zip_name)
+
+            filelist_path = os.path.join(materials_staging_dir, "filelist.txt")
+            with open(filelist_path, "w", encoding="utf-8") as fl:
+                for _, rel_p, _, _ in discovered_materials:
+                    fl.write(f"{rel_p}\n")
+
+            # Use zip with -s 1024m -r -@ to create 1GB split volumes
+            zip_cmd = f"zip -s 1024m -r {shlex.quote(zip_out_path)} -@ < {shlex.quote(filelist_path)}"
+            proc = await asyncio.create_subprocess_shell(
+                zip_cmd,
+                cwd=scan_dir,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await proc.communicate()
+
+            if proc.returncode != 0:
+                logger.warning(f"⚠️ [Job {job_id}] zip command exited code {proc.returncode}: {stderr.decode(errors='ignore')}. Retrying with 7z...")
+                cmd_7z = f"7z a -tzip -v1024m {shlex.quote(zip_out_path)} @{shlex.quote(filelist_path)}"
+                proc_7z = await asyncio.create_subprocess_shell(
+                    cmd_7z,
+                    cwd=scan_dir,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                await proc_7z.communicate()
+
+            if os.path.exists(filelist_path):
+                try: os.remove(filelist_path)
+                except: pass
+
+            # Reclaim disk: unlink all raw source non-video files immediately
+            for fp, _, _, _ in discovered_materials:
+                try:
+                    if os.path.exists(fp):
+                        os.remove(fp)
+                except Exception as del_err:
+                    logger.debug(f"Could not remove source material file {fp}: {del_err}")
+
+            # Collect all generated split zip parts (.zip, .z01, .z02, .zip.001, etc.)
+            for zfname in sorted(os.listdir(materials_staging_dir)):
+                zpath = os.path.join(materials_staging_dir, zfname)
+                if os.path.isfile(zpath):
+                    # Destination is root course folder (rel_path = zfname)
+                    generated_zip_parts.append((zpath, zfname, zfname, True))
+
+            logger.info(f"✅ [Job {job_id}] Generated {len(generated_zip_parts)} material zip part(s)")
+
+        # Assemble unified upload queue: all video files + all generated zip parts
+        all_files: List[Tuple[str, str, str, bool]] = []
+        all_files.extend(discovered_videos)
+        all_files.extend(generated_zip_parts)
+
         total_files = len(all_files)
-        logger.info(f"🚀 [Job {job_id}] Found {total_files} extracted files to upload.")
+        logger.info(
+            f"🚀 [Job {job_id}] Prepared upload queue: {len(discovered_videos)} video files "
+            f"+ {len(generated_zip_parts)} material zip part(s) = {total_files} total files to upload."
+        )
 
         if total_files == 0:
             logger.warning(f"⚠️ [Job {job_id}] No files found in extracted directory to upload.")
@@ -1224,7 +1321,7 @@ class CourseJobManager:
         uploaded_count = 0
         count_lock = asyncio.Lock()
 
-        file_sizes = [os.path.getsize(fp) for fp, _, _ in all_files if os.path.exists(fp)]
+        file_sizes = [os.path.getsize(fp) for fp, _, _, _ in all_files if os.path.exists(fp)]
         upload_concurrency = compute_adaptive_upload_concurrency(file_sizes, req.uploadConcurrency)
         logger.info(
             f"⚙️ [Job {job_id}] Using upload concurrency={upload_concurrency} "
@@ -1234,9 +1331,9 @@ class CourseJobManager:
         upload_sem = asyncio.Semaphore(upload_concurrency)
         loop = asyncio.get_running_loop()
 
-        async def upload_worker(index: int, item: Tuple[str, str, str]):
+        async def upload_worker(index: int, item: Tuple[str, str, str, bool]):
             nonlocal uploaded_count, access_token
-            full_path, rel_path, fname = item
+            full_path, rel_path, fname, is_material_zip = item
 
             if cancel_event.is_set():
                 raise asyncio.CancelledError(f"Job {job_id} cancelled.")
@@ -1291,6 +1388,8 @@ class CourseJobManager:
             try:
                 if os.path.exists(full_path):
                     os.remove(full_path)
+                    if is_material_zip:
+                        logger.info(f"🧹 [Job {job_id}] Cleaned up local zip part: '{fname}'")
             except Exception as unl_err:
                 logger.warning(f"⚠️ [Job {job_id}] Failed to unlink {full_path}: {unl_err}")
 
@@ -1318,6 +1417,12 @@ class CourseJobManager:
 
         tasks = [upload_worker(i, item) for i, item in enumerate(all_files)]
         await asyncio.gather(*tasks, return_exceptions=True)
+
+        if os.path.exists(materials_staging_dir):
+            try:
+                shutil.rmtree(materials_staging_dir, ignore_errors=True)
+            except Exception:
+                pass
 
         return uploaded_count
 
