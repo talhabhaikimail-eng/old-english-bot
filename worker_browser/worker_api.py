@@ -1,6 +1,6 @@
 from typing import Dict, Optional, List
 from fastapi import FastAPI, HTTPException, Response, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 from seleniumbase import SB
 import uvicorn
@@ -594,6 +594,53 @@ async def proxy_request(req: ProxyForwardRequest):
             raise HTTPException(status_code=504, detail=f"Proxy target {req.url} timed out after {req.timeout}s")
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"Proxy error fetching {req.url}: {str(e)}")
+
+@app.get("/worker/chunk")
+async def worker_chunk(url: str, start: int, end: int, request: Request):
+    """
+    Streams a single byte-range slice [start, end] for the Distributed Downloader Coordinator.
+    """
+    if WORKER_API_SECRET:
+        secret = request.headers.get("x-worker-secret") or request.query_params.get("secret")
+        auth = request.headers.get("authorization")
+        if secret != WORKER_API_SECRET and auth != f"Bearer {WORKER_API_SECRET}":
+            raise HTTPException(status_code=401, detail="Unauthorized worker request")
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Range": f"bytes={start}-{end}",
+    }
+
+    client = httpx.AsyncClient(timeout=120.0, follow_redirects=True)
+    try:
+        req = client.build_request("GET", url, headers=headers)
+        resp = await client.send(req, stream=True)
+
+        if resp.status_code not in (200, 206):
+            await resp.aclose()
+            await client.aclose()
+            raise HTTPException(status_code=resp.status_code, detail=f"Target returned HTTP {resp.status_code}")
+
+        async def stream_generator():
+            try:
+                async for chunk in resp.aiter_bytes(chunk_size=64 * 1024):
+                    yield chunk
+            finally:
+                await resp.aclose()
+                await client.aclose()
+
+        content_length = resp.headers.get("content-length") or str(end - start + 1)
+        response_headers = {
+            "Content-Type": "application/octet-stream",
+            "Content-Length": content_length,
+            "Accept-Ranges": "bytes",
+        }
+        return StreamingResponse(stream_generator(), status_code=200, headers=response_headers)
+    except Exception as e:
+        await client.aclose()
+        if isinstance(e, HTTPException):
+            raise e
+        raise HTTPException(status_code=502, detail=f"Failed to stream chunk: {str(e)}")
 
 @app.get("/logs")
 def get_logs():
