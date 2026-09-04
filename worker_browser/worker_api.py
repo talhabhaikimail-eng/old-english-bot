@@ -595,10 +595,21 @@ async def proxy_request(req: ProxyForwardRequest):
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"Proxy error fetching {req.url}: {str(e)}")
 
+_chunk_client: Optional[httpx.AsyncClient] = None
+
+def get_chunk_client() -> httpx.AsyncClient:
+    global _chunk_client
+    if _chunk_client is None or _chunk_client.is_closed:
+        limits = httpx.Limits(max_connections=200, max_keepalive_connections=100, keepalive_expiry=120.0)
+        timeout = httpx.Timeout(120.0, connect=10.0, read=60.0)
+        _chunk_client = httpx.AsyncClient(limits=limits, timeout=timeout, follow_redirects=True)
+    return _chunk_client
+
 @app.get("/worker/chunk")
 async def worker_chunk(url: str, start: int, end: int, request: Request):
     """
     Streams a single byte-range slice [start, end] for the Distributed Downloader Coordinator.
+    Uses persistent HTTP keep-alive connection pooling for maximum throughput.
     """
     if WORKER_API_SECRET:
         secret = request.headers.get("x-worker-secret") or request.query_params.get("secret")
@@ -611,33 +622,47 @@ async def worker_chunk(url: str, start: int, end: int, request: Request):
         "Range": f"bytes={start}-{end}",
     }
 
-    client = httpx.AsyncClient(timeout=120.0, follow_redirects=True)
+    client = get_chunk_client()
     try:
         req = client.build_request("GET", url, headers=headers)
         resp = await client.send(req, stream=True)
 
+        expected_bytes = end - start + 1
+
+        # If server returns 200 OK instead of 206 Partial Content:
+        # If start > 0, the server ignored Range and sent the file from byte 0. Reject immediately.
+        if resp.status_code == 200 and start > 0:
+            await resp.aclose()
+            raise HTTPException(status_code=416, detail="Upstream server does not support byte ranges (returned 200 OK)")
+
         if resp.status_code not in (200, 206):
             await resp.aclose()
-            await client.aclose()
             raise HTTPException(status_code=resp.status_code, detail=f"Target returned HTTP {resp.status_code}")
 
         async def stream_generator():
+            bytes_sent = 0
             try:
-                async for chunk in resp.aiter_bytes(chunk_size=64 * 1024):
-                    yield chunk
+                async for data in resp.aiter_bytes(chunk_size=256 * 1024):
+                    if bytes_sent + len(data) > expected_bytes:
+                        remaining = expected_bytes - bytes_sent
+                        if remaining > 0:
+                            yield data[:remaining]
+                            bytes_sent += remaining
+                        break
+                    yield data
+                    bytes_sent += len(data)
+                    if bytes_sent >= expected_bytes:
+                        break
             finally:
                 await resp.aclose()
-                await client.aclose()
 
-        content_length = resp.headers.get("content-length") or str(end - start + 1)
         response_headers = {
             "Content-Type": "application/octet-stream",
-            "Content-Length": content_length,
+            "Content-Length": str(expected_bytes),
             "Accept-Ranges": "bytes",
         }
         return StreamingResponse(stream_generator(), status_code=200, headers=response_headers)
     except Exception as e:
-        await client.aclose()
         if isinstance(e, HTTPException):
             raise e
         raise HTTPException(status_code=502, detail=f"Failed to stream chunk: {str(e)}")

@@ -1693,11 +1693,13 @@ class CourseJobManager:
                         d_res = session.post(direct_url, headers=direct_headers, data=body, timeout=45)
                         if d_res.status_code in (200, 201):
                             return d_res.json()
-                        elif d_res.status_code == 401 and job_id and callback_url:
+                        elif d_res.status_code in (401, 403) and job_id and callback_url:
+                            logger.info(f"🔄 Token expired or unauthorized (HTTP {d_res.status_code}) during multipart upload, refreshing...")
                             fresh_tok = fetch_refreshed_token_sync(job_id, callback_url, account_id, token_refresh_url)
                             if fresh_tok:
                                 access_token = fresh_tok
                                 direct_headers["Authorization"] = f"Bearer {access_token}"
+                            time.sleep(1)
                         elif d_res.status_code in (403, 429, 500, 502, 503, 504):
                             is_rate_limit = "rateLimit" in d_res.text or "userRateLimit" in d_res.text
                             cooldown = min(60, 15 * (attempt + 1)) if is_rate_limit else (2 ** attempt + random.uniform(0.5, 1.5))
@@ -1743,12 +1745,13 @@ class CourseJobManager:
                     resumable_uri = init_res.headers.get("Location")
                     if resumable_uri:
                         break
-                elif init_res.status_code == 401 and job_id and callback_url:
-                    logger.info("🔄 Token expired during resumable upload init, refreshing...")
+                elif init_res.status_code in (401, 403) and job_id and callback_url:
+                    logger.info(f"🔄 Token expired or unauthorized (HTTP {init_res.status_code}) during resumable upload init, refreshing...")
                     fresh_tok = fetch_refreshed_token_sync(job_id, callback_url, account_id, token_refresh_url)
                     if fresh_tok:
                         access_token = fresh_tok
                         init_headers["Authorization"] = f"Bearer {access_token}"
+                    time.sleep(1)
                 elif init_res.status_code in (403, 429, 500, 502, 503, 504):
                     is_rate_limit = "rateLimit" in init_res.text or "userRateLimit" in init_res.text
                     cooldown = min(60, 15 * (attempt + 1)) if is_rate_limit else (2 ** attempt + random.uniform(0.5, 1.5))
@@ -1835,17 +1838,18 @@ class CourseJobManager:
                                 logger.warning("⚠️ 308 received with no Range header (0 bytes accepted). Retrying current offset...")
                             chunk_ok = True
                             break
+                        elif put_res.status_code in (401, 403) and job_id and callback_url:
+                            logger.info(f"🔄 Token expired or unauthorized (HTTP {put_res.status_code}) mid-upload, refreshing...")
+                            fresh_tok = fetch_refreshed_token_sync(job_id, callback_url, account_id, token_refresh_url)
+                            if fresh_tok:
+                                access_token = fresh_tok
+                                chunk_headers["Authorization"] = f"Bearer {access_token}"
+                            time.sleep(1)
                         elif put_res.status_code in (403, 429, 500, 502, 503, 504):
                             is_rate_limit = "rateLimit" in put_res.text or "userRateLimit" in put_res.text
                             cooldown = min(60, 15 * (attempt + 1)) if is_rate_limit else (2 ** attempt + random.uniform(1.0, 2.5))
                             logger.warning(f"⚠️ Drive chunk upload got HTTP {put_res.status_code}, cooling down {cooldown:.1f}s (attempt {attempt + 1}/5)...")
                             time.sleep(cooldown)
-                        elif put_res.status_code == 401 and job_id and callback_url:
-                            logger.info("🔄 Token expired mid-upload, refreshing...")
-                            fresh_tok = fetch_refreshed_token_sync(job_id, callback_url, account_id, token_refresh_url)
-                            if fresh_tok:
-                                access_token = fresh_tok
-                            time.sleep(1)
                         else:
                             if attempt == 4:
                                 raise RuntimeError(f"Drive chunk upload failed ({put_res.status_code}): {put_res.text[:200]}")
