@@ -67,8 +67,8 @@ if not logger.handlers:
 WORKER_ID = os.environ.get("WORKER_ID") or f"worker-{socket.gethostname()[:12]}"
 WORKER_PUBLIC_URL = os.environ.get("WORKER_PUBLIC_URL", "").rstrip("/")
 WORKER_API_SECRET = os.environ.get("WORKER_API_SECRET", "")
-DEFAULT_CONCURRENCY = int(os.environ.get("CONCURRENCY_LIMIT", "10"))
-MAX_CONCURRENT_JOBS = int(os.environ.get("MAX_CONCURRENT_JOBS", "6"))
+DEFAULT_CONCURRENCY = int(os.environ.get("CONCURRENCY_LIMIT", "3"))
+MAX_CONCURRENT_JOBS = int(os.environ.get("MAX_CONCURRENT_JOBS", "3"))
 EXTRACTION_TIMEOUT_SEC = float(os.environ.get("EXTRACTION_TIMEOUT_SEC", "3600.0"))
 SAFETY_DISK_MIN_BYTES = int(os.environ.get("SAFETY_DISK_MIN_BYTES", str(5 * 1024 * 1024 * 1024))) # 5 GB
 UPLOAD_CONCURRENCY = int(os.environ.get("UPLOAD_CONCURRENCY", "6"))
@@ -1229,7 +1229,7 @@ class CourseJobManager:
                 cmd_7z,
                 cwd=scan_dir,
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
             )
 
             start_time = time.time()
@@ -1240,17 +1240,46 @@ class CourseJobManager:
                 nonlocal last_report, last_pct
                 buf = b""
                 while True:
-                    chunk = await proc.stdout.read(512)
-                    if not chunk:
-                        break
-                    buf += chunk
+                    try:
+                        chunk = await asyncio.wait_for(proc.stdout.read(512), timeout=10.0)
+                        if not chunk:
+                            break
+                        buf += chunk
+                    except asyncio.TimeoutError:
+                        # Send periodic heartbeat even if 7z output is idle/silent so Central Hub does not watchdog timeout
+                        if proc.returncode is not None:
+                            break
+                        now = time.time()
+                        if now - last_report >= 15.0:
+                            last_report = now
+                            elapsed = max(0.5, now - start_time)
+                            proc_bytes = mat_bytes * (last_pct / 100.0)
+                            speed_bps = proc_bytes / elapsed
+                            rem_bytes = max(0, mat_bytes - proc_bytes)
+                            eta_s = int(rem_bytes / speed_bps) if speed_bps > 0 else 0
+                            eta_fmt = f"{eta_s // 60}m {eta_s % 60}s" if eta_s >= 60 else f"{eta_s}s"
+                            await post_webhook(req.callbackUrl, {
+                                "jobId": job_id,
+                                "workerId": WORKER_ID,
+                                "phase": "packaging",
+                                "packagingPercent": round(last_pct, 1),
+                                "speedBps": round(speed_bps),
+                                "speedMBs": f"{speed_bps / (1024 * 1024):.2f}",
+                                "etaSeconds": eta_s,
+                                "etaFormatted": eta_fmt,
+                                "materialsCount": mat_count,
+                                "materialsMB": mat_mb,
+                                "message": f"Packaging materials: {last_pct:.1f}% ({speed_bps / (1024 * 1024):.1f} MB/s · ETA {eta_fmt}) [active]",
+                            })
+                        continue
+
                     text = buf.decode("utf-8", errors="ignore")
                     matches = re.findall(r"(\d+)%", text)
                     if matches:
                         try:
                             pct = float(matches[-1])
                             now = time.time()
-                            if pct != last_pct and (now - last_report >= 1.5 or pct >= 100):
+                            if (pct != last_pct and now - last_report >= 1.5) or (now - last_report >= 15.0) or pct >= 100:
                                 last_pct = pct
                                 last_report = now
                                 elapsed = max(0.5, now - start_time)
@@ -1277,7 +1306,18 @@ class CourseJobManager:
                     if len(buf) > 4096:
                         buf = buf[-1024:]
 
-            await asyncio.gather(read_7z_progress(), proc.wait())
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(read_7z_progress(), proc.wait()),
+                    timeout=900.0 # 15 minutes max timeout for packaging
+                )
+            except asyncio.TimeoutError:
+                logger.error(f"❌ [Job {job_id}] 7z packaging timed out after 15m. Forcing termination.")
+                try:
+                    proc.kill()
+                    await proc.wait()
+                except Exception:
+                    pass
 
             if proc.returncode != 0:
                 logger.warning(f"⚠️ [Job {job_id}] 7z exited code {proc.returncode}. Fallback to standard zip...")
@@ -1289,10 +1329,17 @@ class CourseJobManager:
                 proc_zip = await asyncio.create_subprocess_shell(
                     zip_cmd,
                     cwd=scan_dir,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
                 )
-                await proc_zip.communicate()
+                try:
+                    await asyncio.wait_for(proc_zip.wait(), timeout=600.0)
+                except asyncio.TimeoutError:
+                    try:
+                        proc_zip.kill()
+                        await proc_zip.wait()
+                    except Exception:
+                        pass
 
             if os.path.exists(filelist_path):
                 try: os.remove(filelist_path)
