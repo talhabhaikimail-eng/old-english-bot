@@ -58,3 +58,6 @@ dashboard/dist/
 /src-go/create-cv/storage/*.pdf
 
 
+
+*.deb
+cloudflared.deb
