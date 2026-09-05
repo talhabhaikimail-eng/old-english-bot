@@ -105,10 +105,11 @@ func runHTTPServer(cfg *config.Config) {
 	<-stop
 
 	log.Printf("🛑 Shutting down Course Worker Server gracefully...")
+	manager.CancelAllJobsAndClean()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_ = httpServer.Shutdown(ctx)
-	log.Printf("👋 Server stopped.")
+	log.Printf("👋 Server stopped and all temporary storage wiped.")
 }
 
 func runDirectCourse(cfg *config.Config, inputPath string) {

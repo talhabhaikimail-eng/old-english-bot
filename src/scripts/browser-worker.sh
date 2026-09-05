@@ -109,6 +109,7 @@ cleanup() {
   [ -n "$CHROME_PID" ] && kill "$CHROME_PID" 2>/dev/null || true
   [ -n "$XVFB_PID" ] && kill "$XVFB_PID" 2>/dev/null || true
   rm -f /tmp/vscode-info.json /tmp/vscode_url /tmp/vscode_password 2>/dev/null || true
+  rm -rf /tmp/course_jobs /tmp/jobs 2>/dev/null || true
 
   exit $EXIT_CODE
 }
@@ -339,6 +340,10 @@ if [ ! -f "$CW_BIN" ]; then
 fi
 
 if [ -n "$CW_BIN" ] && [ -x "$CW_BIN" ]; then
+  echo "🧹 Wiping stale course worker jobs directory for clean slate..."
+  rm -rf /tmp/course_jobs /tmp/jobs 2>/dev/null || true
+  mkdir -p /tmp/course_jobs
+
   echo "🚀 Starting Go Course Worker server on :8085..."
   $CW_BIN serve --port 8085 --concurrency "${MAX_CONCURRENT_COURSES:-2}" > /tmp/course-worker.log 2>&1 &
   CW_PID=$!

@@ -59,6 +59,9 @@ func (p *Pipeline) Execute(
 	state.WorkDir = jobDir
 	state.OutputDir = outputDir
 
+	// Clean-slate guarantee: Always purge any existing job directory before starting fresh
+	_ = os.RemoveAll(jobDir)
+
 	// Ensure clean directories
 	for _, dir := range []string{partsDir, extractedDir, outputDir} {
 		if err := os.MkdirAll(dir, 0755); err != nil {
@@ -305,6 +308,12 @@ func (p *Pipeline) Execute(
 
 	log.Printf("🏁 [Job %s] Pipeline successfully completed! Output ready in %s (%d videos, %d material zip(s))",
 		jobID, outputDir, len(packRes.VideoFiles), len(packRes.MaterialZips))
+
+	// Clean slate: if uploaded to Google Drive, purge the local job directory
+	if shouldUpload {
+		_ = os.RemoveAll(jobDir)
+		log.Printf("🧹 [Job %s] Purged local job directory after Google Drive upload", jobID)
+	}
 
 	return nil
 }

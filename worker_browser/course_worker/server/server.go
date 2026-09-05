@@ -62,7 +62,8 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	activeCount := 0
 	for _, j := range jobs {
 		if j.Phase == model.PhaseDownloading || j.Phase == model.PhaseExtracting ||
-			j.Phase == model.PhaseSeparating || j.Phase == model.PhaseZipping {
+			j.Phase == model.PhaseReclaiming || j.Phase == model.PhaseSeparating ||
+			j.Phase == model.PhaseZipping || j.Phase == model.PhaseUploading {
 			activeCount++
 		}
 	}
@@ -96,6 +97,13 @@ func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]interface{}{
 			"success": true,
 			"jobs":    jobs,
+		})
+
+	case http.MethodDelete:
+		s.manager.CancelAllJobsAndClean()
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"success": true,
+			"message": "All jobs cancelled and base working directory wiped clean",
 		})
 
 	case http.MethodPost:

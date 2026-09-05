@@ -30,6 +30,11 @@ type CourseManager struct {
 }
 
 func NewCourseManager(cfg *config.Config) *CourseManager {
+	// Clean slate on worker startup: purge any stale leftover files from previous 5h cycles
+	_ = os.RemoveAll(cfg.BaseWorkDir)
+	_ = os.MkdirAll(cfg.BaseWorkDir, 0755)
+	log.Printf("🧹 [Storage] Base work directory %s wiped and initialized clean", cfg.BaseWorkDir)
+
 	return &CourseManager{
 		cfg:       cfg,
 		pipeline:  NewPipeline(cfg),
@@ -51,7 +56,8 @@ func (m *CourseManager) SubmitJob(req *model.CoursePayload) (*model.JobState, er
 			existing.Phase == model.PhaseExtracting ||
 			existing.Phase == model.PhaseReclaiming ||
 			existing.Phase == model.PhaseSeparating ||
-			existing.Phase == model.PhaseZipping {
+			existing.Phase == model.PhaseZipping ||
+			existing.Phase == model.PhaseUploading {
 			return nil, ErrJobActive
 		}
 	}
@@ -198,4 +204,20 @@ func (m *CourseManager) PurgeAllJobs() {
 			}
 		}
 	}
+}
+
+// CancelAllJobsAndClean terminates all active jobs, purges job state, and wipes the entire base work directory.
+func (m *CourseManager) CancelAllJobsAndClean() {
+	m.mu.Lock()
+	for id, cancel := range m.cancels {
+		log.Printf("🛑 [Shutdown] Cancelling in-flight job: %s", id)
+		cancel()
+	}
+	m.jobs = make(map[string]*model.JobState)
+	m.cancels = make(map[string]context.CancelFunc)
+	m.mu.Unlock()
+
+	_ = os.RemoveAll(m.cfg.BaseWorkDir)
+	_ = os.MkdirAll(m.cfg.BaseWorkDir, 0755)
+	log.Printf("🧹 [Storage] Wiped all jobs and reset base work directory: %s", m.cfg.BaseWorkDir)
 }
