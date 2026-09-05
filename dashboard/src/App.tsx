@@ -27,6 +27,7 @@ const ContactsScraperPanel = React.lazy(() => import('./components/ContactsScrap
 const BlogGenPanel = React.lazy(() => import('./components/BlogGenPanel'));
 const CodeExecPanel = React.lazy(() => import('./components/CodeExecPanel'));
 const ProxyPanel = React.lazy(() => import('./components/ProxyPanel'));
+const CourseWorkerPanel = React.lazy(() => import('./components/CourseWorkerPanel'));
 
 interface NavItem {
   id: NavSection;
@@ -84,6 +85,7 @@ const NAV_CATEGORIES: NavCategory[] = [
       { id: 'llm',       label: 'Local LLM',      icon: '🧠' },
       { id: 'tts',       label: 'Voice / TTS',    icon: '🎙️' },
       { id: 'blog-gen',  label: 'Blog Generator', icon: '✍️' },
+      { id: 'courses',   label: 'Course Downloader', icon: '🎓' },
     ]
   }
 ];
@@ -98,7 +100,7 @@ export default function App() {
     const validSections: NavSection[] = [
       'google', 'web-proxy', 'search', 'places', 'pool', 'indeed', 'contacts', 
       'sessions', 'manager', 'code-exec', 'proxy-net', 'android', 'urls', 'go-containers', 
-      'ai-tools', 'media', 'youtube', 'movies', 'llm', 'tts', 'blog-gen'
+      'ai-tools', 'media', 'youtube', 'movies', 'llm', 'tts', 'blog-gen', 'courses'
     ];
 
     if (validSections.includes(current as NavSection)) {
@@ -215,7 +217,7 @@ export default function App() {
       const validSections: NavSection[] = [
         'google', 'web-proxy', 'search', 'places', 'pool', 'indeed', 'contacts', 
         'sessions', 'manager', 'code-exec', 'proxy-net', 'android', 'urls', 'go-containers', 
-        'ai-tools', 'media', 'youtube', 'movies', 'llm', 'tts', 'blog-gen'
+        'ai-tools', 'media', 'youtube', 'movies', 'llm', 'tts', 'blog-gen', 'courses'
       ];
       if (validSections.includes(current as NavSection)) {
         setSection(current as NavSection);
@@ -586,6 +588,7 @@ export default function App() {
                   {section === 'indeed' && <IndeedPanel />}
                   {section === 'contacts' && <ContactsScraperPanel />}
                   {section === 'blog-gen' && <BlogGenPanel />}
+                  {section === 'courses' && <CourseWorkerPanel />}
                 </React.Suspense>
               </div>
             </div>

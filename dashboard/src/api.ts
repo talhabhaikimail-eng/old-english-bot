@@ -589,7 +589,197 @@ export const api = {
     post<WorkerExecResponse>('/api/workers/exec', req),
   proxyRequestViaWorker: (req: WorkerProxyRequest) =>
     post<WorkerProxyResponse>('/api/workers/proxy', req),
+
+  // ── Course Downloader & Uploader ──────────────────────────────────────────
+  getCourses: (params: { page?: number; limit?: number; search?: string; topic?: string; driveStatus?: string; sort?: string } = {}) => {
+    const q = new URLSearchParams();
+    if (params.page) q.set('page', String(params.page));
+    if (params.limit) q.set('limit', String(params.limit));
+    if (params.search) q.set('search', params.search);
+    if (params.topic) q.set('topic', params.topic);
+    if (params.driveStatus) q.set('driveStatus', params.driveStatus);
+    if (params.sort) q.set('sort', params.sort);
+    return authFetch(`${BASE}/api/courses?${q.toString()}`).then(r => {
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return r.json() as Promise<CourseListResponse>;
+    });
+  },
+
+  getCourseStats: () =>
+    authFetch(`${BASE}/api/courses/stats`).then(r => {
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return r.json() as Promise<CourseStatsResponse>;
+    }),
+
+  getCourseTopics: () =>
+    authFetch(`${BASE}/api/courses/topics`).then(r => {
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return r.json() as Promise<{ success: boolean; topics: Array<{ name: string; count: number }> }>;
+    }),
+
+  getCourse: (id: string) =>
+    authFetch(`${BASE}/api/courses/${encodeURIComponent(id)}`).then(r => {
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return r.json() as Promise<{ success: boolean; course: CourseItem }>;
+    }),
+
+  processCourse: (courseId: string, options: { workerUrl?: string; parentFolderId?: string; password?: string } = {}) =>
+    post<{ success: boolean; jobId: string; message: string; workerUrl: string }>(
+      `/api/courses/${encodeURIComponent(courseId)}/process`,
+      options
+    ),
+
+  processCustomCourse: (req: { urls: string[]; title?: string; password?: string; upload?: boolean; parentFolderId?: string; workerUrl?: string }) =>
+    post<any>('/api/courses/process', req),
+
+  getCourseWorkersStatus: () =>
+    authFetch(`${BASE}/api/courses/worker/status`).then(r => {
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return r.json() as Promise<{ success: boolean; workers: CourseWorkerInfo[] }>;
+    }),
+
+  cancelCourseWorkerJob: (jobId: string, workerUrl?: string) =>
+    post<{ success: boolean; message: string }>('/api/courses/worker/cancel', { jobId, workerUrl }),
 };
+
+export interface CourseLesson {
+  index: number;
+  fileName: string;
+  relativePath: string;
+  sizeMB: string;
+  sizeBytes?: number;
+  status: string;
+  driveFileId?: string;
+  driveViewLink?: string;
+  isVideo?: boolean;
+}
+
+export interface CourseItem {
+  id: string;
+  postId?: number;
+  title: string;
+  slug: string;
+  topic?: string;
+  primaryCategory?: string;
+  tags?: string[];
+  featuredImage?: string;
+  statedSizeText?: string;
+  calculatedSizeBytes?: number;
+  downloadLinksCount: number;
+  downloadLinks?: Array<{
+    part: number;
+    url: string;
+    text: string;
+    sizeText?: string | null;
+    bytes: number;
+  }>;
+  filePassword?: string;
+  rating?: {
+    score?: number;
+    best?: number;
+    votes?: number;
+  };
+  courseSpecs?: Record<string, any>;
+  driveStatus: 'pending' | 'uploading' | 'completed' | 'failed';
+  driveCourseId?: string;
+  driveFolderId?: string;
+  driveFolderName?: string;
+  driveVideosCount: number;
+  driveVideos?: CourseLesson[];
+  driveUploadedAt?: string;
+  driveError?: string;
+  publishedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CourseListResponse {
+  success: boolean;
+  data: CourseItem[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+}
+
+export interface CourseStatsResponse {
+  success: boolean;
+  stats: {
+    total: number;
+    pending: number;
+    uploading: number;
+    completed: number;
+    failed: number;
+    totalSizeBytes: number;
+  };
+}
+
+export interface CourseWorkerInfo {
+  url: string;
+  source: 'local' | 'pool' | 'custom';
+  workerId: string;
+  status: string;
+  disk?: {
+    totalGB: number;
+    freeGB: number;
+    usedGB: number;
+    usedPercent: number;
+  };
+  concurrencyLimit?: number;
+  activeCourses?: number;
+  totalJobs?: number;
+  error?: string;
+}
+
+export interface CourseProgressEvent {
+  type: 'started' | 'progress' | 'result' | 'error';
+  jobId: string;
+  title?: string;
+  phase?: 'pending' | 'downloading' | 'extracting' | 'reclaiming' | 'separating' | 'zipping' | 'uploading' | 'completed' | 'failed' | 'cancelled';
+  status?: string;
+  progressPercent?: number;
+  speedMBps?: number;
+  completedParts?: number;
+  totalParts?: number;
+  downloadedBytes?: number;
+  totalBytes?: number;
+  parts?: Array<{
+    partIndex: number;
+    fileName: string;
+    url?: string;
+    percent: number;
+    status: string;
+    downloadedBytes: number;
+    totalBytes: number;
+    speedBytesSec: number;
+    error?: string;
+  }>;
+  uploaded?: boolean;
+  driveFolderId?: string;
+  driveFolderUrl?: string;
+  driveFiles?: Array<{
+    name: string;
+    fileId: string;
+    sizeBytes: number;
+    webViewLink: string;
+    isVideo: boolean;
+  }>;
+  videoFiles?: Array<{
+    relPath: string;
+    fileName: string;
+    sizeBytes: number;
+    isVideo: boolean;
+  }>;
+  materialZips?: Array<{
+    relPath: string;
+    fileName: string;
+    sizeBytes: number;
+    isZipPart: boolean;
+  }>;
+  error?: string;
+  message?: string;
+  success?: boolean;
+}
 
 export interface WorkerExecRequest {
   workerId?: string;
@@ -624,5 +814,6 @@ export interface WorkerProxyResponse {
   body: string;
   execution_time_ms: number;
 }
+
 
 

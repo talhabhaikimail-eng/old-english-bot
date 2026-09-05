@@ -51,6 +51,16 @@ import { runJobsScraper } from './jobs-scraper-service';
 import { getJobsFromR2, getJobsStatusFromR2, saveJobsStatusToR2, getReceivedEmailsFromR2, saveReceivedEmailsToR2, ReceivedEmail } from './r2-jobs-store';
 import { generateAndPostBlog, generateCommunityBlog } from './blog-generator-service';
 import { handlePortfolioRequest } from './portfolio-api';
+import {
+  listCourses,
+  getCourseStats,
+  getCourseTopics,
+  getCourseById,
+  updateCourseDriveStatus,
+  getActiveCourseWorkers,
+  triggerCourseDownloadAndUpload,
+  cancelWorkerJob,
+} from './course-service';
 
 const Corrosion = require('corrosion');
 const webProxy = new Corrosion({
@@ -1808,6 +1818,178 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
         lastHeartbeat: new Date(b.lastHeartbeat).toISOString(),
       })),
     });
+    return;
+  }
+
+  // ── GET /api/courses/stats ───────────────────────────────────────────────
+  if (method === 'GET' && pathname === '/api/courses/stats') {
+    try {
+      const stats = await getCourseStats();
+      json(res, { success: true, stats });
+    } catch (e) {
+      err(res, (e as Error).message);
+    }
+    return;
+  }
+
+  // ── GET /api/courses/topics ──────────────────────────────────────────────
+  if (method === 'GET' && pathname === '/api/courses/topics') {
+    try {
+      const topics = await getCourseTopics();
+      json(res, { success: true, topics });
+    } catch (e) {
+      err(res, (e as Error).message);
+    }
+    return;
+  }
+
+  // ── GET /api/courses/worker/status ───────────────────────────────────────
+  if (method === 'GET' && pathname === '/api/courses/worker/status') {
+    try {
+      const workers = await getActiveCourseWorkers();
+      json(res, { success: true, workers });
+    } catch (e) {
+      err(res, (e as Error).message);
+    }
+    return;
+  }
+
+  // ── POST /api/courses/worker/cancel ──────────────────────────────────────
+  if (method === 'POST' && pathname === '/api/courses/worker/cancel') {
+    try {
+      const body = await parseJsonBody(req);
+      const jobId = body['jobId'] as string;
+      const workerUrl = body['workerUrl'] as string | undefined;
+      if (!jobId) return err(res, 'jobId is required', 400);
+
+      const result = await cancelWorkerJob(jobId, workerUrl);
+      json(res, result);
+    } catch (e) {
+      err(res, (e as Error).message);
+    }
+    return;
+  }
+
+  // ── POST /api/courses/process (Custom URLs) ──────────────────────────────
+  if (method === 'POST' && pathname === '/api/courses/process') {
+    try {
+      const body = await parseJsonBody(req);
+      const urls = (body['urls'] as string[]) || [];
+      const singleUrl = body['url'] as string | undefined;
+      if (singleUrl) urls.push(singleUrl);
+
+      if (urls.length === 0) return err(res, 'urls array or url string is required', 400);
+
+      const activeWorkers = await getActiveCourseWorkers();
+      const readyWorker = activeWorkers.find(w => w.status !== 'unreachable');
+      const targetWorkerUrl = (body['workerUrl'] as string) || readyWorker?.url || 'http://localhost:8085';
+
+      const forwardBody = {
+        urls,
+        title: body['title'] || undefined,
+        password: body['password'] || 'www.downloadly.ir',
+        upload: body['upload'] !== false,
+        parentFolderId: body['parentFolderId'] || undefined,
+      };
+
+      const resp = await fetch(`${targetWorkerUrl.replace(/\/+$/, '')}/api/process`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(forwardBody),
+        signal: AbortSignal.timeout(10000),
+      });
+
+      const workerRes = await resp.json() as any;
+      json(res, { ...workerRes, workerUrl: targetWorkerUrl });
+    } catch (e) {
+      err(res, (e as Error).message);
+    }
+    return;
+  }
+
+  // ── POST /api/courses/:id/process ────────────────────────────────────────
+  if (method === 'POST' && pathname.startsWith('/api/courses/') && pathname.endsWith('/process')) {
+    try {
+      const courseId = pathname.replace('/api/courses/', '').replace('/process', '').trim();
+      const body = ((await parseJsonBody(req).catch(() => ({}))) || {}) as Record<string, any>;
+      const workerUrl = body['workerUrl'] as string | undefined;
+      const parentFolderId = body['parentFolderId'] as string | undefined;
+      const password = body['password'] as string | undefined;
+
+      const result = await triggerCourseDownloadAndUpload(courseId, {
+        workerUrl,
+        parentFolderId,
+        password,
+      });
+      json(res, result);
+    } catch (e) {
+      err(res, (e as Error).message);
+    }
+    return;
+  }
+
+  // ── GET /api/courses/:id/stream/:index (Video Proxy / Redirect) ──────────
+  if (method === 'GET' && pathname.startsWith('/api/courses/') && pathname.includes('/stream/')) {
+    try {
+      const parts = pathname.replace('/api/courses/', '').split('/stream/');
+      const courseId = parts[0];
+      const videoIndex = parseInt(parts[1], 10);
+
+      const course = await getCourseById(courseId);
+      if (!course) return err(res, 'Course not found', 404);
+
+      const videos = course.driveVideos || [];
+      const target = videos.find(v => v.index === videoIndex);
+      if (!target || !target.driveFileId) {
+        return err(res, 'Video file or Google Drive file ID not found for this lesson', 404);
+      }
+
+      // If driveViewLink exists, redirect browser directly to Google Drive
+      if (target.driveViewLink) {
+        res.writeHead(302, { Location: target.driveViewLink });
+        res.end();
+        return;
+      }
+
+      // Fallback: direct drive link by ID
+      const directUrl = `https://drive.google.com/file/d/${target.driveFileId}/view`;
+      res.writeHead(302, { Location: directUrl });
+      res.end();
+    } catch (e) {
+      err(res, (e as Error).message);
+    }
+    return;
+  }
+
+  // ── GET /api/courses/:id ─────────────────────────────────────────────────
+  if (method === 'GET' && pathname.startsWith('/api/courses/') && !pathname.includes('/stats') && !pathname.includes('/topics') && !pathname.includes('/worker')) {
+    try {
+      const courseId = pathname.replace('/api/courses/', '').trim();
+      const course = await getCourseById(courseId);
+      if (!course) return err(res, 'Course not found', 404);
+      json(res, { success: true, course });
+    } catch (e) {
+      err(res, (e as Error).message);
+    }
+    return;
+  }
+
+  // ── GET /api/courses ─────────────────────────────────────────────────────
+  if (method === 'GET' && pathname === '/api/courses') {
+    try {
+      const parsedUrl = new URL(url, 'http://localhost');
+      const page = parseInt(parsedUrl.searchParams.get('page') || '1', 10);
+      const limit = parseInt(parsedUrl.searchParams.get('limit') || '24', 10);
+      const search = parsedUrl.searchParams.get('search') || undefined;
+      const topic = parsedUrl.searchParams.get('topic') || undefined;
+      const driveStatus = parsedUrl.searchParams.get('driveStatus') || undefined;
+      const sort = parsedUrl.searchParams.get('sort') || undefined;
+
+      const result = await listCourses({ page, limit, search, topic, driveStatus, sort });
+      json(res, { success: true, ...result });
+    } catch (e) {
+      err(res, (e as Error).message);
+    }
     return;
   }
 

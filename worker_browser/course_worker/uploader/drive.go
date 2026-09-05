@@ -723,43 +723,79 @@ func (u *DriveUploader) UploadOutputDirectory(
 }
 
 func (u *DriveUploader) syncToNeonDB(ctx context.Context, taskID, courseTitle, folderID string, files []model.DriveFile) error {
-	db, err := sql.Open("postgres", u.cfg.DatabaseURL)
-	if err != nil {
-		return err
+	var allFiles []map[string]interface{}
+	for i, f := range files {
+		sizeMbStr := fmt.Sprintf("%.2f", float64(f.SizeBytes)/(1024*1024))
+		allFiles = append(allFiles, map[string]interface{}{
+			"index":         i + 1,
+			"fileName":      f.Name,
+			"relativePath":  f.Name,
+			"sizeMB":        sizeMbStr,
+			"sizeBytes":     f.SizeBytes,
+			"status":        "completed",
+			"driveFileId":   f.FileID,
+			"driveViewLink": f.WebViewLink,
+			"isVideo":       f.IsVideo,
+		})
 	}
-	defer db.Close()
+	videosJSON, _ := json.Marshal(allFiles)
 
-	var videos []map[string]interface{}
-	for _, f := range files {
-		if f.IsVideo {
-			videos = append(videos, map[string]interface{}{
-				"fileName":      f.Name,
-				"size":          f.SizeBytes,
-				"driveFileId":   f.FileID,
-				"driveViewLink": f.WebViewLink,
-			})
-		}
-	}
-	videosJSON, _ := json.Marshal(videos)
-
-	syncCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	syncCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
 
 	nowMs := time.Now().UnixMilli()
-	// Update by ID or by course_name
-	_, err = db.ExecContext(syncCtx, `
-		UPDATE course_tasks
-		SET status = 'completed',
-		    created_folder_id = $1,
-		    created_folder_name = $2,
-		    extracted_videos = $3,
-		    updated_at = $4,
-		    error_message = NULL
-		WHERE id = $5 OR course_name = $2
-	`, folderID, courseTitle, videosJSON, nowMs, taskID)
 
-	if err == nil {
-		log.Printf("💾 [Drive DB Sync] Synced course '%s' completion to Neon PostgreSQL course_tasks table", courseTitle)
+	// 1. Sync to course_tasks table (googledriveapi)
+	if u.cfg.DatabaseURL != "" {
+		if db, err := sql.Open("postgres", u.cfg.DatabaseURL); err == nil {
+			_, err = db.ExecContext(syncCtx, `
+				UPDATE course_tasks
+				SET status = 'completed',
+				    created_folder_id = $1,
+				    created_folder_name = $2,
+				    extracted_videos = $3,
+				    updated_at = $4,
+				    error_message = NULL
+				WHERE id = $5 OR course_name = $2
+			`, folderID, courseTitle, videosJSON, nowMs, taskID)
+			if err == nil {
+				log.Printf("💾 [Drive DB Sync] Synced course '%s' completion to course_tasks table", courseTitle)
+			}
+			db.Close()
+		}
 	}
-	return err
+
+	// 2. Sync to courses table (coursesdata) for data-uploader-api & mj-accedemy compatibility
+	coursesDbURL := os.Getenv("COURSES_DATABASE_URL")
+	if coursesDbURL == "" && strings.Contains(u.cfg.DatabaseURL, "/googledriveapi") {
+		coursesDbURL = strings.Replace(u.cfg.DatabaseURL, "/googledriveapi", "/coursesdata", 1)
+	}
+	if coursesDbURL == "" {
+		coursesDbURL = u.cfg.DatabaseURL
+	}
+
+	if coursesDbURL != "" {
+		if coursesDb, err := sql.Open("postgres", coursesDbURL); err == nil {
+			_, err = coursesDb.ExecContext(syncCtx, `
+				UPDATE courses
+				SET drive_status = 'completed',
+				    drive_course_id = $1,
+				    drive_folder_id = $2,
+				    drive_folder_name = $3,
+				    drive_videos = $4,
+				    drive_uploaded_at = NOW(),
+				    drive_error = NULL,
+				    updated_at = NOW()
+				WHERE title = $3 OR drive_course_id = $1 OR id::text = $1
+			`, taskID, folderID, courseTitle, videosJSON)
+			if err == nil {
+				log.Printf("💾 [Drive DB Sync] Synced course '%s' completion to courses table (mj-accedemy & data-uploader-api ready)", courseTitle)
+			} else {
+				log.Printf("⚠️ [Drive DB Sync] Notice updating courses table: %v", err)
+			}
+			coursesDb.Close()
+		}
+	}
+
+	return nil
 }
