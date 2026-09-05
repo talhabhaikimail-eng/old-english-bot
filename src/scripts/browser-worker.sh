@@ -29,6 +29,7 @@ WEBHOOK_SECRET="${WEBHOOK_SECRET:-${DASHBOARD_PASSWORD:-}}"
 WEBHOOK_URL="https://${DASHBOARD_DOMAIN}/api/browsers/webhook?secret=${WEBHOOK_SECRET}"
 CDP_PORT=9222
 SB_CDP_PORT="${SB_CDP_PORT:-9223}"
+VSCODE_PORT="${VSCODE_PORT:-8088}"
 TUNNEL_URL=""
 TUNNEL_SB_CDP_URL=""
 CHROME_PID=""
@@ -39,6 +40,42 @@ TUNNEL_API_URL=""
 API_PID=""
 TUNNEL_API_PID=""
 XVFB_PID=""
+VSCODE_PID=""
+TUNNEL_VSCODE_PID=""
+TUNNEL_VSCODE_URL=""
+VSCODE_PASSWORD=""
+
+# ---------------------------------------------------------------------------
+# Webhook Helper Function
+# ---------------------------------------------------------------------------
+send_webhook() {
+  local event="$1"
+  local max_time="${2:-15}"
+  local is_agy=false
+  command -v agy >/dev/null 2>&1 && is_agy=true
+
+  local json_data
+  json_data=$(cat <<EOF
+{
+  "event": "${event}",
+  "workerId": "${WORKER_ID}",
+  "cdpUrl": "${TUNNEL_URL}",
+  "sbCdpUrl": "${TUNNEL_SB_CDP_URL}",
+  "seleniumCdpUrl": "${TUNNEL_SB_CDP_URL}",
+  "apiUrl": "${TUNNEL_API_URL}",
+  "vscodeUrl": "${TUNNEL_VSCODE_URL}",
+  "vscodePassword": "${VSCODE_PASSWORD}",
+  "antigravityCli": ${is_agy},
+  "runId": "${GITHUB_RUN_ID:-}",
+  "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+EOF
+)
+  curl -s -o /tmp/webhook-resp.txt -w "%{http_code}" --max-time "$max_time" \
+    -X POST "$WEBHOOK_URL" \
+    -H "Content-Type: application/json" \
+    -d "$json_data" 2>/dev/null || echo "000"
+}
 
 # ---------------------------------------------------------------------------
 # Cleanup handler
@@ -48,13 +85,9 @@ cleanup() {
   echo "🧹 Cleaning up worker processes (Exit code: $EXIT_CODE)..."
 
   # Best-effort deregister
-  if [ -n "$TUNNEL_URL" ] || [ -n "$TUNNEL_SB_CDP_URL" ]; then
+  if [ -n "$TUNNEL_URL" ] || [ -n "$TUNNEL_SB_CDP_URL" ] || [ -n "$TUNNEL_VSCODE_URL" ]; then
     for attempt in 1 2 3; do
-      HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 \
-        -X POST "$WEBHOOK_URL" \
-        -H "Content-Type: application/json" \
-        -d "{\"event\":\"deregister\",\"workerId\":\"${WORKER_ID}\",\"cdpUrl\":\"${TUNNEL_URL}\",\"sbCdpUrl\":\"${TUNNEL_SB_CDP_URL}\",\"seleniumCdpUrl\":\"${TUNNEL_SB_CDP_URL}\",\"apiUrl\":\"${TUNNEL_API_URL}\",\"runId\":\"${GITHUB_RUN_ID:-}\",\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" \
-        2>/dev/null || echo "000")
+      HTTP_CODE=$(send_webhook "deregister" 10)
       if [ "$HTTP_CODE" = "200" ]; then
         break
       fi
@@ -63,6 +96,8 @@ cleanup() {
   fi
 
   # Kill child processes
+  [ -n "$TUNNEL_VSCODE_PID" ] && kill "$TUNNEL_VSCODE_PID" 2>/dev/null || true
+  [ -n "$VSCODE_PID" ] && kill "$VSCODE_PID" 2>/dev/null || true
   [ -n "$TUNNEL_SB_CDP_PID" ] && kill "$TUNNEL_SB_CDP_PID" 2>/dev/null || true
   [ -n "$SB_CDP_PID" ] && kill "$SB_CDP_PID" 2>/dev/null || true
   [ -n "$TUNNEL_API_PID" ] && kill "$TUNNEL_API_PID" 2>/dev/null || true
@@ -70,6 +105,7 @@ cleanup() {
   [ -n "$TUNNEL_PID" ] && kill "$TUNNEL_PID" 2>/dev/null || true
   [ -n "$CHROME_PID" ] && kill "$CHROME_PID" 2>/dev/null || true
   [ -n "$XVFB_PID" ] && kill "$XVFB_PID" 2>/dev/null || true
+  rm -f /tmp/vscode-info.json /tmp/vscode_url /tmp/vscode_password 2>/dev/null || true
 
   exit $EXIT_CODE
 }
@@ -84,6 +120,24 @@ if [ "$(uname -s)" = "Linux" ] && [ -z "${DISPLAY:-}" ]; then
   XVFB_PID=$!
   export DISPLAY=:99
   sleep 1
+fi
+
+# ---------------------------------------------------------------------------
+# 0b. Verify/Install Web VS Code (code-server) & Antigravity CLI
+# ---------------------------------------------------------------------------
+if ! command -v code-server >/dev/null 2>&1; then
+  echo "📦 Installing code-server (Web VS Code)..."
+  curl -fsSL https://code-server.dev/install.sh | sh 2>/dev/null || npm install -g code-server 2>/dev/null || true
+fi
+
+if ! command -v agy >/dev/null 2>&1; then
+  echo "📦 Installing Antigravity CLI..."
+  curl -fsSL https://antigravity.google/cli/install.sh | bash 2>/dev/null || true
+  for p in "$HOME/.local/bin" "$HOME/.antigravity/bin" "/usr/local/bin"; do
+    if [ -d "$p" ] && [[ ":$PATH:" != *":$p:"* ]]; then
+      export PATH="$p:$PATH"
+    fi
+  done
 fi
 
 # ---------------------------------------------------------------------------
@@ -215,6 +269,65 @@ for i in $(seq 1 30); do
 done
 
 # ---------------------------------------------------------------------------
+# 1d. Start Web VS Code (code-server on :${VSCODE_PORT})
+# ---------------------------------------------------------------------------
+write_vscode_state() {
+  local url="${1:-${TUNNEL_VSCODE_URL:-}}"
+  local pwd="${2:-${VSCODE_PASSWORD:-}}"
+  local port="${3:-${VSCODE_PORT:-8088}}"
+
+  [ -n "$pwd" ] && echo "$pwd" > /tmp/vscode_password
+  [ -n "$url" ] && echo "$url" > /tmp/vscode_url
+  cat <<EOF > /tmp/vscode-info.json
+{
+  "url": "${url}",
+  "password": "${pwd}",
+  "port": ${port},
+  "updatedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+EOF
+}
+
+if [ -z "${VSCODE_PASSWORD:-}" ]; then
+  VSCODE_PASSWORD="$(head -c 8 /dev/urandom 2>/dev/null | xxd -p 2>/dev/null || openssl rand -hex 8 2>/dev/null || python3 -c 'import secrets; print(secrets.token_hex(8))' 2>/dev/null || echo "vsc-$(date +%s)")"
+fi
+export VSCODE_PASSWORD
+write_vscode_state "" "$VSCODE_PASSWORD" "$VSCODE_PORT"
+
+start_vscode() {
+  mkdir -p /tmp/vscode-data
+  PASSWORD="${VSCODE_PASSWORD}" code-server \
+    --bind-addr 0.0.0.0:${VSCODE_PORT} \
+    --auth password \
+    --user-data-dir /tmp/vscode-data \
+    --disable-telemetry \
+    --disable-update-check \
+    "${PWD}" > /tmp/vscode.log 2>&1 &
+  VSCODE_PID=$!
+}
+
+if command -v code-server >/dev/null 2>&1; then
+  echo "🚀 Starting Web VS Code (code-server) on :${VSCODE_PORT}..."
+  start_vscode
+  echo "Web VS Code started (PID: $VSCODE_PID)"
+
+  echo "⏳ Waiting for Web VS Code to be ready..."
+  for i in $(seq 1 30); do
+    if curl -s "http://127.0.0.1:${VSCODE_PORT}/healthz" > /dev/null 2>&1 || curl -s "http://127.0.0.1:${VSCODE_PORT}" > /dev/null 2>&1; then
+      echo "✅ Web VS Code is ready!"
+      break
+    fi
+    if [ $i -eq 30 ]; then
+      echo "⚠️ Web VS Code failed to respond on port ${VSCODE_PORT} within 30 seconds"
+      cat /tmp/vscode.log 2>/dev/null || true
+    fi
+    sleep 1
+  done
+else
+  echo "⚠️ code-server command not found; skipping Web VS Code launch."
+fi
+
+# ---------------------------------------------------------------------------
 # 2. Start cloudflared tunnels
 # ---------------------------------------------------------------------------
 echo "🌐 Starting cloudflared tunnel for Puppeteer CDP port ${CDP_PORT}..."
@@ -266,6 +379,7 @@ TUNNEL_API_PID=$!
 for i in $(seq 1 30); do
   TUNNEL_API_URL=$(grep -oP 'https://[-0-9a-z]+\.trycloudflare\.com' "$TUNNEL_API_LOG" 2>/dev/null | head -1 || true)
   if [ -n "$TUNNEL_API_URL" ]; then
+    echo "✅ FastAPI Tunnel URL: $TUNNEL_API_URL"
     break
   fi
   if [ $i -eq 30 ]; then
@@ -275,6 +389,28 @@ for i in $(seq 1 30); do
   fi
   sleep 1
 done
+
+if [ -n "$VSCODE_PID" ]; then
+  echo "🌐 Starting cloudflared tunnel for Web VS Code port ${VSCODE_PORT}..."
+  TUNNEL_VSCODE_LOG="/tmp/cloudflared-vscode-tunnel.log"
+  cloudflared tunnel --url "http://127.0.0.1:${VSCODE_PORT}" > "$TUNNEL_VSCODE_LOG" 2>&1 &
+  TUNNEL_VSCODE_PID=$!
+
+  for i in $(seq 1 30); do
+    TUNNEL_VSCODE_URL=$(grep -oP 'https://[-0-9a-z]+\.trycloudflare\.com' "$TUNNEL_VSCODE_LOG" 2>/dev/null | head -1 || true)
+    if [ -n "$TUNNEL_VSCODE_URL" ]; then
+      echo "✅ Web VS Code Tunnel URL: $TUNNEL_VSCODE_URL"
+      break
+    fi
+    if [ $i -eq 30 ]; then
+      echo "⚠️ Web VS Code tunnel took longer than 30 seconds to initialize:"
+      cat "$TUNNEL_VSCODE_LOG" 2>/dev/null || true
+    fi
+    sleep 1
+  done
+  export VSCODE_URL="$TUNNEL_VSCODE_URL"
+  write_vscode_state "$TUNNEL_VSCODE_URL" "$VSCODE_PASSWORD" "$VSCODE_PORT"
+fi
 
 # Pre-warm: open about:blank tab so CDP is ready
 echo "🔥 Pre-warming browser tabs..."
@@ -289,11 +425,7 @@ echo "📡 Registering with dashboard at ${WEBHOOK_URL}..."
 REGISTERED=false
 HTTP_CODE="000"
 for attempt in $(seq 1 20); do
-  HTTP_CODE=$(curl -s -o /tmp/register-resp.txt -w "%{http_code}" --max-time 15 \
-    -X POST "$WEBHOOK_URL" \
-    -H "Content-Type: application/json" \
-    -d "{\"event\":\"register\",\"workerId\":\"${WORKER_ID}\",\"cdpUrl\":\"${TUNNEL_URL}\",\"sbCdpUrl\":\"${TUNNEL_SB_CDP_URL}\",\"seleniumCdpUrl\":\"${TUNNEL_SB_CDP_URL}\",\"apiUrl\":\"${TUNNEL_API_URL}\",\"runId\":\"${GITHUB_RUN_ID:-}\",\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" \
-    2>/dev/null || echo "000")
+  HTTP_CODE=$(send_webhook "register" 15)
 
   if [ "$HTTP_CODE" = "200" ]; then
     REGISTERED=true
@@ -309,7 +441,7 @@ done
 
 if [ "$REGISTERED" != "true" ]; then
   echo "❌ Registration failed with status code: ${HTTP_CODE}"
-  cat /tmp/register-resp.txt 2>/dev/null || true
+  cat /tmp/webhook-resp.txt 2>/dev/null || true
   exit 1
 fi
 
@@ -361,6 +493,12 @@ while true; do
     echo "⚠️ FastAPI server PID $API_PID died! Restarting FastAPI..."
     python3 worker_browser/worker_api.py > /tmp/worker_api.log 2>&1 &
     API_PID=$!
+  fi
+
+  # ── Watchdog 2b: Web VS Code (code-server) ──────────────────────────────
+  if [ -n "$VSCODE_PID" ] && ! kill -0 "$VSCODE_PID" 2>/dev/null; then
+    echo "⚠️ Web VS Code process PID $VSCODE_PID died! Restarting code-server..."
+    start_vscode
   fi
 
   # ── Watchdog 3: CDP Tunnel ──────────────────────────────────────────────
@@ -415,34 +553,41 @@ while true; do
     done
   fi
 
+  # ── Watchdog 4b: Web VS Code Tunnel ─────────────────────────────────────
+  if [ -n "$TUNNEL_VSCODE_PID" ] && ! kill -0 "$TUNNEL_VSCODE_PID" 2>/dev/null; then
+    echo "⚠️ Web VS Code Tunnel PID $TUNNEL_VSCODE_PID died! Restarting VS Code tunnel..."
+    cloudflared tunnel --url "http://127.0.0.1:${VSCODE_PORT}" > "$TUNNEL_VSCODE_LOG" 2>&1 &
+    TUNNEL_VSCODE_PID=$!
+    for i in $(seq 1 15); do
+      NEW_VSCODE_URL=$(grep -oP 'https://[-0-9a-z]+\.trycloudflare\.com' "$TUNNEL_VSCODE_LOG" 2>/dev/null | head -1 || true)
+      if [ -n "$NEW_VSCODE_URL" ]; then
+        TUNNEL_VSCODE_URL="$NEW_VSCODE_URL"
+        export VSCODE_URL="$TUNNEL_VSCODE_URL"
+        write_vscode_state "$TUNNEL_VSCODE_URL" "$VSCODE_PASSWORD" "$VSCODE_PORT"
+        echo "✅ New Web VS Code Tunnel URL: $TUNNEL_VSCODE_URL"
+        NEED_REREGISTER=true
+        break
+      fi
+      sleep 1
+    done
+  fi
+
   if [ "$NEED_REREGISTER" = "true" ]; then
     echo "📡 Re-registering worker with updated tunnel URLs..."
-    curl -s -o /dev/null --max-time 15 \
-      -X POST "$WEBHOOK_URL" \
-      -H "Content-Type: application/json" \
-      -d "{\"event\":\"register\",\"workerId\":\"${WORKER_ID}\",\"cdpUrl\":\"${TUNNEL_URL}\",\"sbCdpUrl\":\"${TUNNEL_SB_CDP_URL}\",\"seleniumCdpUrl\":\"${TUNNEL_SB_CDP_URL}\",\"apiUrl\":\"${TUNNEL_API_URL}\",\"runId\":\"${GITHUB_RUN_ID:-}\",\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" \
-      2>/dev/null || true
+    send_webhook "register" 15 > /dev/null || true
   fi
 
   sleep "$HEARTBEAT_INTERVAL"
 
   # Send heartbeat
-  HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 15 \
-    -X POST "$WEBHOOK_URL" \
-    -H "Content-Type: application/json" \
-    -d "{\"event\":\"heartbeat\",\"workerId\":\"${WORKER_ID}\",\"cdpUrl\":\"${TUNNEL_URL}\",\"sbCdpUrl\":\"${TUNNEL_SB_CDP_URL}\",\"seleniumCdpUrl\":\"${TUNNEL_SB_CDP_URL}\",\"apiUrl\":\"${TUNNEL_API_URL}\",\"runId\":\"${GITHUB_RUN_ID:-}\",\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" \
-    2>/dev/null || echo "000")
+  HTTP_CODE=$(send_webhook "heartbeat" 15)
 
   if [ "$HTTP_CODE" = "200" ]; then
     CONSECUTIVE_FAILURES=0
   elif [ "$HTTP_CODE" = "404" ]; then
     # Dashboard doesn't know us — re-register
     echo "⚠️ Dashboard returned 404 for heartbeat. Re-registering worker..."
-    curl -s -o /dev/null --max-time 15 \
-      -X POST "$WEBHOOK_URL" \
-      -H "Content-Type: application/json" \
-      -d "{\"event\":\"register\",\"workerId\":\"${WORKER_ID}\",\"cdpUrl\":\"${TUNNEL_URL}\",\"sbCdpUrl\":\"${TUNNEL_SB_CDP_URL}\",\"seleniumCdpUrl\":\"${TUNNEL_SB_CDP_URL}\",\"apiUrl\":\"${TUNNEL_API_URL}\",\"runId\":\"${GITHUB_RUN_ID:-}\",\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" \
-      2>/dev/null || true
+    send_webhook "register" 15 > /dev/null || true
     CONSECUTIVE_FAILURES=0
   else
     CONSECUTIVE_FAILURES=$(( CONSECUTIVE_FAILURES + 1 ))

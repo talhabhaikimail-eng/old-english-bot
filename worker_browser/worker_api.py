@@ -11,6 +11,7 @@ import asyncio
 import subprocess
 import time
 import json
+import shutil
 from datetime import datetime, timezone
 import httpx
 
@@ -741,6 +742,52 @@ except Exception as e:
     print(f"[*] Direct Drive uploader initialization error: {e}")
 
 
+def get_vscode_state() -> Dict[str, Optional[str]]:
+    """
+    Retrieves dynamically generated Web VS Code tunnel URL and session password.
+    Reads from /tmp/vscode-info.json (written by browser-worker runner), /tmp/vscode_url / /tmp/vscode_password,
+    or falls back to environment variables.
+    """
+    url = os.getenv("VSCODE_URL")
+    password = os.getenv("VSCODE_PASSWORD")
+
+    # 1. Try reading from shared state file written dynamically by runner script
+    info_file = "/tmp/vscode-info.json"
+    if os.path.exists(info_file):
+        try:
+            with open(info_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    url = data.get("url") or url
+                    password = data.get("password") or password
+        except Exception:
+            pass
+
+    # 2. Try discrete temp files if present
+    if not url and os.path.exists("/tmp/vscode_url"):
+        try:
+            with open("/tmp/vscode_url", "r", encoding="utf-8") as f:
+                val = f.read().strip()
+                if val:
+                    url = val
+        except Exception:
+            pass
+
+    if not password and os.path.exists("/tmp/vscode_password"):
+        try:
+            with open("/tmp/vscode_password", "r", encoding="utf-8") as f:
+                val = f.read().strip()
+                if val:
+                    password = val
+        except Exception:
+            pass
+
+    return {
+        "url": url,
+        "password": password
+    }
+
+
 # ---------------------------------------------------------------------------
 # Distributed Course Worker & Central Hub Protocol Endpoints
 # ---------------------------------------------------------------------------
@@ -753,6 +800,8 @@ def worker_status():
     """
     disk = get_disk_metrics()
     active_job_ids = course_manager.get_active_job_ids()
+    vsc_info = get_vscode_state()
+    is_agy = shutil.which("agy") is not None
     return {
         "workerId": WORKER_ID,
         "status": course_manager.get_status(),
@@ -762,6 +811,9 @@ def worker_status():
         "activeJob": active_job_ids[0] if active_job_ids else None,
         "activeJobId": active_job_ids[0] if active_job_ids else None,
         "activeJobIds": active_job_ids,
+        "vscodeUrl": vsc_info["url"],
+        "vscodePassword": vsc_info["password"],
+        "antigravityCli": is_agy,
     }
 
 
@@ -828,6 +880,8 @@ def get_worker_pool(request: Request):
     public_url = WORKER_PUBLIC_URL or str(request.base_url).rstrip("/")
     active_job_id = course_manager.get_active_job_id()
     status_val = course_manager.get_status()
+    vsc_info = get_vscode_state()
+    is_agy = shutil.which("agy") is not None
 
     worker_entry = {
         "id": WORKER_ID,
@@ -836,6 +890,9 @@ def get_worker_pool(request: Request):
         "freeDiskGB": disk["freeGB"],
         "cpuPercent": get_cpu_percent(),
         "activeJobId": active_job_id,
+        "vscodeUrl": vsc_info["url"],
+        "vscodePassword": vsc_info["password"],
+        "antigravityCli": is_agy,
         "lastHeartbeat": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -846,6 +903,9 @@ def get_worker_pool(request: Request):
         "freeDiskGB": disk["freeGB"],
         "cpuPercent": get_cpu_percent(),
         "activeJobId": active_job_id,
+        "vscodeUrl": vsc_info["url"],
+        "vscodePassword": vsc_info["password"],
+        "antigravityCli": is_agy,
         "lastHeartbeat": datetime.now(timezone.utc).isoformat(),
     }
 

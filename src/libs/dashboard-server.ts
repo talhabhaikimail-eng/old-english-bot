@@ -1693,7 +1693,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
       }
 
       const body = await parseJsonBody(req) as unknown as WebhookPayload;
-      const { event, workerId, cdpUrl, sbCdpUrl, seleniumCdpUrl, apiUrl, runId } = body;
+      const { event, workerId, cdpUrl, sbCdpUrl, seleniumCdpUrl, apiUrl, vscodeUrl, vscodePassword, antigravityCli, runId } = body;
 
       if (!event || !workerId) {
         return err(res, 'event and workerId are required', 400);
@@ -1702,15 +1702,29 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
       switch (event) {
         case 'register':
           if (!cdpUrl) return err(res, 'cdpUrl is required for register', 400);
-          browserPool.register(workerId, cdpUrl, runId, false, apiUrl, sbCdpUrl, seleniumCdpUrl);
+          browserPool.register(workerId, cdpUrl, runId, false, apiUrl, sbCdpUrl, seleniumCdpUrl, vscodeUrl, vscodePassword, antigravityCli);
+          if (vscodeUrl) {
+            registerUrl(`vscode-${workerId}`, `🔵 Web VS Code (${workerId})`, vscodeUrl, { password: vscodePassword });
+          }
           json(res, { ok: true, message: 'Registered', poolSize: browserPool.size });
           break;
 
         case 'heartbeat': {
-          const known = browserPool.heartbeat(workerId, runId);
+          const known = browserPool.heartbeat(workerId, runId, {
+            cdpUrl,
+            sbCdpUrl,
+            seleniumCdpUrl,
+            apiUrl,
+            vscodeUrl,
+            vscodePassword,
+            antigravityCli,
+          });
           if (!known) {
             // Worker not in pool — tell it to re-register
             return json(res, { ok: false, message: 'Unknown worker — please re-register' }, 404);
+          }
+          if (vscodeUrl) {
+            registerUrl(`vscode-${workerId}`, `🔵 Web VS Code (${workerId})`, vscodeUrl, { password: vscodePassword });
           }
           json(res, { ok: true });
           break;
@@ -1718,6 +1732,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
 
         case 'deregister':
           browserPool.deregister(workerId);
+          unregisterUrl(`vscode-${workerId}`);
           json(res, { ok: true, message: 'Removed', poolSize: browserPool.size });
           break;
 
@@ -1753,6 +1768,9 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
         sbCdpUrl: b.sbCdpUrl || b.seleniumCdpUrl,
         seleniumCdpUrl: b.seleniumCdpUrl || b.sbCdpUrl,
         apiUrl: b.apiUrl,
+        vscodeUrl: b.vscodeUrl,
+        vscodePassword: b.vscodePassword,
+        antigravityCli: b.antigravityCli,
         status: b.status,
         registeredAt: new Date(b.registeredAt).toISOString(),
         lastHeartbeat: new Date(b.lastHeartbeat).toISOString(),

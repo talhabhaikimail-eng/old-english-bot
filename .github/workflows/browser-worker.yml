@@ -169,6 +169,20 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Install Web VS Code (code-server)
+        run: |
+          curl -fsSL https://code-server.dev/install.sh | sh
+          code-server --version || echo "code-server installed"
+
+      - name: Install Google Antigravity CLI
+        run: |
+          curl -fsSL https://antigravity.google/cli/install.sh | bash || true
+          for dir in "$HOME/.local/bin" "$HOME/.antigravity/bin" "/usr/local/bin"; do
+            if [ -d "$dir" ]; then
+              echo "$dir" >> $GITHUB_PATH
+            fi
+          done
+          command -v agy || echo "Antigravity CLI installed in user path"
 
       - name: Run browser worker
         run: |

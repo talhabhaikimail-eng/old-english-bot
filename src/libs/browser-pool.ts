@@ -32,6 +32,9 @@ export interface RemoteBrowser {
   sbCdpUrl?: string;       // https://xxx.trycloudflare.com  (proxies SeleniumBase UC CDP :9223)
   seleniumCdpUrl?: string; // Alias for SeleniumBase CDP
   apiUrl?: string;         // https://xxx.trycloudflare.com  (proxies Python API :8000)
+  vscodeUrl?: string;      // https://xxx.trycloudflare.com  (proxies Web VS Code :8088)
+  vscodePassword?: string; // Generated session password for Web VS Code
+  antigravityCli?: boolean;// True if Antigravity CLI (agy) is available on the worker
   registeredAt: number;    // Date.now() ms
   lastHeartbeat: number;   // Date.now() ms — updated on every heartbeat
   status: 'active' | 'stale' | 'dead';
@@ -50,6 +53,9 @@ export interface WebhookPayload {
   sbCdpUrl?: string;
   seleniumCdpUrl?: string;
   apiUrl?: string;
+  vscodeUrl?: string;
+  vscodePassword?: string;
+  antigravityCli?: boolean;
   runId?: string;
   timestamp: string;       // ISO-8601
 }
@@ -90,7 +96,10 @@ class BrowserPool {
     skipWarmup = false,
     apiUrl?: string,
     sbCdpUrl?: string,
-    seleniumCdpUrl?: string
+    seleniumCdpUrl?: string,
+    vscodeUrl?: string,
+    vscodePassword?: string,
+    antigravityCli?: boolean
   ): void {
     const now = Date.now();
     const existing = this.browsers.get(workerId);
@@ -103,6 +112,9 @@ class BrowserPool {
         existing.seleniumCdpUrl = resolvedSbCdpUrl;
       }
       existing.apiUrl = apiUrl;
+      if (vscodeUrl) existing.vscodeUrl = vscodeUrl;
+      if (vscodePassword) existing.vscodePassword = vscodePassword;
+      if (antigravityCli !== undefined) existing.antigravityCli = antigravityCli;
       existing.lastHeartbeat = now;
       existing.status = 'active';
       if (runId) existing.runId = runId;
@@ -114,6 +126,9 @@ class BrowserPool {
         sbCdpUrl: resolvedSbCdpUrl,
         seleniumCdpUrl: resolvedSbCdpUrl,
         apiUrl,
+        vscodeUrl,
+        vscodePassword,
+        antigravityCli,
         registeredAt: now,
         lastHeartbeat: now,
         status: 'active',
@@ -135,12 +150,36 @@ class BrowserPool {
   }
 
   /** Update heartbeat timestamp for a known worker. Returns false if unknown. */
-  heartbeat(workerId: string, runId?: string): boolean {
+  heartbeat(
+    workerId: string,
+    runId?: string,
+    extra?: {
+      cdpUrl?: string;
+      sbCdpUrl?: string;
+      seleniumCdpUrl?: string;
+      apiUrl?: string;
+      vscodeUrl?: string;
+      vscodePassword?: string;
+      antigravityCli?: boolean;
+    }
+  ): boolean {
     const entry = this.browsers.get(workerId);
     if (!entry) return false;
     entry.lastHeartbeat = Date.now();
     entry.status = 'active';
     if (runId) entry.runId = runId;
+    if (extra) {
+      if (extra.cdpUrl) entry.cdpUrl = extra.cdpUrl;
+      const resolvedSb = extra.sbCdpUrl || extra.seleniumCdpUrl;
+      if (resolvedSb) {
+        entry.sbCdpUrl = resolvedSb;
+        entry.seleniumCdpUrl = resolvedSb;
+      }
+      if (extra.apiUrl) entry.apiUrl = extra.apiUrl;
+      if (extra.vscodeUrl) entry.vscodeUrl = extra.vscodeUrl;
+      if (extra.vscodePassword) entry.vscodePassword = extra.vscodePassword;
+      if (extra.antigravityCli !== undefined) entry.antigravityCli = extra.antigravityCli;
+    }
     return true;
   }
 

@@ -87,6 +87,9 @@ export interface BrowserPoolItem {
   sbCdpUrl?: string;
   seleniumCdpUrl?: string;
   apiUrl?: string;
+  vscodeUrl?: string;
+  vscodePassword?: string;
+  antigravityCli?: boolean;
   status: 'active' | 'stale' | 'dead';
   registeredAt: string;
   lastHeartbeat: string;

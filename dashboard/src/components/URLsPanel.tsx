@@ -23,6 +23,13 @@ export default function URLsPanel({ tools }: { tools: Record<string, ToolUrl> })
     bypasser: '⚡',
   };
 
+  const getIcon = (k: string) => {
+    if (k.startsWith('vscode')) return '🔵';
+    if (k.startsWith('terminal')) return '💻';
+    if (k.startsWith('browser')) return '🌐';
+    return ICON[k] ?? '🔗';
+  };
+
   if (keys.length === 0) {
     return (
       <Card className="border border-border bg-card p-8 sm:p-12 text-center max-w-2xl mx-auto space-y-2 font-mono">
@@ -46,7 +53,7 @@ export default function URLsPanel({ tools }: { tools: Record<string, ToolUrl> })
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-2.5">
                 <div className="w-8 h-8 border border-border bg-secondary flex items-center justify-center text-base">
-                  {ICON[key] ?? '🔗'}
+                  {getIcon(key)}
                 </div>
                 <div>
                   <CardTitle className="font-bold font-mono uppercase text-xs tracking-wider text-foreground">{displayLabel}</CardTitle>

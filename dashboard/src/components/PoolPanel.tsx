@@ -14,6 +14,9 @@ export default function PoolPanel() {
   const [error, setError] = useState<string | null>(null);
   const [restarting, setRestarting] = useState(false);
   const [restartMsg, setRestartMsg] = useState('');
+  const [showPasswordMap, setShowPasswordMap] = useState<Record<string, boolean>>({});
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [toastMsg, setToastMsg] = useState<string | null>(null);
 
   const fetchPool = async () => {
     try {
@@ -48,6 +51,32 @@ export default function PoolPanel() {
         setRestarting(false);
       }
     }
+  };
+
+  const handleCopy = (text: string, key: string, label = 'Copied to clipboard!') => {
+    copyText(text);
+    setCopiedKey(key);
+    setToastMsg(label);
+    setTimeout(() => {
+      setCopiedKey(null);
+      setToastMsg(null);
+    }, 2500);
+  };
+
+  const togglePassword = (workerId: string) => {
+    setShowPasswordMap(prev => ({
+      ...prev,
+      [workerId]: !prev[workerId]
+    }));
+  };
+
+  const handleConnectVSCode = (url: string, password?: string) => {
+    if (password) {
+      copyText(password);
+      setToastMsg('🔑 Password copied to clipboard! Launching Web VS Code...');
+      setTimeout(() => setToastMsg(null), 3500);
+    }
+    window.open(url, '_blank', 'noopener,noreferrer');
   };
 
   const formatAge = (registeredAt: string) => {
@@ -86,11 +115,13 @@ export default function PoolPanel() {
 
   const browsers = data?.browsers ?? [];
   const cachedCount = browsers.filter(b => b.isCached).length;
+  const vscodeCount = browsers.filter(b => b.vscodeUrl).length;
+  const agyCount = browsers.filter(b => b.antigravityCli).length;
 
   return (
     <div className="space-y-4 text-sm font-mono">
       {/* Fleet Stats Overview */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
         <Card className="border border-border bg-card p-3 flex flex-col justify-between">
           <p className="text-[10px] text-muted-foreground uppercase font-bold tracking-wider">Total Fleet Size</p>
           <div className="flex items-baseline gap-2 mt-1">
@@ -102,8 +133,24 @@ export default function PoolPanel() {
         <Card className="border border-border bg-card p-3 flex flex-col justify-between">
           <p className="text-[10px] text-muted-foreground uppercase font-bold tracking-wider">Active Workers</p>
           <div className="flex items-baseline gap-2 mt-1">
-            <span className="text-2xl font-bold text-foreground">{data?.active ?? 0}</span>
+            <span className="text-2xl font-bold text-emerald-400">{data?.active ?? 0}</span>
             <span className="text-xs text-muted-foreground">online</span>
+          </div>
+        </Card>
+
+        <Card className="border border-border bg-card p-3 flex flex-col justify-between">
+          <p className="text-[10px] text-muted-foreground uppercase font-bold tracking-wider">Web VS Code</p>
+          <div className="flex items-baseline gap-2 mt-1">
+            <span className="text-2xl font-bold text-sky-400">{vscodeCount}</span>
+            <span className="text-xs text-muted-foreground">online</span>
+          </div>
+        </Card>
+
+        <Card className="border border-border bg-card p-3 flex flex-col justify-between">
+          <p className="text-[10px] text-muted-foreground uppercase font-bold tracking-wider">Antigravity CLI</p>
+          <div className="flex items-baseline gap-2 mt-1">
+            <span className="text-2xl font-bold text-indigo-400">{agyCount}</span>
+            <span className="text-xs text-muted-foreground">ready</span>
           </div>
         </Card>
 
@@ -114,25 +161,22 @@ export default function PoolPanel() {
             <span className="text-xs text-muted-foreground">cached</span>
           </div>
         </Card>
-
-        <Card className="border border-border bg-card p-3 flex flex-col justify-between">
-          <p className="text-[10px] text-muted-foreground uppercase font-bold tracking-wider">Pool Efficiency</p>
-          <div className="flex items-baseline gap-2 mt-1">
-            <span className="text-2xl font-bold text-foreground">
-              {data?.active ? Math.round((cachedCount / data.active) * 100) : 0}%
-            </span>
-            <span className="text-xs text-muted-foreground">ready</span>
-          </div>
-        </Card>
       </div>
 
-      {/* Control Actions */}
+      {/* Control Actions & Notifications */}
       <Card className="flex flex-col sm:flex-row items-start sm:items-center justify-between bg-card border border-border p-3 gap-3">
         <div>
           <CardTitle className="text-xs uppercase font-bold tracking-wider text-foreground">Browser Fleet Orchestrator</CardTitle>
-          <CardDescription className="text-xs text-muted-foreground mt-0.5">Control, restart, and monitor live distributed worker instances.</CardDescription>
+          <CardDescription className="text-xs text-muted-foreground mt-0.5">
+            Manage live distributed worker instances with Web VS Code, Antigravity CLI, and CDP tunnels.
+          </CardDescription>
         </div>
         <div className="flex items-center gap-2">
+          {toastMsg && (
+            <div className="px-3 py-1 text-xs border border-sky-600 bg-sky-950/70 text-sky-200 font-mono animate-in fade-in">
+              {toastMsg}
+            </div>
+          )}
           {restartMsg && (
             <div className="px-3 py-1 text-xs border border-border bg-secondary text-foreground font-mono">
               {restartMsg}
@@ -162,85 +206,188 @@ export default function PoolPanel() {
               <thead>
                 <tr className="border-b border-border bg-secondary">
                   <th className="text-[10px] uppercase font-bold tracking-wider text-muted-foreground px-4 py-2.5">Worker ID</th>
+                  <th className="text-[10px] uppercase font-bold tracking-wider text-muted-foreground px-4 py-2.5">Web VS Code & IDE</th>
                   <th className="text-[10px] uppercase font-bold tracking-wider text-muted-foreground px-4 py-2.5">CDP Endpoints</th>
                   <th className="text-[10px] uppercase font-bold tracking-wider text-muted-foreground px-4 py-2.5">Status</th>
-                  <th className="text-[10px] uppercase font-bold tracking-wider text-muted-foreground px-4 py-2.5">Pre-Warm</th>
                   <th className="text-[10px] uppercase font-bold tracking-wider text-muted-foreground px-4 py-2.5">Heartbeat</th>
                   <th className="text-[10px] uppercase font-bold tracking-wider text-muted-foreground px-4 py-2.5">Age</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {browsers.map(b => (
-                  <tr key={b.workerId} className="hover:bg-secondary transition-colors">
-                    {/* Worker ID */}
-                    <td className="px-4 py-3 font-bold text-foreground select-all cursor-pointer"
-                        onClick={() => { copyText(b.workerId); }}
-                        title="Click to copy Worker ID">
-                      {b.workerId}
-                    </td>
+                {browsers.map(b => {
+                  const isPwShown = !!showPasswordMap[b.workerId];
+                  return (
+                    <tr key={b.workerId} className="hover:bg-secondary/40 transition-colors">
+                      {/* Worker ID */}
+                      <td className="px-4 py-3 align-top font-bold text-foreground select-all cursor-pointer"
+                          onClick={() => handleCopy(b.workerId, `id-${b.workerId}`, 'Worker ID copied!')}
+                          title="Click to copy Worker ID">
+                        <div className="flex items-center gap-1.5">
+                          <span>{b.workerId}</span>
+                          {copiedKey === `id-${b.workerId}` && (
+                            <span className="text-[9px] text-emerald-400 font-normal">✓</span>
+                          )}
+                        </div>
+                      </td>
 
-                    {/* CDP Tunnel URLs */}
-                    <td className="px-4 py-3 max-w-sm space-y-1.5">
-                      {/* Puppeteer CDP */}
-                      <div className="flex items-center gap-1.5 bg-secondary border border-border px-2 py-1">
-                        <span className="text-[9px] font-bold uppercase text-muted-foreground">
-                          PUPPETEER
-                        </span>
-                        <a href={`${b.cdpUrl}/json/version`} target="_blank" rel="noopener noreferrer"
-                           className="flex-1 text-foreground underline text-xs truncate select-all">
-                          {b.cdpUrl}
-                        </a>
-                        <Button variant="ghost" size="xs" onClick={() => copyText(b.cdpUrl)}
-                                className="text-[10px] h-auto p-0.5">COPY</Button>
-                      </div>
+                      {/* Web VS Code & Environment */}
+                      <td className="px-4 py-3 align-top min-w-[280px] max-w-sm space-y-2">
+                        {b.vscodeUrl ? (
+                          <div className="bg-card border border-sky-500/30 p-2.5 rounded-sm space-y-2">
+                            {/* Header / Title */}
+                            <div className="flex items-center justify-between gap-1">
+                              <span className="text-[10px] font-bold uppercase text-sky-400 flex items-center gap-1">
+                                🔵 Web VS Code
+                              </span>
+                              {b.antigravityCli ? (
+                                <Badge className="text-[9px] bg-emerald-950/60 text-emerald-400 border border-emerald-800 px-1.5 py-0">
+                                  ⚡ AGY CLI Ready
+                                </Badge>
+                              ) : (
+                                <Badge variant="outline" className="text-[9px] text-muted-foreground px-1.5 py-0">
+                                  AGY CLI
+                                </Badge>
+                              )}
+                            </div>
 
-                      {/* SeleniumBase UC CDP */}
-                      {(b.sbCdpUrl || b.seleniumCdpUrl) && (
+                            {/* URL Link */}
+                            <div className="flex items-center gap-1.5 bg-secondary/80 border border-border px-2 py-1">
+                              <span className="text-[9px] font-bold text-muted-foreground">URL:</span>
+                              <a
+                                href={b.vscodeUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="flex-1 text-sky-300 hover:text-sky-200 underline text-xs truncate select-all"
+                                title="Open Web VS Code URL"
+                              >
+                                {b.vscodeUrl}
+                              </a>
+                              <Button
+                                variant="ghost"
+                                size="xs"
+                                onClick={() => handleCopy(b.vscodeUrl!, `vsc-url-${b.workerId}`, 'VS Code URL copied!')}
+                                className="text-[10px] h-auto p-0.5"
+                              >
+                                {copiedKey === `vsc-url-${b.workerId}` ? 'COPIED' : 'COPY'}
+                              </Button>
+                            </div>
+
+                            {/* Password Box */}
+                            {b.vscodePassword && (
+                              <div className="flex items-center gap-1.5 bg-secondary/80 border border-border px-2 py-1">
+                                <span className="text-[9px] font-bold text-muted-foreground">PWD:</span>
+                                <span className="flex-1 font-mono text-xs select-all text-foreground tracking-wider font-semibold">
+                                  {isPwShown ? b.vscodePassword : '••••••••••••••••'}
+                                </span>
+                                <Button
+                                  variant="ghost"
+                                  size="xs"
+                                  onClick={() => togglePassword(b.workerId)}
+                                  className="text-[9px] h-auto p-0.5 text-muted-foreground hover:text-foreground"
+                                  title={isPwShown ? 'Hide password' : 'Show password'}
+                                >
+                                  {isPwShown ? 'HIDE' : 'SHOW'}
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="xs"
+                                  onClick={() => handleCopy(b.vscodePassword!, `pwd-${b.workerId}`, 'Password copied!')}
+                                  className="text-[10px] h-auto p-0.5"
+                                >
+                                  {copiedKey === `pwd-${b.workerId}` ? 'COPIED' : 'COPY'}
+                                </Button>
+                              </div>
+                            )}
+
+                            {/* Quick Connect Button */}
+                            <Button
+                              onClick={() => handleConnectVSCode(b.vscodeUrl!, b.vscodePassword)}
+                              size="sm"
+                              className="w-full bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold font-mono tracking-wider h-7"
+                              title="Copies password and opens Web VS Code in a new tab"
+                            >
+                              ⚡ CONNECT TO VS CODE ↗
+                            </Button>
+                          </div>
+                        ) : (
+                          <div className="flex flex-col gap-1 text-muted-foreground text-xs py-1">
+                            <span className="text-[10px] uppercase tracking-wider">VS Code initializing...</span>
+                            {b.antigravityCli && (
+                              <span className="text-[9px] text-emerald-400">⚡ AGY CLI Ready</span>
+                            )}
+                          </div>
+                        )}
+                      </td>
+
+                      {/* CDP Tunnel URLs */}
+                      <td className="px-4 py-3 align-top max-w-sm space-y-1.5">
+                        {/* Puppeteer CDP */}
                         <div className="flex items-center gap-1.5 bg-secondary border border-border px-2 py-1">
                           <span className="text-[9px] font-bold uppercase text-muted-foreground">
-                            SELENIUM
+                            PUPPETEER
                           </span>
-                          <a href={`${b.sbCdpUrl || b.seleniumCdpUrl}/json/version`} target="_blank" rel="noopener noreferrer"
+                          <a href={`${b.cdpUrl}/json/version`} target="_blank" rel="noopener noreferrer"
                              className="flex-1 text-foreground underline text-xs truncate select-all">
-                            {b.sbCdpUrl || b.seleniumCdpUrl}
+                            {b.cdpUrl}
                           </a>
-                          <Button variant="ghost" size="xs" onClick={() => copyText((b.sbCdpUrl || b.seleniumCdpUrl)!)}
-                                  className="text-[10px] h-auto p-0.5">COPY</Button>
+                          <Button variant="ghost" size="xs" onClick={() => handleCopy(b.cdpUrl, `cdp-${b.workerId}`)}
+                                  className="text-[10px] h-auto p-0.5">
+                            {copiedKey === `cdp-${b.workerId}` ? 'COPIED' : 'COPY'}
+                          </Button>
                         </div>
-                      )}
-                    </td>
 
-                    {/* Status Badge */}
-                    <td className="px-4 py-3">
-                      <Badge variant="outline" className="text-[9px] uppercase font-bold">
-                        {b.status}
-                      </Badge>
-                    </td>
+                        {/* SeleniumBase UC CDP */}
+                        {(b.sbCdpUrl || b.seleniumCdpUrl) && (
+                          <div className="flex items-center gap-1.5 bg-secondary border border-border px-2 py-1">
+                            <span className="text-[9px] font-bold uppercase text-muted-foreground">
+                              SELENIUM
+                            </span>
+                            <a href={`${b.sbCdpUrl || b.seleniumCdpUrl}/json/version`} target="_blank" rel="noopener noreferrer"
+                               className="flex-1 text-foreground underline text-xs truncate select-all">
+                              {b.sbCdpUrl || b.seleniumCdpUrl}
+                            </a>
+                            <Button variant="ghost" size="xs" onClick={() => handleCopy((b.sbCdpUrl || b.seleniumCdpUrl)!, `sb-${b.workerId}`)}
+                                    className="text-[10px] h-auto p-0.5">
+                              {copiedKey === `sb-${b.workerId}` ? 'COPIED' : 'COPY'}
+                            </Button>
+                          </div>
+                        )}
+                      </td>
 
-                    {/* Connection/Cache Status */}
-                    <td className="px-4 py-3">
-                      {b.isCached ? (
-                        <Badge variant="outline" className="text-[9px] bg-foreground text-background">
-                          CACHED
-                        </Badge>
-                      ) : (
-                        <Badge variant="outline" className="text-[9px] text-muted-foreground">
-                          DISCONNECTED
-                        </Badge>
-                      )}
-                    </td>
+                      {/* Status Badge */}
+                      <td className="px-4 py-3 align-top">
+                        <div className="space-y-1">
+                          <Badge variant="outline" className={`text-[9px] uppercase font-bold ${
+                            b.status === 'active' ? 'border-emerald-700 text-emerald-400' : 'text-muted-foreground'
+                          }`}>
+                            {b.status}
+                          </Badge>
+                          <div>
+                            {b.isCached ? (
+                              <Badge variant="outline" className="text-[8px] bg-foreground text-background">
+                                CACHED
+                              </Badge>
+                            ) : (
+                              <Badge variant="outline" className="text-[8px] text-muted-foreground">
+                                DISCONNECTED
+                              </Badge>
+                            )}
+                          </div>
+                        </div>
+                      </td>
 
-                    {/* Heartbeat time */}
-                    <td className="px-4 py-3 text-muted-foreground">
-                      {b.secondsSinceHeartbeat <= 5 ? 'Just now' : `${b.secondsSinceHeartbeat}s ago`}
-                    </td>
+                      {/* Heartbeat time */}
+                      <td className="px-4 py-3 align-top text-muted-foreground">
+                        {b.secondsSinceHeartbeat <= 5 ? 'Just now' : `${b.secondsSinceHeartbeat}s ago`}
+                      </td>
 
-                    {/* Age */}
-                    <td className="px-4 py-3 text-muted-foreground">
-                      {formatAge(b.registeredAt)}
-                    </td>
-                  </tr>
-                ))}
+                      {/* Age */}
+                      <td className="px-4 py-3 align-top text-muted-foreground">
+                        {formatAge(b.registeredAt)}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
