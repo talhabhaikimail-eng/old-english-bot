@@ -317,6 +317,39 @@ export default function PoolPanel() {
                             )}
                           </div>
                         )}
+
+                        {b.courseWorkerUrl && (
+                          <div className="bg-card border border-emerald-500/30 p-2.5 rounded-sm space-y-1.5 mt-2">
+                            <div className="flex items-center justify-between gap-1">
+                              <span className="text-[10px] font-bold uppercase text-emerald-400 flex items-center gap-1">
+                                ⚡ Go Course Worker
+                              </span>
+                              <Badge className="text-[9px] bg-emerald-950/60 text-emerald-400 border border-emerald-800 px-1.5 py-0">
+                                :8085 ACTIVE
+                              </Badge>
+                            </div>
+                            <div className="flex items-center gap-1.5 bg-secondary/80 border border-border px-2 py-1">
+                              <span className="text-[9px] font-bold text-muted-foreground">URL:</span>
+                              <a
+                                href={`${b.courseWorkerUrl}/worker/status`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="flex-1 text-emerald-300 hover:text-emerald-200 underline text-xs truncate select-all font-mono"
+                                title="Open Course Worker Status"
+                              >
+                                {b.courseWorkerUrl}
+                              </a>
+                              <Button
+                                variant="ghost"
+                                size="xs"
+                                onClick={() => handleCopy(b.courseWorkerUrl!, `cw-url-${b.workerId}`, 'Course Worker URL copied!')}
+                                className="text-[10px] h-auto p-0.5"
+                              >
+                                {copiedKey === `cw-url-${b.workerId}` ? 'COPIED' : 'COPY'}
+                              </Button>
+                            </div>
+                          </div>
+                        )}
                       </td>
 
                       {/* CDP Tunnel URLs */}

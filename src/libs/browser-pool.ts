@@ -35,6 +35,7 @@ export interface RemoteBrowser {
   vscodeUrl?: string;      // https://xxx.trycloudflare.com  (proxies Web VS Code :8088)
   vscodePassword?: string; // Generated session password for Web VS Code
   antigravityCli?: boolean;// True if Antigravity CLI (agy) is available on the worker
+  courseWorkerUrl?: string;// https://xxx.trycloudflare.com  (proxies Go Course Worker :8085)
   registeredAt: number;    // Date.now() ms
   lastHeartbeat: number;   // Date.now() ms — updated on every heartbeat
   status: 'active' | 'stale' | 'dead';
@@ -56,6 +57,7 @@ export interface WebhookPayload {
   vscodeUrl?: string;
   vscodePassword?: string;
   antigravityCli?: boolean;
+  courseWorkerUrl?: string;
   runId?: string;
   timestamp: string;       // ISO-8601
 }
@@ -99,7 +101,8 @@ class BrowserPool {
     seleniumCdpUrl?: string,
     vscodeUrl?: string,
     vscodePassword?: string,
-    antigravityCli?: boolean
+    antigravityCli?: boolean,
+    courseWorkerUrl?: string
   ): void {
     const now = Date.now();
     const existing = this.browsers.get(workerId);
@@ -115,6 +118,7 @@ class BrowserPool {
       if (vscodeUrl) existing.vscodeUrl = vscodeUrl;
       if (vscodePassword) existing.vscodePassword = vscodePassword;
       if (antigravityCli !== undefined) existing.antigravityCli = antigravityCli;
+      if (courseWorkerUrl) existing.courseWorkerUrl = courseWorkerUrl;
       existing.lastHeartbeat = now;
       existing.status = 'active';
       if (runId) existing.runId = runId;
@@ -129,6 +133,7 @@ class BrowserPool {
         vscodeUrl,
         vscodePassword,
         antigravityCli,
+        courseWorkerUrl,
         registeredAt: now,
         lastHeartbeat: now,
         status: 'active',
@@ -161,6 +166,7 @@ class BrowserPool {
       vscodeUrl?: string;
       vscodePassword?: string;
       antigravityCli?: boolean;
+      courseWorkerUrl?: string;
     }
   ): boolean {
     const entry = this.browsers.get(workerId);
@@ -179,6 +185,7 @@ class BrowserPool {
       if (extra.vscodeUrl) entry.vscodeUrl = extra.vscodeUrl;
       if (extra.vscodePassword) entry.vscodePassword = extra.vscodePassword;
       if (extra.antigravityCli !== undefined) entry.antigravityCli = extra.antigravityCli;
+      if (extra.courseWorkerUrl) entry.courseWorkerUrl = extra.courseWorkerUrl;
     }
     return true;
   }

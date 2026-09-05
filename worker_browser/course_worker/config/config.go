@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -21,9 +22,16 @@ type Config struct {
 	PackagingTimeout         time.Duration
 	DLEnginePath             string
 	HTTPPort                 int
+	DatabaseURL              string
+	GoogleClientID           string
+	ClientSecret             string
+	DefaultDriveFolderID     string
+	AutoUploadDrive          bool
 }
 
 func LoadConfig() *Config {
+	loadDotEnv()
+
 	hostname, _ := os.Hostname()
 	if len(hostname) > 12 {
 		hostname = hostname[:12]
@@ -42,6 +50,11 @@ func LoadConfig() *Config {
 		PackagingTimeout:         time.Duration(getEnvInt("PACKAGING_TIMEOUT_SEC", 1800)) * time.Second,    // 30 min
 		DLEnginePath:             getEnv("DLENGINE_BIN", "/usr/local/bin/dlengine"),
 		HTTPPort:                 getEnvInt("PORT", 8085),
+		DatabaseURL:              getEnv("DATABASE_URL", ""),
+		GoogleClientID:           getEnv("GOOGLE_CLIENT_ID", ""),
+		ClientSecret:             getEnv("CLIENT_SECRET", ""),
+		DefaultDriveFolderID:     getEnv("DEFAULT_DRIVE_FOLDER_ID", "1UmpfulblvP-fmvPia3kgXfvDUc7Zh4n1"),
+		AutoUploadDrive:          getEnvBool("AUTO_UPLOAD_DRIVE", false),
 	}
 
 	// Verify dlengine path or look for local fallbacks
@@ -113,4 +126,39 @@ func getEnvInt64(key string, def int64) int64 {
 		}
 	}
 	return def
+}
+
+func getEnvBool(key string, def bool) bool {
+	if val := os.Getenv(key); val != "" {
+		lower := strings.ToLower(val)
+		return lower == "true" || lower == "1" || lower == "yes"
+	}
+	return def
+}
+
+func loadDotEnv() {
+	candidates := []string{".env", "../.env", "../../.env"}
+	for _, path := range candidates {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		lines := strings.Split(string(data), "\n")
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			parts := strings.SplitN(line, "=", 2)
+			if len(parts) == 2 {
+				k := strings.TrimSpace(parts[0])
+				v := strings.TrimSpace(parts[1])
+				v = strings.Trim(v, `"'`)
+				if os.Getenv(k) == "" {
+					_ = os.Setenv(k, v)
+				}
+			}
+		}
+		break
+	}
 }

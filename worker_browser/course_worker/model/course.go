@@ -16,6 +16,7 @@ const (
 	PhaseReclaiming  JobPhase = "reclaiming"
 	PhaseSeparating  JobPhase = "separating"
 	PhaseZipping     JobPhase = "zipping"
+	PhaseUploading   JobPhase = "uploading"
 	PhaseCompleted   JobPhase = "completed"
 	PhaseFailed      JobPhase = "failed"
 	PhaseCancelled   JobPhase = "cancelled"
@@ -44,8 +45,18 @@ type CoursePayload struct {
 	JobID       string   `json:"jobId,omitempty"`
 	CourseName  string   `json:"courseName,omitempty"`
 	ArchiveURLs []string `json:"archiveUrls,omitempty"`
-	Password    string   `json:"password,omitempty"`
-	CallbackURL string   `json:"callbackUrl,omitempty"`
+	Password    string             `json:"password,omitempty"`
+	CallbackURL string             `json:"callbackUrl,omitempty"`
+	Drive       *DriveUploadConfig `json:"drive,omitempty"`
+}
+
+type DriveUploadConfig struct {
+	AccessToken     string `json:"accessToken,omitempty"`
+	ParentFolderId  string `json:"parentFolderId,omitempty"`
+	AccountId       string `json:"accountId,omitempty"`
+	TokenRefreshURL string `json:"tokenRefreshUrl,omitempty"`
+	TestFolder      string `json:"testFolder,omitempty"`
+	AutoUpload      *bool  `json:"autoUpload,omitempty"`
 }
 
 func (c *CoursePayload) GetJobID() string {
@@ -120,6 +131,14 @@ type FileInfo struct {
 	IsZipPart bool   `json:"isZipPart"`
 }
 
+type DriveFile struct {
+	Name        string `json:"name"`
+	FileID      string `json:"fileId"`
+	SizeBytes   int64  `json:"sizeBytes"`
+	WebViewLink string `json:"webViewLink"`
+	IsVideo     bool   `json:"isVideo"`
+}
+
 type JobState struct {
 	ID              string         `json:"id"`
 	Title           string         `json:"title"`
@@ -135,6 +154,9 @@ type JobState struct {
 	Parts           []PartProgress `json:"parts,omitempty"`
 	VideoFiles      []FileInfo     `json:"videoFiles,omitempty"`
 	MaterialZips    []FileInfo     `json:"materialZips,omitempty"`
+	DriveFolderID   string         `json:"driveFolderId,omitempty"`
+	DriveFolderURL  string         `json:"driveFolderUrl,omitempty"`
+	DriveFiles      []DriveFile    `json:"driveFiles,omitempty"`
 	OutputDir       string         `json:"outputDir,omitempty"`
 	WorkDir         string         `json:"workDir,omitempty"`
 	CreatedAt       time.Time      `json:"createdAt"`

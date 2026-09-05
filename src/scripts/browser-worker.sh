@@ -66,6 +66,7 @@ send_webhook() {
   "vscodeUrl": "${TUNNEL_VSCODE_URL}",
   "vscodePassword": "${VSCODE_PASSWORD}",
   "antigravityCli": ${is_agy},
+  "courseWorkerUrl": "${TUNNEL_COURSE_WORKER_URL:-}",
   "runId": "${GITHUB_RUN_ID:-}",
   "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
@@ -98,6 +99,8 @@ cleanup() {
   # Kill child processes
   [ -n "$TUNNEL_VSCODE_PID" ] && kill "$TUNNEL_VSCODE_PID" 2>/dev/null || true
   [ -n "$VSCODE_PID" ] && kill "$VSCODE_PID" 2>/dev/null || true
+  [ -n "$TUNNEL_CW_PID" ] && kill "$TUNNEL_CW_PID" 2>/dev/null || true
+  [ -n "$CW_PID" ] && kill "$CW_PID" 2>/dev/null || true
   [ -n "$TUNNEL_SB_CDP_PID" ] && kill "$TUNNEL_SB_CDP_PID" 2>/dev/null || true
   [ -n "$SB_CDP_PID" ] && kill "$SB_CDP_PID" 2>/dev/null || true
   [ -n "$TUNNEL_API_PID" ] && kill "$TUNNEL_API_PID" 2>/dev/null || true
@@ -328,6 +331,32 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# 1e. Start Go Course Worker server (:8085)
+# ---------------------------------------------------------------------------
+CW_BIN="./bin/course-worker"
+if [ ! -f "$CW_BIN" ]; then
+  CW_BIN="$(command -v course-worker 2>/dev/null || echo "")"
+fi
+
+if [ -n "$CW_BIN" ] && [ -x "$CW_BIN" ]; then
+  echo "🚀 Starting Go Course Worker server on :8085..."
+  $CW_BIN serve --port 8085 --concurrency "${MAX_CONCURRENT_COURSES:-2}" > /tmp/course-worker.log 2>&1 &
+  CW_PID=$!
+  echo "Go Course Worker started (PID: $CW_PID)"
+
+  echo "⏳ Waiting for Go Course Worker to be ready..."
+  for i in $(seq 1 15); do
+    if curl -s "http://127.0.0.1:8085/worker/status" > /dev/null 2>&1; then
+      echo "✅ Go Course Worker is ready!"
+      break
+    fi
+    sleep 1
+  done
+else
+  echo "⚠️ Go Course Worker binary not found at $CW_BIN; skipping Course Worker launch."
+fi
+
+# ---------------------------------------------------------------------------
 # 2. Start cloudflared tunnels
 # ---------------------------------------------------------------------------
 echo "🌐 Starting cloudflared tunnel for Puppeteer CDP port ${CDP_PORT}..."
@@ -410,6 +439,27 @@ if [ -n "$VSCODE_PID" ]; then
   done
   export VSCODE_URL="$TUNNEL_VSCODE_URL"
   write_vscode_state "$TUNNEL_VSCODE_URL" "$VSCODE_PASSWORD" "$VSCODE_PORT"
+fi
+
+if [ -n "$CW_PID" ]; then
+  echo "🌐 Starting cloudflared tunnel for Go Course Worker port 8085..."
+  TUNNEL_CW_LOG="/tmp/cloudflared-course-worker-tunnel.log"
+  cloudflared tunnel --url "http://127.0.0.1:8085" > "$TUNNEL_CW_LOG" 2>&1 &
+  TUNNEL_CW_PID=$!
+
+  for i in $(seq 1 30); do
+    TUNNEL_COURSE_WORKER_URL=$(grep -oP 'https://[-0-9a-z]+\.trycloudflare\.com' "$TUNNEL_CW_LOG" 2>/dev/null | head -1 || true)
+    if [ -n "$TUNNEL_COURSE_WORKER_URL" ]; then
+      echo "✅ Go Course Worker Tunnel URL: $TUNNEL_COURSE_WORKER_URL"
+      break
+    fi
+    if [ $i -eq 30 ]; then
+      echo "⚠️ Go Course Worker tunnel took longer than 30 seconds to initialize:"
+      cat "$TUNNEL_CW_LOG" 2>/dev/null || true
+    fi
+    sleep 1
+  done
+  export COURSE_WORKER_URL="$TUNNEL_COURSE_WORKER_URL"
 fi
 
 # Pre-warm: open about:blank tab so CDP is ready

@@ -90,6 +90,7 @@ export interface BrowserPoolItem {
   vscodeUrl?: string;
   vscodePassword?: string;
   antigravityCli?: boolean;
+  courseWorkerUrl?: string;
   status: 'active' | 'stale' | 'dead';
   registeredAt: string;
   lastHeartbeat: string;

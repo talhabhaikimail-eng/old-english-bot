@@ -814,6 +814,7 @@ def worker_status():
         "vscodeUrl": vsc_info["url"],
         "vscodePassword": vsc_info["password"],
         "antigravityCli": is_agy,
+        "courseWorkerUrl": os.getenv("COURSE_WORKER_URL", "http://127.0.0.1:8085"),
     }
 
 

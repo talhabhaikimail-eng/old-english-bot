@@ -17,6 +17,7 @@ import (
 	"course-worker/extractor"
 	"course-worker/model"
 	"course-worker/packager"
+	"course-worker/uploader"
 )
 
 type Pipeline struct {
@@ -24,6 +25,7 @@ type Pipeline struct {
 	downloader *downloader.Downloader
 	extractor  *extractor.Extractor
 	packager   *packager.Packager
+	uploader   *uploader.DriveUploader
 }
 
 func NewPipeline(cfg *config.Config) *Pipeline {
@@ -32,6 +34,7 @@ func NewPipeline(cfg *config.Config) *Pipeline {
 		downloader: downloader.NewDownloader(cfg),
 		extractor:  extractor.NewExtractor(cfg),
 		packager:   packager.NewPackager(cfg),
+		uploader:   uploader.NewDriveUploader(cfg),
 	}
 }
 
@@ -268,7 +271,28 @@ func (p *Pipeline) Execute(
 	_ = os.RemoveAll(extractedDir)
 
 	// -------------------------------------------------------------
-	// STAGE 5: FINAL READY STATE
+	// STAGE 5: GOOGLE DRIVE UPLOAD & RECLAMATION
+	// -------------------------------------------------------------
+	shouldUpload := p.cfg.AutoUploadDrive || (req.Drive != nil && (req.Drive.AutoUpload == nil || *req.Drive.AutoUpload))
+	if shouldUpload {
+		state.Phase = model.PhaseUploading
+		state.Status = "uploading"
+		onUpdate()
+
+		log.Printf("☁️ [Job %s] Starting Stage 5: Uploading separated course files to Google Drive...", jobID)
+		uploadedFiles, folderID, err := p.uploader.UploadOutputDirectory(ctx, outputDir, req.GetTitle(), req.Drive, state, onUpdate)
+		if err != nil {
+			return fmt.Errorf("google drive upload stage failed: %w", err)
+		}
+		state.DriveFolderID = folderID
+		state.DriveFolderURL = fmt.Sprintf("https://drive.google.com/drive/folders/%s", folderID)
+		state.DriveFiles = uploadedFiles
+		log.Printf("🎉 [Job %s] Successfully uploaded %d file(s) to Google Drive folder %s",
+			jobID, len(uploadedFiles), folderID)
+	}
+
+	// -------------------------------------------------------------
+	// STAGE 6: FINAL READY STATE
 	// -------------------------------------------------------------
 	state.Phase = model.PhaseCompleted
 	state.Status = "completed"

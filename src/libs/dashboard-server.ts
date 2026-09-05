@@ -1693,7 +1693,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
       }
 
       const body = await parseJsonBody(req) as unknown as WebhookPayload;
-      const { event, workerId, cdpUrl, sbCdpUrl, seleniumCdpUrl, apiUrl, vscodeUrl, vscodePassword, antigravityCli, runId } = body;
+      const { event, workerId, cdpUrl, sbCdpUrl, seleniumCdpUrl, apiUrl, vscodeUrl, vscodePassword, antigravityCli, courseWorkerUrl, runId } = body;
 
       if (!event || !workerId) {
         return err(res, 'event and workerId are required', 400);
@@ -1702,9 +1702,13 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
       switch (event) {
         case 'register':
           if (!cdpUrl) return err(res, 'cdpUrl is required for register', 400);
-          browserPool.register(workerId, cdpUrl, runId, false, apiUrl, sbCdpUrl, seleniumCdpUrl, vscodeUrl, vscodePassword, antigravityCli);
+          browserPool.register(workerId, cdpUrl, runId, false, apiUrl, sbCdpUrl, seleniumCdpUrl, vscodeUrl, vscodePassword, antigravityCli, courseWorkerUrl);
           if (vscodeUrl) {
             registerUrl(`vscode-${workerId}`, `🔵 Web VS Code (${workerId})`, vscodeUrl, { password: vscodePassword });
+          }
+          if (courseWorkerUrl) {
+            registerUrl(`course-worker-${workerId}`, `⚡ Go Course Worker (${workerId})`, courseWorkerUrl);
+            registerUrl('course-worker', '⚡ Go Course Worker', courseWorkerUrl);
           }
           json(res, { ok: true, message: 'Registered', poolSize: browserPool.size });
           break;
@@ -1718,6 +1722,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
             vscodeUrl,
             vscodePassword,
             antigravityCli,
+            courseWorkerUrl,
           });
           if (!known) {
             // Worker not in pool — tell it to re-register
@@ -1726,6 +1731,10 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
           if (vscodeUrl) {
             registerUrl(`vscode-${workerId}`, `🔵 Web VS Code (${workerId})`, vscodeUrl, { password: vscodePassword });
           }
+          if (courseWorkerUrl) {
+            registerUrl(`course-worker-${workerId}`, `⚡ Go Course Worker (${workerId})`, courseWorkerUrl);
+            registerUrl('course-worker', '⚡ Go Course Worker', courseWorkerUrl);
+          }
           json(res, { ok: true });
           break;
         }
@@ -1733,6 +1742,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
         case 'deregister':
           browserPool.deregister(workerId);
           unregisterUrl(`vscode-${workerId}`);
+          unregisterUrl(`course-worker-${workerId}`);
           json(res, { ok: true, message: 'Removed', poolSize: browserPool.size });
           break;
 
@@ -1771,11 +1781,31 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
         vscodeUrl: b.vscodeUrl,
         vscodePassword: b.vscodePassword,
         antigravityCli: b.antigravityCli,
+        courseWorkerUrl: b.courseWorkerUrl,
         status: b.status,
         registeredAt: new Date(b.registeredAt).toISOString(),
         lastHeartbeat: new Date(b.lastHeartbeat).toISOString(),
         secondsSinceHeartbeat: Math.round((Date.now() - b.lastHeartbeat) / 1000),
         // isCached: isConnectionCached(b.workerId),
+      })),
+    });
+    return;
+  }
+
+  // ── GET /api/course-workers ─────────────────────────────────────────────
+  if (method === 'GET' && pathname === '/api/course-workers') {
+    const all = browserPool.getAll().filter(b => b.courseWorkerUrl);
+    const active = browserPool.getActive().filter(b => b.courseWorkerUrl);
+    json(res, {
+      total: all.length,
+      active: active.length,
+      workers: all.map(b => ({
+        workerId: b.workerId,
+        courseWorkerUrl: b.courseWorkerUrl,
+        apiUrl: b.apiUrl,
+        status: b.status,
+        registeredAt: new Date(b.registeredAt).toISOString(),
+        lastHeartbeat: new Date(b.lastHeartbeat).toISOString(),
       })),
     });
     return;
