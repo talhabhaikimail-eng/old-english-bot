@@ -61,3 +61,8 @@ dashboard/dist/
 
 *.deb
 cloudflared.deb
+
+# Runtime download caches and locks
+downloaded_files/
+worker_browser/course_worker/bin/
+

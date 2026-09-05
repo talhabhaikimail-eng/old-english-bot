@@ -129,6 +129,9 @@ func TestDriveConfigModel(t *testing.T) {
 }
 
 func TestDriveLiveUploadEndToEnd(t *testing.T) {
+	if testing.Short() || os.Getenv("LIVE_DRIVE_TEST") == "" {
+		t.Skip("skipping live Drive test (set LIVE_DRIVE_TEST=1 to run)")
+	}
 	cfg := config.LoadConfig()
 	if cfg.DatabaseURL == "" {
 		t.Skip("DATABASE_URL not set, skipping live Drive test")

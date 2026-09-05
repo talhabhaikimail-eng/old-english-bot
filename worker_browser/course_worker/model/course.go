@@ -2,7 +2,9 @@ package model
 
 import (
 	"fmt"
+	"net/url"
 	"path"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -157,10 +159,178 @@ type JobState struct {
 	DriveFolderID   string         `json:"driveFolderId,omitempty"`
 	DriveFolderURL  string         `json:"driveFolderUrl,omitempty"`
 	DriveFiles      []DriveFile    `json:"driveFiles,omitempty"`
+	Uploaded        bool           `json:"uploaded"`
 	OutputDir       string         `json:"outputDir,omitempty"`
 	WorkDir         string         `json:"workDir,omitempty"`
 	CreatedAt       time.Time      `json:"createdAt"`
 	UpdatedAt       time.Time      `json:"updatedAt"`
 	CompletedAt     *time.Time     `json:"completedAt,omitempty"`
 	Error           string         `json:"error,omitempty"`
+}
+
+// Clone creates a thread-safe deep copy of JobState for broadcasting.
+func (s *JobState) Clone() *JobState {
+	if s == nil {
+		return nil
+	}
+	cp := *s
+	if len(s.Parts) > 0 {
+		cp.Parts = make([]PartProgress, len(s.Parts))
+		copy(cp.Parts, s.Parts)
+	}
+	if len(s.VideoFiles) > 0 {
+		cp.VideoFiles = make([]FileInfo, len(s.VideoFiles))
+		copy(cp.VideoFiles, s.VideoFiles)
+	}
+	if len(s.MaterialZips) > 0 {
+		cp.MaterialZips = make([]FileInfo, len(s.MaterialZips))
+		copy(cp.MaterialZips, s.MaterialZips)
+	}
+	if len(s.DriveFiles) > 0 {
+		cp.DriveFiles = make([]DriveFile, len(s.DriveFiles))
+		copy(cp.DriveFiles, s.DriveFiles)
+	}
+	return &cp
+}
+
+// ProcessRequest provides a highly simplified, universal request schema.
+// Clients can pass pure URLs, single URL, or full configurations.
+type ProcessRequest struct {
+	URLs           []string           `json:"urls,omitempty"`
+	URL            string             `json:"url,omitempty"`
+	Title          string             `json:"title,omitempty"`
+	CourseName     string             `json:"courseName,omitempty"`
+	Slug           string             `json:"slug,omitempty"`
+	Password       string             `json:"password,omitempty"`
+	FilePassword   string             `json:"filePassword,omitempty"`
+	Upload         *bool              `json:"upload,omitempty"`
+	Sync           bool               `json:"sync,omitempty"`
+	Stream         bool               `json:"stream,omitempty"`
+	ParentFolderId string             `json:"parentFolderId,omitempty"`
+	AccessToken    string             `json:"accessToken,omitempty"`
+	Drive          *DriveUploadConfig `json:"drive,omitempty"`
+}
+
+func (r *ProcessRequest) CollectURLs() []string {
+	var list []string
+	if r.URL != "" {
+		trimmed := strings.TrimSpace(r.URL)
+		if trimmed != "" {
+			list = append(list, trimmed)
+		}
+	}
+	for _, u := range r.URLs {
+		trimmed := strings.TrimSpace(u)
+		if trimmed != "" {
+			list = append(list, trimmed)
+		}
+	}
+	return list
+}
+
+// DeduceTitleFromURLs extracts a human-friendly course name from archive URLs if title is omitted.
+func DeduceTitleFromURLs(urls []string) string {
+	if len(urls) == 0 {
+		return "Course"
+	}
+	first := urls[0]
+	parsed, err := url.Parse(first)
+	raw := first
+	if err == nil && parsed.Path != "" {
+		raw = path.Base(parsed.Path)
+	} else {
+		raw = path.Base(first)
+	}
+
+	rePart := regexp.MustCompile(`(?i)\.part\d+(_[a-z0-9\._-]+)?\.rar$`)
+	cleaned := rePart.ReplaceAllString(raw, "")
+
+	reExt := regexp.MustCompile(`(?i)\.(rar|zip|7z|tar\.gz|tar)$`)
+	cleaned = reExt.ReplaceAllString(cleaned, "")
+
+	cleaned = strings.ReplaceAll(cleaned, "_Downloadly.ir", "")
+	cleaned = strings.ReplaceAll(cleaned, ".Downloadly.ir", "")
+	cleaned = strings.ReplaceAll(cleaned, "Downloadly.ir", "")
+	cleaned = strings.ReplaceAll(cleaned, "_", " ")
+	cleaned = strings.ReplaceAll(cleaned, ".", " ")
+	cleaned = strings.TrimSpace(cleaned)
+
+	if cleaned == "" {
+		return fmt.Sprintf("Course_%d", time.Now().Unix())
+	}
+	return cleaned
+}
+
+// ToCoursePayload translates the simplified ProcessRequest into the engine's CoursePayload.
+func (r *ProcessRequest) ToCoursePayload(autoUploadDrive bool) (*CoursePayload, error) {
+	urls := r.CollectURLs()
+	if len(urls) == 0 {
+		return nil, fmt.Errorf("no download URLs provided in request")
+	}
+
+	title := strings.TrimSpace(r.Title)
+	if title == "" {
+		title = strings.TrimSpace(r.CourseName)
+	}
+	if title == "" {
+		title = DeduceTitleFromURLs(urls)
+	}
+
+	pwd := strings.TrimSpace(r.Password)
+	if pwd == "" {
+		pwd = strings.TrimSpace(r.FilePassword)
+	}
+	if pwd == "" {
+		pwd = "www.downloadly.ir"
+	}
+
+	var links []DownloadLink
+	for i, u := range urls {
+		fname := path.Base(u)
+		if parsed, err := url.Parse(u); err == nil && parsed.Path != "" {
+			fname = path.Base(parsed.Path)
+		}
+		links = append(links, DownloadLink{
+			URL:  u,
+			Part: i + 1,
+			Text: fname,
+		})
+	}
+
+	shouldUpload := autoUploadDrive
+	if r.Upload != nil {
+		shouldUpload = *r.Upload
+	}
+
+	driveCfg := r.Drive
+	if driveCfg == nil && (shouldUpload || r.AccessToken != "" || r.ParentFolderId != "") {
+		driveCfg = &DriveUploadConfig{
+			AccessToken:    r.AccessToken,
+			ParentFolderId: r.ParentFolderId,
+			AutoUpload:     &shouldUpload,
+		}
+	} else if driveCfg != nil {
+		if r.AccessToken != "" && driveCfg.AccessToken == "" {
+			driveCfg.AccessToken = r.AccessToken
+		}
+		if r.ParentFolderId != "" && driveCfg.ParentFolderId == "" {
+			driveCfg.ParentFolderId = r.ParentFolderId
+		}
+		if driveCfg.AutoUpload == nil {
+			driveCfg.AutoUpload = &shouldUpload
+		}
+	}
+
+	payload := &CoursePayload{
+		Title:         title,
+		CourseName:    title,
+		Slug:          r.Slug,
+		FilePassword:  pwd,
+		Password:      pwd,
+		ArchiveURLs:   urls,
+		DownloadLinks: links,
+		Drive:         driveCfg,
+	}
+
+	return payload, nil
 }

@@ -290,6 +290,8 @@ func (p *Pipeline) Execute(
 		state.DriveFolderID = folderID
 		state.DriveFolderURL = fmt.Sprintf("https://drive.google.com/drive/folders/%s", folderID)
 		state.DriveFiles = uploadedFiles
+		state.Uploaded = true
+		onUpdate()
 		log.Printf("🎉 [Job %s] Successfully uploaded %d file(s) to Google Drive folder %s",
 			jobID, len(uploadedFiles), folderID)
 	}

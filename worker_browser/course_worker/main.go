@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -46,6 +47,16 @@ func main() {
 			}
 		} else if arg == "serve" {
 			mode = "serve"
+		} else if (arg == "--port" || arg == "-port" || arg == "-p") && i+1 < len(os.Args) {
+			if p, err := strconv.Atoi(os.Args[i+1]); err == nil {
+				port = p
+			}
+			i++
+		} else if (arg == "--concurrency" || arg == "-concurrency" || arg == "-c") && i+1 < len(os.Args) {
+			if c, err := strconv.Atoi(os.Args[i+1]); err == nil {
+				concurJobs = c
+			}
+			i++
 		} else if (arg == "--input" || arg == "-input" || arg == "-i") && i+1 < len(os.Args) {
 			inputFile = os.Args[i+1]
 			mode = "run"
@@ -85,7 +96,7 @@ func runHTTPServer(cfg *config.Config) {
 
 	httpServer := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.HTTPPort),
-		Handler:      mux,
+		Handler:      srv.WithCORS(mux),
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 60 * time.Second,
 	}
