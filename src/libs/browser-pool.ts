@@ -35,7 +35,14 @@ export interface RemoteBrowser {
   vscodeUrl?: string;      // https://xxx.trycloudflare.com  (proxies Web VS Code :8088)
   vscodePassword?: string; // Generated session password for Web VS Code
   antigravityCli?: boolean;// True if Antigravity CLI (agy) is available on the worker
+  antigravityAuth?: boolean;// True if Antigravity CLI OAuth token is configured on the worker
   courseWorkerUrl?: string;// https://xxx.trycloudflare.com  (proxies Go Course Worker :8085)
+  shellWsUrl?: string;     // wss://xxx.trycloudflare.com/ws/shell (Interactive PTY terminal WebSocket)
+  sshUrl?: string;         // tcp://xxx.trycloudflare.com:port (OpenSSH Cloudflare tunnel)
+  sshPort?: number;        // SSH port (default 2222)
+  sshUser?: string;        // SSH username (e.g. runner)
+  sshPassword?: string;    // SSH session password
+  sshCommand?: string;     // One-click connection string (e.g. ssh -p 2222 runner@host)
   registeredAt: number;    // Date.now() ms
   lastHeartbeat: number;   // Date.now() ms — updated on every heartbeat
   status: 'active' | 'stale' | 'dead';
@@ -57,7 +64,14 @@ export interface WebhookPayload {
   vscodeUrl?: string;
   vscodePassword?: string;
   antigravityCli?: boolean;
+  antigravityAuth?: boolean;
   courseWorkerUrl?: string;
+  shellWsUrl?: string;
+  sshUrl?: string;
+  sshPort?: number;
+  sshUser?: string;
+  sshPassword?: string;
+  sshCommand?: string;
   runId?: string;
   timestamp: string;       // ISO-8601
 }
@@ -102,11 +116,20 @@ class BrowserPool {
     vscodeUrl?: string,
     vscodePassword?: string,
     antigravityCli?: boolean,
-    courseWorkerUrl?: string
+    courseWorkerUrl?: string,
+    shellWsUrl?: string,
+    sshUrl?: string,
+    sshPort?: number,
+    sshUser?: string,
+    sshPassword?: string,
+    sshCommand?: string,
+    antigravityAuth?: boolean
   ): void {
     const now = Date.now();
     const existing = this.browsers.get(workerId);
     const resolvedSbCdpUrl = sbCdpUrl || seleniumCdpUrl;
+    const resolvedShellWs = shellWsUrl || (apiUrl ? apiUrl.replace(/^http/i, 'ws') + '/ws/shell' : undefined);
+
     let browserEntry: RemoteBrowser;
     if (existing) {
       existing.cdpUrl = cdpUrl;
@@ -118,7 +141,14 @@ class BrowserPool {
       if (vscodeUrl) existing.vscodeUrl = vscodeUrl;
       if (vscodePassword) existing.vscodePassword = vscodePassword;
       if (antigravityCli !== undefined) existing.antigravityCli = antigravityCli;
+      if (antigravityAuth !== undefined) existing.antigravityAuth = antigravityAuth;
       if (courseWorkerUrl) existing.courseWorkerUrl = courseWorkerUrl;
+      if (resolvedShellWs) existing.shellWsUrl = resolvedShellWs;
+      if (sshUrl) existing.sshUrl = sshUrl;
+      if (sshPort) existing.sshPort = sshPort;
+      if (sshUser) existing.sshUser = sshUser;
+      if (sshPassword) existing.sshPassword = sshPassword;
+      if (sshCommand) existing.sshCommand = sshCommand;
       existing.lastHeartbeat = now;
       existing.status = 'active';
       if (runId) existing.runId = runId;
@@ -133,7 +163,14 @@ class BrowserPool {
         vscodeUrl,
         vscodePassword,
         antigravityCli,
+        antigravityAuth,
         courseWorkerUrl,
+        shellWsUrl: resolvedShellWs,
+        sshUrl,
+        sshPort: sshPort || 2222,
+        sshUser: sshUser || 'runner',
+        sshPassword,
+        sshCommand,
         registeredAt: now,
         lastHeartbeat: now,
         status: 'active',
@@ -166,7 +203,14 @@ class BrowserPool {
       vscodeUrl?: string;
       vscodePassword?: string;
       antigravityCli?: boolean;
+      antigravityAuth?: boolean;
       courseWorkerUrl?: string;
+      shellWsUrl?: string;
+      sshUrl?: string;
+      sshPort?: number;
+      sshUser?: string;
+      sshPassword?: string;
+      sshCommand?: string;
     }
   ): boolean {
     const entry = this.browsers.get(workerId);
@@ -185,10 +229,22 @@ class BrowserPool {
       if (extra.vscodeUrl) entry.vscodeUrl = extra.vscodeUrl;
       if (extra.vscodePassword) entry.vscodePassword = extra.vscodePassword;
       if (extra.antigravityCli !== undefined) entry.antigravityCli = extra.antigravityCli;
+      if (extra.antigravityAuth !== undefined) entry.antigravityAuth = extra.antigravityAuth;
       if (extra.courseWorkerUrl) entry.courseWorkerUrl = extra.courseWorkerUrl;
+      if (extra.shellWsUrl) {
+        entry.shellWsUrl = extra.shellWsUrl;
+      } else if (extra.apiUrl && !entry.shellWsUrl) {
+        entry.shellWsUrl = extra.apiUrl.replace(/^http/i, 'ws') + '/ws/shell';
+      }
+      if (extra.sshUrl) entry.sshUrl = extra.sshUrl;
+      if (extra.sshPort) entry.sshPort = extra.sshPort;
+      if (extra.sshUser) entry.sshUser = extra.sshUser;
+      if (extra.sshPassword) entry.sshPassword = extra.sshPassword;
+      if (extra.sshCommand) entry.sshCommand = extra.sshCommand;
     }
     return true;
   }
+
 
   /** Explicitly remove a worker. */
   deregister(workerId: string): void {

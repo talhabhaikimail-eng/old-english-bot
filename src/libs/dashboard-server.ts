@@ -23,6 +23,7 @@
  */
 
 import { createServer, IncomingMessage, ServerResponse } from 'http';
+import { WebSocketServer, WebSocket as WebSocketClient } from 'ws';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, promises as fsPromises } from 'fs';
 import { join } from 'path';
 import { spawn, ChildProcess } from 'child_process';
@@ -67,6 +68,70 @@ const webProxy = new Corrosion({
   prefix: '/api/web-proxy/',
   codec: 'base64',
 });
+
+// ── Worker Shell WebSocket Relay ─────────────────────────────────────────────
+
+const workerShellWss = new WebSocketServer({ noServer: true });
+
+function handleWorkerShellConnection(clientWs: any, req: IncomingMessage) {
+  try {
+    const parsedUrl = new URL(req.url || '/', 'http://localhost');
+    const workerId = parsedUrl.searchParams.get('workerId');
+    const token = parsedUrl.searchParams.get('token') || parsedUrl.searchParams.get('secret') || process.env.WORKER_API_SECRET || '';
+
+    const allWorkers = browserPool.getAll();
+    const targetWorker = workerId && workerId !== 'auto' && workerId !== 'default'
+      ? allWorkers.find(w => w.workerId === workerId)
+      : (browserPool.getActive().find(w => w.apiUrl) || allWorkers.find(w => w.apiUrl));
+
+    if (!targetWorker || !targetWorker.apiUrl) {
+      clientWs.send('\r\n\x1b[1;31m[ERROR] Worker not found or has no active API URL registered in browser pool.\x1b[0m\r\n');
+      clientWs.close(1008, 'Worker unavailable');
+      return;
+    }
+
+    const workerApiWsBase = targetWorker.apiUrl.replace(/^http:/i, 'ws:').replace(/^https:/i, 'wss:');
+    const targetWsUrl = `${workerApiWsBase}/ws/shell${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+
+    const upstreamWs = new WebSocketClient(targetWsUrl, {
+      handshakeTimeout: 10000,
+    });
+
+    upstreamWs.on('open', () => {
+      clientWs.on('message', (data: any, isBinary: boolean) => {
+        if (upstreamWs.readyState === WebSocketClient.OPEN) {
+          upstreamWs.send(data, { binary: isBinary });
+        }
+      });
+      upstreamWs.on('message', (data: any, isBinary: boolean) => {
+        if (clientWs.readyState === clientWs.OPEN) {
+          clientWs.send(data, { binary: isBinary });
+        }
+      });
+    });
+
+    upstreamWs.on('error', (err: any) => {
+      try {
+        clientWs.send(`\r\n\x1b[1;31m[ERROR] Connection to worker ${targetWorker?.workerId} shell failed: ${err.message}\x1b[0m\r\n`);
+        clientWs.close();
+      } catch {}
+    });
+
+    upstreamWs.on('close', () => {
+      try { clientWs.close(); } catch {}
+    });
+
+    clientWs.on('close', () => {
+      try { upstreamWs.close(); } catch {}
+    });
+
+  } catch (err: any) {
+    try {
+      clientWs.send(`\r\n\x1b[1;31m[ERROR] Worker shell relay error: ${err.message}\x1b[0m\r\n`);
+      clientWs.close();
+    } catch {}
+  }
+}
 
 // ── URL Registry ─────────────────────────────────────────────────────────────
 
@@ -742,6 +807,16 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
         sbCdpUrl: b.sbCdpUrl || b.seleniumCdpUrl,
         seleniumCdpUrl: b.seleniumCdpUrl || b.sbCdpUrl,
         apiUrl: b.apiUrl,
+        vscodeUrl: b.vscodeUrl,
+        vscodePassword: b.vscodePassword,
+        antigravityCli: b.antigravityCli,
+        courseWorkerUrl: b.courseWorkerUrl,
+        shellWsUrl: b.shellWsUrl,
+        sshUrl: b.sshUrl,
+        sshPort: b.sshPort,
+        sshUser: b.sshUser,
+        sshPassword: b.sshPassword,
+        sshCommand: b.sshCommand,
         status: b.status,
         registeredAt: new Date(b.registeredAt).toISOString(),
         lastHeartbeat: new Date(b.lastHeartbeat).toISOString(),
@@ -1703,7 +1778,12 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
       }
 
       const body = await parseJsonBody(req) as unknown as WebhookPayload;
-      const { event, workerId, cdpUrl, sbCdpUrl, seleniumCdpUrl, apiUrl, vscodeUrl, vscodePassword, antigravityCli, courseWorkerUrl, runId } = body;
+      const {
+        event, workerId, cdpUrl, sbCdpUrl, seleniumCdpUrl, apiUrl,
+        vscodeUrl, vscodePassword, antigravityCli, antigravityAuth, courseWorkerUrl,
+        shellWsUrl, sshUrl, sshPort, sshUser, sshPassword, sshCommand,
+        runId
+      } = body;
 
       if (!event || !workerId) {
         return err(res, 'event and workerId are required', 400);
@@ -1712,13 +1792,24 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
       switch (event) {
         case 'register':
           if (!cdpUrl) return err(res, 'cdpUrl is required for register', 400);
-          browserPool.register(workerId, cdpUrl, runId, false, apiUrl, sbCdpUrl, seleniumCdpUrl, vscodeUrl, vscodePassword, antigravityCli, courseWorkerUrl);
+          browserPool.register(
+            workerId, cdpUrl, runId, false, apiUrl, sbCdpUrl, seleniumCdpUrl,
+            vscodeUrl, vscodePassword, antigravityCli, courseWorkerUrl,
+            shellWsUrl, sshUrl, sshPort, sshUser, sshPassword, sshCommand,
+            antigravityAuth
+          );
           if (vscodeUrl) {
             registerUrl(`vscode-${workerId}`, `🔵 Web VS Code (${workerId})`, vscodeUrl, { password: vscodePassword });
           }
           if (courseWorkerUrl) {
             registerUrl(`course-worker-${workerId}`, `⚡ Go Course Worker (${workerId})`, courseWorkerUrl);
             registerUrl('course-worker', '⚡ Go Course Worker', courseWorkerUrl);
+          }
+          if (sshCommand || sshUrl) {
+            registerUrl(`ssh-${workerId}`, `💻 SSH Shell (${workerId})`, sshUrl || `ssh://localhost:${sshPort || 2222}`, {
+              username: sshUser,
+              password: sshPassword,
+            });
           }
           json(res, { ok: true, message: 'Registered', poolSize: browserPool.size });
           break;
@@ -1732,7 +1823,14 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
             vscodeUrl,
             vscodePassword,
             antigravityCli,
+            antigravityAuth,
             courseWorkerUrl,
+            shellWsUrl,
+            sshUrl,
+            sshPort,
+            sshUser,
+            sshPassword,
+            sshCommand,
           });
           if (!known) {
             // Worker not in pool — tell it to re-register
@@ -1745,6 +1843,12 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
             registerUrl(`course-worker-${workerId}`, `⚡ Go Course Worker (${workerId})`, courseWorkerUrl);
             registerUrl('course-worker', '⚡ Go Course Worker', courseWorkerUrl);
           }
+          if (sshCommand || sshUrl) {
+            registerUrl(`ssh-${workerId}`, `💻 SSH Shell (${workerId})`, sshUrl || `ssh://localhost:${sshPort || 2222}`, {
+              username: sshUser,
+              password: sshPassword,
+            });
+          }
           json(res, { ok: true });
           break;
         }
@@ -1753,6 +1857,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
           browserPool.deregister(workerId);
           unregisterUrl(`vscode-${workerId}`);
           unregisterUrl(`course-worker-${workerId}`);
+          unregisterUrl(`ssh-${workerId}`);
           json(res, { ok: true, message: 'Removed', poolSize: browserPool.size });
           break;
 
@@ -1792,6 +1897,12 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
         vscodePassword: b.vscodePassword,
         antigravityCli: b.antigravityCli,
         courseWorkerUrl: b.courseWorkerUrl,
+        shellWsUrl: b.shellWsUrl,
+        sshUrl: b.sshUrl,
+        sshPort: b.sshPort,
+        sshUser: b.sshUser,
+        sshPassword: b.sshPassword,
+        sshCommand: b.sshCommand,
         status: b.status,
         registeredAt: new Date(b.registeredAt).toISOString(),
         lastHeartbeat: new Date(b.lastHeartbeat).toISOString(),
@@ -2972,7 +3083,13 @@ export function startLocalServer(port = 4000): Promise<string> {
       });
     });
     server.on('upgrade', (req: any, socket: any, head: any) => {
-      if (req.url.startsWith('/api/web-proxy/')) {
+      if (req.url && (req.url.startsWith('/api/workers/ws/shell') || req.url.startsWith('/ws/worker-shell'))) {
+        workerShellWss.handleUpgrade(req, socket, head, (clientWs) => {
+          handleWorkerShellConnection(clientWs, req);
+        });
+        return;
+      }
+      if (req.url && req.url.startsWith('/api/web-proxy/')) {
         webProxy.upgrade(req, socket, head);
       }
     });

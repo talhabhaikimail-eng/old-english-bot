@@ -7,4 +7,5 @@ httpx
 cryptography
 psutil
 requests
+websockets>=12.0
 

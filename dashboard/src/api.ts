@@ -90,7 +90,14 @@ export interface BrowserPoolItem {
   vscodeUrl?: string;
   vscodePassword?: string;
   antigravityCli?: boolean;
+  antigravityAuth?: boolean;
   courseWorkerUrl?: string;
+  shellWsUrl?: string;
+  sshUrl?: string;
+  sshPort?: number;
+  sshUser?: string;
+  sshPassword?: string;
+  sshCommand?: string;
   status: 'active' | 'stale' | 'dead';
   registeredAt: string;
   lastHeartbeat: string;
@@ -439,6 +446,16 @@ export const api = {
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       return r.json() as Promise<BrowserPoolPayload>;
     }),
+  getWorkerShellWsUrl: (workerId?: string, directUrl?: string): string => {
+    if (directUrl && (directUrl.startsWith('http://') || directUrl.startsWith('https://') || directUrl.startsWith('ws://') || directUrl.startsWith('wss://'))) {
+      return directUrl.replace(/^http:/i, 'ws:').replace(/^https:/i, 'wss:');
+    }
+    const loc = window.location;
+    const proto = loc.protocol === 'https:' ? 'wss:' : 'ws:';
+    const host = loc.host;
+    const query = workerId ? `?workerId=${encodeURIComponent(workerId)}` : '';
+    return `${proto}//${host}/api/workers/ws/shell${query}`;
+  },
   placesSearch: (query: string, pageNumber = 1, deepScrape = false) =>
     post<PlacesSearchResult>('/api/browser/places', { query, pageNumber, deepScrape }),
 

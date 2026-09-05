@@ -28,6 +28,7 @@ const BlogGenPanel = React.lazy(() => import('./components/BlogGenPanel'));
 const CodeExecPanel = React.lazy(() => import('./components/CodeExecPanel'));
 const ProxyPanel = React.lazy(() => import('./components/ProxyPanel'));
 const CourseWorkerPanel = React.lazy(() => import('./components/CourseWorkerPanel'));
+const WorkerShellPanel = React.lazy(() => import('./components/WorkerShellPanel'));
 
 interface NavItem {
   id: NavSection;
@@ -67,6 +68,7 @@ const NAV_CATEGORIES: NavCategory[] = [
     items: [
       { id: 'sessions',  label: 'Dev Sessions',   icon: '🖥️' },
       { id: 'manager',   label: 'Session Manager', icon: '📊' },
+      { id: 'shell',     label: 'Worker Shells (WebSSH)', icon: '💻' },
       { id: 'code-exec', label: 'Code Executor (Runner)', icon: '💻' },
       { id: 'proxy-net', label: 'HTTP Network Proxy', icon: '📡' },
       { id: 'android',   label: 'Android',        icon: '📱' },
@@ -96,10 +98,11 @@ export default function App() {
   const getInitialSection = (): NavSection => {
     const hash = window.location.hash.replace(/^#\/?/, '');
     const path = window.location.pathname.replace(/^\//, '');
-    const current = hash || path;
+    const raw = hash || path;
+    const current = raw.split('?')[0];
     const validSections: NavSection[] = [
       'google', 'web-proxy', 'search', 'places', 'pool', 'indeed', 'contacts', 
-      'sessions', 'manager', 'code-exec', 'proxy-net', 'android', 'urls', 'go-containers', 
+      'sessions', 'manager', 'shell', 'code-exec', 'proxy-net', 'android', 'urls', 'go-containers', 
       'ai-tools', 'media', 'youtube', 'movies', 'llm', 'tts', 'blog-gen', 'courses'
     ];
 
@@ -112,6 +115,22 @@ export default function App() {
   const [section, setSection] = React.useState<NavSection>(getInitialSection());
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+
+  React.useEffect(() => {
+    const onHashChange = () => {
+      const hash = window.location.hash.replace(/^#\/?/, '').split('?')[0];
+      const validSections: NavSection[] = [
+        'google', 'web-proxy', 'search', 'places', 'pool', 'indeed', 'contacts', 
+        'sessions', 'manager', 'shell', 'code-exec', 'proxy-net', 'android', 'urls', 'go-containers', 
+        'ai-tools', 'media', 'youtube', 'movies', 'llm', 'tts', 'blog-gen', 'courses'
+      ];
+      if (validSections.includes(hash as NavSection)) {
+        setSection(hash as NavSection);
+      }
+    };
+    window.addEventListener('hashchange', onHashChange);
+    return () => window.removeEventListener('hashchange', onHashChange);
+  }, []);
 
   const filteredCategories = NAV_CATEGORIES.map(category => {
     const filteredItems = category.items.filter(item =>
@@ -582,6 +601,7 @@ export default function App() {
                   {section === 'search' && <SearchPanel />}
                   {section === 'places' && <PlacesPanel />}
                   {section === 'pool' && <PoolPanel />}
+                  {section === 'shell' && <WorkerShellPanel />}
                   {section === 'tts' && <TTSPanel />}
                   {section === 'web-proxy' && <WebProxyPanel />}
                   {section === 'go-containers' && <BetaGoContainerPanel />}

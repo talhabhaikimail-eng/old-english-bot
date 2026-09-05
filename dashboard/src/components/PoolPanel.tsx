@@ -15,8 +15,18 @@ export default function PoolPanel() {
   const [restarting, setRestarting] = useState(false);
   const [restartMsg, setRestartMsg] = useState('');
   const [showPasswordMap, setShowPasswordMap] = useState<Record<string, boolean>>({});
+  const [showSshMap, setShowSshMap] = useState<Record<string, boolean>>({});
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
+
+  const handleOpenShell = (workerId: string, inNewTab = false) => {
+    const targetUrl = `${window.location.pathname}#shell?workerId=${encodeURIComponent(workerId)}`;
+    if (inNewTab) {
+      window.open(targetUrl, '_blank');
+    } else {
+      window.location.hash = `#shell?workerId=${encodeURIComponent(workerId)}`;
+    }
+  };
 
   const fetchPool = async () => {
     try {
@@ -183,6 +193,15 @@ export default function PoolPanel() {
             </div>
           )}
           <Button
+            onClick={() => { window.location.hash = '#shell'; }}
+            variant="outline"
+            size="sm"
+            className="font-mono text-xs uppercase font-bold text-sky-400 border-sky-800 hover:bg-sky-950/60"
+            title="Open interactive multi-worker shell console"
+          >
+            💻 SHELL CONSOLE
+          </Button>
+          <Button
             onClick={handleRestart}
             disabled={restarting}
             variant="outline"
@@ -308,12 +327,100 @@ export default function PoolPanel() {
                             >
                               ⚡ CONNECT TO VS CODE ↗
                             </Button>
+
+                            {/* Live WebSocket Shell Button */}
+                            <div className="flex gap-1.5 pt-1">
+                              <Button
+                                onClick={() => handleOpenShell(b.workerId, false)}
+                                size="sm"
+                                className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold font-mono tracking-wider h-7"
+                                title="Open live interactive WebSocket PTY shell"
+                              >
+                                ⚡ OPEN SHELL
+                              </Button>
+                              <Button
+                                onClick={() => handleOpenShell(b.workerId, true)}
+                                size="sm"
+                                variant="outline"
+                                className="border-emerald-800 text-emerald-400 hover:bg-emerald-950/50 text-xs font-mono h-7 px-2"
+                                title="Open shell in full page new tab"
+                              >
+                                ↗ NEW TAB
+                              </Button>
+                            </div>
+
+                            {/* SSH Connection Box */}
+                            {(b.sshCommand || b.sshPort) && (
+                              <div className="bg-secondary/80 border border-border p-2 rounded-sm space-y-1 mt-1 text-[11px]">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-[9px] font-bold uppercase text-muted-foreground">
+                                    SSH: {b.sshUser || 'runner'} (:{b.sshPort || 2222})
+                                  </span>
+                                  <Button
+                                    variant="ghost"
+                                    size="xs"
+                                    onClick={() => handleCopy(b.sshCommand || `ssh -p ${b.sshPort || 2222} ${b.sshUser || 'runner'}@localhost`, `ssh-${b.workerId}`, 'SSH Command copied!')}
+                                    className="text-[10px] h-auto p-0.5 text-sky-400 hover:text-sky-300"
+                                  >
+                                    {copiedKey === `ssh-${b.workerId}` ? 'COPIED' : 'COPY CMD'}
+                                  </Button>
+                                </div>
+                                <code className="block text-[10px] text-foreground font-mono truncate select-all">
+                                  {b.sshCommand || `ssh -p ${b.sshPort || 2222} ${b.sshUser || 'runner'}@localhost`}
+                                </code>
+                                {b.sshPassword && (
+                                  <div className="flex items-center justify-between pt-0.5 text-[10px]">
+                                    <span className="text-muted-foreground font-mono">
+                                      PWD: {showSshMap[b.workerId] ? b.sshPassword : '••••••••'}
+                                    </span>
+                                    <div className="flex gap-1">
+                                      <button
+                                        onClick={() => setShowSshMap(prev => ({ ...prev, [b.workerId]: !prev[b.workerId] }))}
+                                        className="text-[9px] text-muted-foreground hover:text-foreground"
+                                      >
+                                        {showSshMap[b.workerId] ? 'HIDE' : 'SHOW'}
+                                      </button>
+                                      <button
+                                        onClick={() => handleCopy(b.sshPassword!, `sshpwd-${b.workerId}`, 'SSH Password copied!')}
+                                        className="text-[9px] text-sky-400 hover:underline"
+                                      >
+                                        {copiedKey === `sshpwd-${b.workerId}` ? 'COPIED' : 'COPY'}
+                                      </button>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            )}
                           </div>
                         ) : (
-                          <div className="flex flex-col gap-1 text-muted-foreground text-xs py-1">
-                            <span className="text-[10px] uppercase tracking-wider">VS Code initializing...</span>
+                          <div className="flex flex-col gap-2 py-1">
+                            <div className="flex gap-1.5">
+                              <Button
+                                onClick={() => handleOpenShell(b.workerId, false)}
+                                size="sm"
+                                className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold font-mono tracking-wider h-7"
+                              >
+                                ⚡ OPEN SHELL
+                              </Button>
+                              <Button
+                                onClick={() => handleOpenShell(b.workerId, true)}
+                                size="sm"
+                                variant="outline"
+                                className="border-emerald-800 text-emerald-400 hover:bg-emerald-950/50 text-xs font-mono h-7 px-2"
+                              >
+                                ↗
+                              </Button>
+                            </div>
+                            <span className="text-[10px] uppercase tracking-wider text-muted-foreground">VS Code initializing...</span>
                             {b.antigravityCli && (
-                              <span className="text-[9px] text-emerald-400">⚡ AGY CLI Ready</span>
+                              <span className="text-[9px] text-emerald-400 flex items-center gap-1">
+                                <span>⚡ AGY CLI Ready</span>
+                                {b.antigravityAuth && (
+                                  <span className="text-[8px] bg-emerald-950/80 text-emerald-300 border border-emerald-700 px-1 rounded">
+                                    AUTH
+                                  </span>
+                                )}
+                              </span>
                             )}
                           </div>
                         )}

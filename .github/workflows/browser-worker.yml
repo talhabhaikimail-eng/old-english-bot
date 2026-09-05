@@ -184,6 +184,21 @@ jobs:
           done
           command -v agy || echo "Antigravity CLI installed in user path"
 
+          if [ -f .env ]; then
+            set -a
+            source .env
+            set +a
+          fi
+
+          if [ -n "${ANTIGRAVITY_CLI_OAUTH_JSON:-}" ]; then
+            echo "🔑 Configuring Antigravity CLI OAuth token from .env..."
+            mkdir -p "$HOME/.gemini/antigravity-cli"
+            echo "$ANTIGRAVITY_CLI_OAUTH_JSON" > "$HOME/.gemini/antigravity-cli/antigravity-oauth-token"
+            chmod 600 "$HOME/.gemini/antigravity-cli/antigravity-oauth-token"
+            echo "ANTIGRAVITY_CLI_OAUTH_JSON=$ANTIGRAVITY_CLI_OAUTH_JSON" >> $GITHUB_ENV
+            echo "✅ Antigravity CLI configured from .env"
+          fi
+
       - name: Run browser worker
         run: |
           set -a

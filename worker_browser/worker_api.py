@@ -1,5 +1,6 @@
-from typing import Dict, Optional, List
-from fastapi import FastAPI, HTTPException, Response, Request
+from typing import Dict, Optional, List, Any, Set
+from collections import deque
+from fastapi import FastAPI, HTTPException, Response, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 from seleniumbase import SB
@@ -7,13 +8,24 @@ import uvicorn
 import random
 import tempfile
 import os
+import sys
+import signal
 import asyncio
 import subprocess
 import time
 import json
 import shutil
+import struct
 from datetime import datetime, timezone
 import httpx
+
+try:
+    import pty
+    import termios
+    import fcntl
+    HAS_PTY = True
+except ImportError:
+    HAS_PTY = False
 
 from course_worker import (
     course_manager,
@@ -788,20 +800,153 @@ def get_vscode_state() -> Dict[str, Optional[str]]:
     }
 
 
+def get_ssh_state() -> Dict[str, Any]:
+    """
+    Retrieves dynamically configured OpenSSH daemon connection parameters.
+    Reads from /tmp/ssh-info.json (or /tmp/ssh_info.json) written by browser-worker runner,
+    discrete temp files, or environment variables.
+    """
+    port = int(os.getenv("SSH_PORT", "2222"))
+    user = os.getenv("SSH_USER", os.getenv("USER", "runner"))
+    password = os.getenv("SSH_PASSWORD")
+    url = os.getenv("SSH_URL")
+    command = os.getenv("SSH_COMMAND")
+
+    for info_file in ("/tmp/ssh-info.json", "/tmp/ssh_info.json"):
+        if os.path.exists(info_file):
+            try:
+                with open(info_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if isinstance(data, dict):
+                        if data.get("port"):
+                            port = int(data["port"])
+                        user = data.get("user") or user
+                        password = data.get("password") or password
+                        url = data.get("url") or url
+                        command = data.get("command") or command
+                        break
+            except Exception:
+                pass
+
+    if not password and os.path.exists("/tmp/ssh_password"):
+        try:
+            with open("/tmp/ssh_password", "r", encoding="utf-8") as f:
+                val = f.read().strip()
+                if val:
+                    password = val
+        except Exception:
+            pass
+
+    if not url and os.path.exists("/tmp/ssh_url"):
+        try:
+            with open("/tmp/ssh_url", "r", encoding="utf-8") as f:
+                val = f.read().strip()
+                if val:
+                    url = val
+        except Exception:
+            pass
+
+    if not command:
+        if url:
+            clean_host = url.replace("tcp://", "").replace("https://", "").replace("http://", "").rstrip("/")
+            if ":" in clean_host:
+                h_parts = clean_host.split(":")
+                command = f"ssh -p {h_parts[1]} {user}@{h_parts[0]}"
+            else:
+                command = f"ssh -p {port} {user}@{clean_host}"
+        else:
+            command = f"ssh -p {port} {user}@localhost"
+
+    return {
+        "port": port,
+        "user": user,
+        "password": password,
+        "url": url,
+        "command": command
+    }
+
+
+def check_antigravity_token_configured() -> bool:
+    """Checks if Antigravity CLI OAuth token is configured on the worker filesystem."""
+    candidates = [
+        os.path.expanduser("~/.gemini/antigravity-cli/antigravity-oauth-token"),
+        "/home/runner/.gemini/antigravity-cli/antigravity-oauth-token",
+        "/root/.gemini/antigravity-cli/antigravity-oauth-token",
+    ]
+    for path in candidates:
+        if os.path.exists(path) and os.path.getsize(path) > 0:
+            return True
+    return bool(os.environ.get("ANTIGRAVITY_CLI_OAUTH_JSON"))
+
+
+def ensure_antigravity_auth_from_env():
+    """
+    Reads ANTIGRAVITY_CLI_OAUTH_JSON from os.environ or .env (without hardcoding)
+    and ensures ~/.gemini/antigravity-cli/antigravity-oauth-token is created.
+    """
+    auth_json = os.environ.get("ANTIGRAVITY_CLI_OAUTH_JSON")
+    if not auth_json and os.path.exists(".env"):
+        try:
+            with open(".env", "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith("ANTIGRAVITY_CLI_OAUTH_JSON="):
+                        val = line.split("=", 1)[1].strip().strip("'\"")
+                        if val:
+                            auth_json = val
+                            os.environ["ANTIGRAVITY_CLI_OAUTH_JSON"] = val
+                            break
+        except Exception:
+            pass
+
+    if auth_json:
+        target_homes = [os.path.expanduser("~")]
+        if os.path.isdir("/home/runner") and "/home/runner" not in target_homes:
+            target_homes.append("/home/runner")
+        if os.path.isdir("/root") and "/root" not in target_homes:
+            target_homes.append("/root")
+
+        for h in target_homes:
+            agy_dir = os.path.join(h, ".gemini", "antigravity-cli")
+            token_path = os.path.join(agy_dir, "antigravity-oauth-token")
+            try:
+                os.makedirs(agy_dir, exist_ok=True)
+                if not os.path.exists(token_path) or os.path.getsize(token_path) == 0:
+                    with open(token_path, "w", encoding="utf-8") as f:
+                        f.write(auth_json)
+                    try:
+                        os.chmod(token_path, 0o600)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+
+# Initialize token from environment/.env on module load
+ensure_antigravity_auth_from_env()
+
+
+
 # ---------------------------------------------------------------------------
 # Distributed Course Worker & Central Hub Protocol Endpoints
 # ---------------------------------------------------------------------------
 
 @app.get("/worker/status")
-def worker_status():
+def worker_status(request: Request):
     """
-    Worker Health & Disk Metric (ENOSPC prevention)
-    Returns worker ID, status ('idle' | 'busy'), disk metrics, concurrency limit, active jobs count, and list of active job IDs.
+    Worker Health, SSH & Disk Metric (ENOSPC prevention)
+    Returns worker ID, status ('idle' | 'busy'), disk metrics, concurrency limit,
+    active jobs count, SSH credentials, and live shell WebSocket URL.
     """
     disk = get_disk_metrics()
     active_job_ids = course_manager.get_active_job_ids()
     vsc_info = get_vscode_state()
+    ssh_info = get_ssh_state()
     is_agy = shutil.which("agy") is not None
+    has_agy_auth = check_antigravity_token_configured()
+    public_url = WORKER_PUBLIC_URL or str(request.base_url).rstrip("/")
+    ws_base = public_url.replace("https://", "wss://").replace("http://", "ws://")
+
     return {
         "workerId": WORKER_ID,
         "status": course_manager.get_status(),
@@ -814,8 +959,461 @@ def worker_status():
         "vscodeUrl": vsc_info["url"],
         "vscodePassword": vsc_info["password"],
         "antigravityCli": is_agy,
+        "antigravityAuth": has_agy_auth,
         "courseWorkerUrl": os.getenv("COURSE_WORKER_URL", "http://127.0.0.1:8085"),
+        "shellWsUrl": f"{ws_base}/ws/shell",
+        "ssh": ssh_info,
+        "sshPort": ssh_info["port"],
+        "sshUser": ssh_info["user"],
+        "sshPassword": ssh_info["password"],
+        "sshUrl": ssh_info["url"],
+        "sshCommand": ssh_info["command"],
     }
+
+
+@app.get("/api/agents/status")
+def get_agents_status():
+    """
+    Discover AI, automation, and developer agents active on this worker node.
+    Reports Antigravity CLI (agy), Course Worker, VS Code, and runtime environments.
+    """
+    agy_path = shutil.which("agy")
+    code_server_path = shutil.which("code-server")
+    cw_path = shutil.which("course-worker") or (os.path.exists("./bin/course-worker") and "./bin/course-worker")
+    dlengine_path = shutil.which("dlengine") or (os.path.exists("/usr/local/bin/dlengine") and "/usr/local/bin/dlengine")
+    python_bin = sys.executable
+    node_path = shutil.which("node")
+
+    disk = get_disk_metrics()
+    vsc_info = get_vscode_state()
+    ssh_info = get_ssh_state()
+
+    # Query agy version if present
+    agy_version = None
+    if agy_path:
+        try:
+            res = subprocess.run([agy_path, "--version"], capture_output=True, text=True, timeout=3)
+            agy_version = res.stdout.strip() or res.stderr.strip() or "Installed"
+        except Exception:
+            agy_version = "Installed"
+
+    return {
+        "workerId": WORKER_ID,
+        "status": course_manager.get_status(),
+        "agents": {
+            "antigravityCli": {
+                "available": agy_path is not None,
+                "path": agy_path,
+                "version": agy_version,
+                "authenticated": check_antigravity_token_configured(),
+                "description": "Google Antigravity CLI Agent (agy) for autonomous tasks"
+            },
+            "courseWorker": {
+                "available": bool(cw_path),
+                "url": os.getenv("COURSE_WORKER_URL", "http://127.0.0.1:8085"),
+                "description": "Go Multi-Part Course Archive Streamer & Drive Engine"
+            },
+            "codeServer": {
+                "available": code_server_path is not None,
+                "url": vsc_info["url"],
+                "description": "Web VS Code IDE & Cloud Workspace"
+            },
+            "dlengine": {
+                "available": bool(dlengine_path),
+                "path": dlengine_path,
+                "description": "High-speed Multi-connection Go Download Engine"
+            },
+            "puppeteerCdp": {
+                "available": True,
+                "port": 9222,
+                "description": "Headless Chromium Remote Debugging Port"
+            },
+            "seleniumCdp": {
+                "available": True,
+                "port": 9223,
+                "description": "SeleniumBase UC Stealth Browser CDP Port"
+            }
+        },
+        "runtimes": {
+            "python": {
+                "version": sys.version.split()[0],
+                "executable": python_bin
+            },
+            "node": {
+                "available": node_path is not None,
+                "path": node_path
+            }
+        },
+        "ssh": ssh_info,
+        "system": {
+            "platform": sys.platform,
+            "cpuPercent": get_cpu_percent(),
+            "freeDiskGB": disk["freeGB"],
+            "totalDiskGB": disk["totalGB"],
+            "hasPty": HAS_PTY
+        }
+    }
+
+
+# ---------------------------------------------------------------------------
+# Persistent Background PTY Shell Sessions (Runs continuously in background)
+# ---------------------------------------------------------------------------
+
+def build_shell_env() -> dict:
+    """Prepares enriched execution environment for persistent shells."""
+    ensure_antigravity_auth_from_env()
+    env = os.environ.copy()
+    env["TERM"] = "xterm-256color"
+    env["COLORTERM"] = "truecolor"
+    env["LANG"] = "en_US.UTF-8"
+
+    extra_paths = [
+        os.path.expanduser("~/.local/bin"),
+        os.path.expanduser("~/.antigravity/bin"),
+        "/usr/local/bin",
+        "/usr/bin",
+        "/bin",
+        os.path.abspath("./bin"),
+        os.getcwd(),
+    ]
+    curr_path = env.get("PATH", "")
+    for p in extra_paths:
+        if p and p not in curr_path and os.path.exists(p):
+            curr_path = f"{p}:{curr_path}"
+    env["PATH"] = curr_path
+    return env
+
+
+class PersistentShellSession:
+    """
+    A persistent interactive shell session running independently in the background.
+    Survives frontend tab closures, page refreshes, and network drops.
+    Maintains a circular scrollback ring buffer so reconnecting clients immediately
+    see everything printed while disconnected.
+    """
+    def __init__(self, session_id: str, env: dict):
+        self.session_id = session_id
+        self.env = env
+        self.proc: Optional[Any] = None
+        self.master_fd: Optional[int] = None
+        self.scrollback: deque = deque(maxlen=15000)
+        self.active_clients: Set[WebSocket] = set()
+        self.created_at: float = time.time()
+        self.last_activity: float = time.time()
+        self.reader_task: Optional[asyncio.Task] = None
+        self.stop_event: asyncio.Event = asyncio.Event()
+        self.is_windows: bool = not HAS_PTY
+        self.win_proc: Optional[asyncio.subprocess.Process] = None
+
+    def is_alive(self) -> bool:
+        if self.is_windows:
+            return self.win_proc is not None and self.win_proc.returncode is None
+        return self.proc is not None and self.proc.poll() is None
+
+    @property
+    def pid(self) -> Optional[int]:
+        if self.is_windows:
+            return self.win_proc.pid if self.win_proc else None
+        return self.proc.pid if self.proc else None
+
+    async def start(self):
+        if self.is_alive():
+            return
+
+        is_agy = shutil.which("agy") is not None
+        has_token = check_antigravity_token_configured()
+        agy_badge = "⚡ READY (Auth)" if is_agy and has_token else ("⚡ READY" if is_agy else "offline")
+
+        if HAS_PTY:
+            master_fd, slave_fd = pty.openpty()
+            flags = fcntl.fcntl(master_fd, fcntl.F_GETFL)
+            fcntl.fcntl(master_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+            self.master_fd = master_fd
+
+            shell_bin = "/bin/bash" if os.path.exists("/bin/bash") else "/bin/sh"
+            self.proc = subprocess.Popen(
+                [shell_bin, "-l"],
+                preexec_fn=os.setsid,
+                stdin=slave_fd,
+                stdout=slave_fd,
+                stderr=slave_fd,
+                close_fds=True,
+                env=self.env,
+                cwd=os.getcwd()
+            )
+            os.close(slave_fd)
+
+            banner = (
+                f"\r\n\x1b[1;36m======================================================================\x1b[0m\r\n"
+                f"\x1b[1;32m  🟢 Persistent Background Worker Shell: {WORKER_ID} [Session: {self.session_id}]\x1b[0m\r\n"
+                f"\x1b[0;37m  Directory: {os.getcwd()} | PID: {self.proc.pid}\x1b[0m\r\n"
+                f"\x1b[1;34m  Agents: Antigravity CLI ({agy_badge}), Course Worker (:8085), CDP (:9222/:9223)\x1b[0m\r\n"
+                f"\x1b[0;33m  ⚡ Note: Background persistent session active. Closing browser page will NOT stop your tasks!\x1b[0m\r\n"
+                f"\x1b[1;36m======================================================================\x1b[0m\r\n\r\n"
+            )
+            self.scrollback.append(banner)
+
+            loop = asyncio.get_running_loop()
+
+            async def pty_reader():
+                while not self.stop_event.is_set() and self.proc.poll() is None:
+                    try:
+                        data = await loop.run_in_executor(None, os.read, self.master_fd, 4096)
+                        if not data:
+                            break
+                        chunk = data.decode("utf-8", errors="replace")
+                        self.scrollback.append(chunk)
+                        self.last_activity = time.time()
+
+                        dead_clients = []
+                        for ws in list(self.active_clients):
+                            try:
+                                await ws.send_text(chunk)
+                            except Exception:
+                                dead_clients.append(ws)
+                        for ws in dead_clients:
+                            self.active_clients.discard(ws)
+                    except (BlockingIOError, InterruptedError):
+                        await asyncio.sleep(0.01)
+                    except OSError as e:
+                        if e.errno in (5, 9):  # EIO or EBADF when child shell exits
+                            break
+                        await asyncio.sleep(0.01)
+                    except Exception:
+                        break
+
+            self.reader_task = asyncio.create_task(pty_reader())
+
+        else:
+            # Windows fallback
+            shell_cmd = "powershell.exe" if shutil.which("powershell.exe") else "cmd.exe"
+            self.win_proc = await asyncio.create_subprocess_exec(
+                shell_cmd,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=self.env,
+                cwd=os.getcwd()
+            )
+            banner = (
+                f"\r\n\x1b[1;36m======================================================================\x1b[0m\r\n"
+                f"\x1b[1;32m  🟢 Persistent Worker Shell (Windows Emulation): {WORKER_ID} [Session: {self.session_id}]\x1b[0m\r\n"
+                f"\x1b[0;33m  ⚡ Note: Background persistent session active. Closing browser page will NOT stop your tasks!\x1b[0m\r\n"
+                f"\x1b[1;36m======================================================================\x1b[0m\r\n\r\n"
+            )
+            self.scrollback.append(banner)
+
+            async def win_reader(stream):
+                while True:
+                    try:
+                        data = await stream.read(1024)
+                        if not data:
+                            break
+                        chunk = data.decode("utf-8", errors="replace")
+                        self.scrollback.append(chunk)
+                        self.last_activity = time.time()
+                        dead_clients = []
+                        for ws in list(self.active_clients):
+                            try:
+                                await ws.send_text(chunk)
+                            except Exception:
+                                dead_clients.append(ws)
+                        for ws in dead_clients:
+                            self.active_clients.discard(ws)
+                    except Exception:
+                        break
+
+            asyncio.create_task(win_reader(self.win_proc.stdout))
+            asyncio.create_task(win_reader(self.win_proc.stderr))
+
+    async def attach(self, websocket: WebSocket):
+        self.active_clients.add(websocket)
+        self.last_activity = time.time()
+        # Replay scrollback buffer so reconnected client sees prior output
+        if self.scrollback:
+            full_history = "".join(self.scrollback)
+            try:
+                await websocket.send_text(full_history)
+            except Exception:
+                pass
+
+    def detach(self, websocket: WebSocket):
+        self.active_clients.discard(websocket)
+        # Process and reader task keep running uninterrupted in background!
+
+    async def write(self, data: str | bytes):
+        self.last_activity = time.time()
+        if HAS_PTY and self.master_fd is not None:
+            raw = data.encode("utf-8") if isinstance(data, str) else data
+            try:
+                os.write(self.master_fd, raw)
+            except Exception:
+                pass
+        elif self.win_proc and self.win_proc.stdin:
+            raw = data.encode("utf-8") if isinstance(data, str) else data
+            try:
+                self.win_proc.stdin.write(raw)
+                await self.win_proc.stdin.drain()
+            except Exception:
+                pass
+
+    def resize(self, cols: int, rows: int):
+        if HAS_PTY and self.master_fd is not None:
+            try:
+                fcntl.ioctl(self.master_fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+            except Exception:
+                pass
+
+    async def kill(self):
+        self.stop_event.set()
+        if self.reader_task:
+            self.reader_task.cancel()
+        if HAS_PTY and self.proc:
+            try:
+                if self.proc.poll() is None:
+                    os.killpg(os.getpgid(self.proc.pid), signal.SIGTERM)
+                    await asyncio.sleep(0.1)
+                    if self.proc.poll() is None:
+                        os.killpg(os.getpgid(self.proc.pid), signal.SIGKILL)
+            except Exception:
+                pass
+            try:
+                if self.master_fd is not None:
+                    os.close(self.master_fd)
+            except Exception:
+                pass
+        elif self.win_proc:
+            try:
+                self.win_proc.kill()
+            except Exception:
+                pass
+
+
+class WorkerSessionManager:
+    """Manages persistent background shell sessions on the worker node."""
+    def __init__(self):
+        self.sessions: Dict[str, PersistentShellSession] = {}
+
+    async def get_or_create(self, session_id: str = "default", env: Optional[dict] = None) -> PersistentShellSession:
+        if session_id in self.sessions:
+            sess = self.sessions[session_id]
+            if sess.is_alive():
+                return sess
+            await sess.kill()
+            del self.sessions[session_id]
+
+        if env is None:
+            env = build_shell_env()
+
+        new_sess = PersistentShellSession(session_id, env)
+        await new_sess.start()
+        self.sessions[session_id] = new_sess
+        return new_sess
+
+    def list_sessions(self) -> List[Dict[str, Any]]:
+        result = []
+        now = time.time()
+        for sid, sess in list(self.sessions.items()):
+            result.append({
+                "sessionId": sid,
+                "pid": sess.pid,
+                "alive": sess.is_alive(),
+                "attachedClients": len(sess.active_clients),
+                "uptimeSeconds": round(now - sess.created_at, 1),
+                "idleSeconds": round(now - sess.last_activity, 1),
+                "scrollbackLength": len(sess.scrollback),
+            })
+        return result
+
+    async def kill_session(self, session_id: str) -> bool:
+        if session_id in self.sessions:
+            sess = self.sessions[session_id]
+            await sess.kill()
+            del self.sessions[session_id]
+            return True
+        return False
+
+
+session_manager = WorkerSessionManager()
+
+
+@app.websocket("/ws/shell")
+@app.websocket("/ws/ssh")
+async def websocket_shell_endpoint(websocket: WebSocket):
+    """
+    Live interactive pseudo-terminal (PTY) shell accessible via WebSocket.
+    Runs persistently in the background: if client closes tab, session remains active.
+    """
+    token = websocket.query_params.get("token") or websocket.query_params.get("secret")
+    if WORKER_API_SECRET and token and token != WORKER_API_SECRET:
+        await websocket.close(code=1008, reason="Unauthorized")
+        return
+
+    await websocket.accept()
+
+    session_id = websocket.query_params.get("sessionId") or "default"
+    session = await session_manager.get_or_create(session_id)
+    await session.attach(websocket)
+
+    try:
+        while session.is_alive():
+            msg = await websocket.receive()
+            if msg["type"] == "websocket.disconnect":
+                break
+
+            text_data = msg.get("text")
+            bytes_data = msg.get("bytes")
+
+            if text_data is not None:
+                if text_data.startswith("{") and "resize" in text_data:
+                    try:
+                        ctrl = json.loads(text_data)
+                        if ctrl.get("type") == "resize":
+                            cols = int(ctrl.get("cols", 80))
+                            rows = int(ctrl.get("rows", 24))
+                            session.resize(cols, rows)
+                            continue
+                    except Exception:
+                        pass
+                await session.write(text_data)
+            elif bytes_data is not None:
+                await session.write(bytes_data)
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        pass
+    finally:
+        # Detach websocket only — background process keeps executing!
+        session.detach(websocket)
+
+
+@app.get("/api/shell/sessions")
+def list_active_shell_sessions():
+    """List persistent background shell sessions."""
+    return {
+        "workerId": WORKER_ID,
+        "sessions": session_manager.list_sessions()
+    }
+
+
+@app.post("/api/shell/sessions/{session_id}/kill")
+async def kill_active_shell_session(session_id: str):
+    """Explicitly terminate a background shell session."""
+    killed = await session_manager.kill_session(session_id)
+    return {"sessionId": session_id, "killed": killed}
+
+
+@app.post("/api/shell/sessions/{session_id}/exec")
+async def exec_in_shell_session(session_id: str, req: Request):
+    """Inject a command into a persistent background shell session."""
+    body = await req.json()
+    command = body.get("command", "")
+    if not command:
+        raise HTTPException(status_code=400, detail="Command is required")
+    sess = await session_manager.get_or_create(session_id)
+    await sess.write(command.rstrip("\r\n") + "\n")
+    return {"status": "dispatched", "sessionId": session_id, "command": command}
+
 
 
 @app.post("/worker/jobs", status_code=202)
@@ -831,12 +1429,21 @@ async def dispatch_course_job(req: CourseJobRequest, request: Request):
             raise HTTPException(status_code=401, detail="Unauthorized")
 
     try:
-        course_manager.start_job(req)
+        active_cnt = len(course_manager.active_jobs)
+        if active_cnt >= DEFAULT_CONCURRENCY:
+            return JSONResponse(
+                status_code=429,
+                content={
+                    "error": f"Worker concurrency limit reached ({active_cnt}/{DEFAULT_CONCURRENCY}).",
+                    "activeJobs": course_manager.get_active_job_ids()
+                }
+            )
+
+        job_id = await course_manager.start_job(req)
         return JSONResponse(
             status_code=202,
             content={
-                "success": True,
-                "jobId": req.jobId,
+                "jobId": job_id,
                 "status": "accepted",
                 "activeJobsCount": len(course_manager.active_jobs),
                 "message": f"Job accepted. Running {len(course_manager.active_jobs)} concurrent jobs on worker."
@@ -882,7 +1489,9 @@ def get_worker_pool(request: Request):
     active_job_id = course_manager.get_active_job_id()
     status_val = course_manager.get_status()
     vsc_info = get_vscode_state()
+    ssh_info = get_ssh_state()
     is_agy = shutil.which("agy") is not None
+    ws_base = public_url.replace("https://", "wss://").replace("http://", "ws://")
 
     worker_entry = {
         "id": WORKER_ID,
@@ -894,6 +1503,13 @@ def get_worker_pool(request: Request):
         "vscodeUrl": vsc_info["url"],
         "vscodePassword": vsc_info["password"],
         "antigravityCli": is_agy,
+        "shellWsUrl": f"{ws_base}/ws/shell",
+        "ssh": ssh_info,
+        "sshPort": ssh_info["port"],
+        "sshUser": ssh_info["user"],
+        "sshPassword": ssh_info["password"],
+        "sshUrl": ssh_info["url"],
+        "sshCommand": ssh_info["command"],
         "lastHeartbeat": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -907,6 +1523,13 @@ def get_worker_pool(request: Request):
         "vscodeUrl": vsc_info["url"],
         "vscodePassword": vsc_info["password"],
         "antigravityCli": is_agy,
+        "shellWsUrl": f"{ws_base}/ws/shell",
+        "ssh": ssh_info,
+        "sshPort": ssh_info["port"],
+        "sshUser": ssh_info["user"],
+        "sshPassword": ssh_info["password"],
+        "sshUrl": ssh_info["url"],
+        "sshCommand": ssh_info["command"],
         "lastHeartbeat": datetime.now(timezone.utc).isoformat(),
     }
 

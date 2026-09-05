@@ -30,6 +30,8 @@ WEBHOOK_URL="https://${DASHBOARD_DOMAIN}/api/browsers/webhook?secret=${WEBHOOK_S
 CDP_PORT=9222
 SB_CDP_PORT="${SB_CDP_PORT:-9223}"
 VSCODE_PORT="${VSCODE_PORT:-8088}"
+SSH_PORT="${SSH_PORT:-2222}"
+SSH_USER="${SSH_USER:-$(whoami 2>/dev/null || echo "runner")}"
 TUNNEL_URL=""
 TUNNEL_SB_CDP_URL=""
 CHROME_PID=""
@@ -44,6 +46,11 @@ VSCODE_PID=""
 TUNNEL_VSCODE_PID=""
 TUNNEL_VSCODE_URL=""
 VSCODE_PASSWORD=""
+SSH_PID=""
+TUNNEL_SSH_PID=""
+TUNNEL_SSH_URL=""
+SSH_PASSWORD=""
+SSH_COMMAND=""
 
 # ---------------------------------------------------------------------------
 # Webhook Helper Function
@@ -54,6 +61,16 @@ send_webhook() {
   local is_agy=false
   command -v agy >/dev/null 2>&1 && is_agy=true
 
+  local shell_ws_url=""
+  if [ -n "$TUNNEL_API_URL" ]; then
+    shell_ws_url="$(echo "$TUNNEL_API_URL" | sed 's|^http|ws|')/ws/shell"
+  fi
+
+  local has_agy_auth=false
+  if [ -s "$HOME/.gemini/antigravity-cli/antigravity-oauth-token" ] || [ -n "${ANTIGRAVITY_CLI_OAUTH_JSON:-}" ]; then
+    has_agy_auth=true
+  fi
+
   local json_data
   json_data=$(cat <<EOF
 {
@@ -63,9 +80,16 @@ send_webhook() {
   "sbCdpUrl": "${TUNNEL_SB_CDP_URL}",
   "seleniumCdpUrl": "${TUNNEL_SB_CDP_URL}",
   "apiUrl": "${TUNNEL_API_URL}",
+  "shellWsUrl": "${shell_ws_url}",
   "vscodeUrl": "${TUNNEL_VSCODE_URL}",
   "vscodePassword": "${VSCODE_PASSWORD}",
+  "sshUrl": "${TUNNEL_SSH_URL}",
+  "sshPort": ${SSH_PORT},
+  "sshUser": "${SSH_USER}",
+  "sshPassword": "${SSH_PASSWORD}",
+  "sshCommand": "${SSH_COMMAND}",
   "antigravityCli": ${is_agy},
+  "antigravityAuth": ${has_agy_auth},
   "courseWorkerUrl": "${TUNNEL_COURSE_WORKER_URL:-}",
   "runId": "${GITHUB_RUN_ID:-}",
   "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -97,6 +121,8 @@ cleanup() {
   fi
 
   # Kill child processes
+  [ -n "$TUNNEL_SSH_PID" ] && kill "$TUNNEL_SSH_PID" 2>/dev/null || true
+  [ -n "$SSH_PID" ] && kill "$SSH_PID" 2>/dev/null || true
   [ -n "$TUNNEL_VSCODE_PID" ] && kill "$TUNNEL_VSCODE_PID" 2>/dev/null || true
   [ -n "$VSCODE_PID" ] && kill "$VSCODE_PID" 2>/dev/null || true
   [ -n "$TUNNEL_CW_PID" ] && kill "$TUNNEL_CW_PID" 2>/dev/null || true
@@ -109,6 +135,7 @@ cleanup() {
   [ -n "$CHROME_PID" ] && kill "$CHROME_PID" 2>/dev/null || true
   [ -n "$XVFB_PID" ] && kill "$XVFB_PID" 2>/dev/null || true
   rm -f /tmp/vscode-info.json /tmp/vscode_url /tmp/vscode_password 2>/dev/null || true
+  rm -f /tmp/ssh-info.json /tmp/ssh_info.json /tmp/ssh_url /tmp/ssh_password 2>/dev/null || true
   rm -rf /tmp/course_jobs /tmp/jobs 2>/dev/null || true
 
   exit $EXIT_CODE
@@ -143,6 +170,61 @@ if ! command -v agy >/dev/null 2>&1; then
     fi
   done
 fi
+
+# ---------------------------------------------------------------------------
+# 0c. Configure Antigravity CLI (agy) Authentication Token
+# ---------------------------------------------------------------------------
+setup_antigravity_auth() {
+  echo "🔑 Checking Antigravity CLI authentication configuration..."
+
+  # If not in env, attempt to read from local .env
+  if [ -z "${ANTIGRAVITY_CLI_OAUTH_JSON:-}" ] && [ -f ".env" ]; then
+    ANTIGRAVITY_CLI_OAUTH_JSON="$(grep -E '^ANTIGRAVITY_CLI_OAUTH_JSON=' .env 2>/dev/null | head -1 | sed -E "s/^ANTIGRAVITY_CLI_OAUTH_JSON=['\"]?//" | sed -E "s/['\"]?$//" || true)"
+    export ANTIGRAVITY_CLI_OAUTH_JSON
+  fi
+
+  if [ -z "${ANTIGRAVITY_CLI_OAUTH_JSON:-}" ]; then
+    echo "ℹ️ No ANTIGRAVITY_CLI_OAUTH_JSON defined in environment or .env; skipping token setup."
+    return 0
+  fi
+
+  local auth_json="$ANTIGRAVITY_CLI_OAUTH_JSON"
+
+  # Target locations for user homes across runner VM users
+  local target_homes=("$HOME")
+  [ -d "/home/runner" ] && [ "/home/runner" != "$HOME" ] && target_homes+=("/home/runner")
+  [ -d "/root" ] && [ "/root" != "$HOME" ] && target_homes+=("/root")
+
+  for h in "${target_homes[@]}"; do
+    local agy_dir="$h/.gemini/antigravity-cli"
+    mkdir -p "$agy_dir" 2>/dev/null || sudo mkdir -p "$agy_dir" 2>/dev/null || true
+    echo "$auth_json" > "$agy_dir/antigravity-oauth-token" 2>/dev/null || sudo bash -c "echo '$auth_json' > '$agy_dir/antigravity-oauth-token'" 2>/dev/null || true
+    chmod 600 "$agy_dir/antigravity-oauth-token" 2>/dev/null || sudo chmod 600 "$agy_dir/antigravity-oauth-token" 2>/dev/null || true
+    if [ -d "/home/runner" ] && [ "$h" = "/home/runner" ]; then
+      sudo chown -R runner:runner "$h/.gemini" 2>/dev/null || true
+    fi
+  done
+
+  # Export globally and persist to shell profiles for all future sessions & SSH
+  export ANTIGRAVITY_CLI_OAUTH_JSON="$auth_json"
+
+  if [ -f "$HOME/.bashrc" ]; then
+    grep -q "ANTIGRAVITY_CLI_OAUTH_JSON" "$HOME/.bashrc" 2>/dev/null || echo "export ANTIGRAVITY_CLI_OAUTH_JSON='$auth_json'" >> "$HOME/.bashrc"
+  fi
+
+  if [ -d "/home/runner" ] && [ -f "/home/runner/.bashrc" ]; then
+    grep -q "ANTIGRAVITY_CLI_OAUTH_JSON" "/home/runner/.bashrc" 2>/dev/null || echo "export ANTIGRAVITY_CLI_OAUTH_JSON='$auth_json'" >> "/home/runner/.bashrc" 2>/dev/null || true
+  fi
+
+  if [ -d "/etc/profile.d" ]; then
+    sudo bash -c "echo 'export ANTIGRAVITY_CLI_OAUTH_JSON=\"$auth_json\"' > /etc/profile.d/antigravity.sh" 2>/dev/null || true
+  fi
+
+  echo "✅ Antigravity CLI auth token successfully configured from .env in ~/.gemini/antigravity-cli/antigravity-oauth-token"
+}
+
+setup_antigravity_auth
+
 
 # ---------------------------------------------------------------------------
 # 1. Start Chrome with CDP (Puppeteer browser on :9222)
@@ -362,6 +444,64 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# 1f. Configure and start OpenSSH Server (:2222)
+# ---------------------------------------------------------------------------
+write_ssh_state() {
+  local url="${1:-${TUNNEL_SSH_URL:-}}"
+  local pwd="${2:-${SSH_PASSWORD:-}}"
+  local port="${3:-${SSH_PORT:-2222}}"
+  local user="${4:-${SSH_USER:-runner}}"
+  local cmd="${5:-${SSH_COMMAND:-}}"
+
+  [ -n "$pwd" ] && echo "$pwd" > /tmp/ssh_password
+  [ -n "$url" ] && echo "$url" > /tmp/ssh_url
+  cat <<EOF > /tmp/ssh-info.json
+{
+  "url": "${url}",
+  "password": "${pwd}",
+  "port": ${port},
+  "user": "${user}",
+  "command": "${cmd}",
+  "updatedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+EOF
+  cp /tmp/ssh-info.json /tmp/ssh_info.json 2>/dev/null || true
+}
+
+if [ -z "${SSH_PASSWORD:-}" ]; then
+  SSH_PASSWORD="$(head -c 8 /dev/urandom 2>/dev/null | xxd -p 2>/dev/null || openssl rand -hex 8 2>/dev/null || echo "ssh-$(date +%s)")"
+fi
+export SSH_PASSWORD
+SSH_COMMAND="ssh -p ${SSH_PORT} ${SSH_USER}@localhost"
+write_ssh_state "" "$SSH_PASSWORD" "$SSH_PORT" "$SSH_USER" "$SSH_COMMAND"
+
+start_sshd() {
+  if [ "$(uname -s)" = "Linux" ]; then
+    if ! command -v sshd >/dev/null 2>&1; then
+      echo "📦 Installing OpenSSH server..."
+      sudo apt-get update -y && sudo apt-get install -y openssh-server 2>/dev/null || true
+    fi
+
+    if command -v sshd >/dev/null 2>&1; then
+      echo "🚀 Configuring OpenSSH server on port ${SSH_PORT}..."
+      sudo mkdir -p /var/run/sshd /etc/ssh
+      echo "${SSH_USER}:${SSH_PASSWORD}" | sudo chpasswd 2>/dev/null || true
+      sudo ssh-keygen -A 2>/dev/null || true
+
+      sudo /usr/sbin/sshd -p "${SSH_PORT}" \
+        -o "PasswordAuthentication=yes" \
+        -o "PermitRootLogin=yes" \
+        -o "ChallengeResponseAuthentication=no" \
+        -o "UsePAM=yes" \
+        > /tmp/sshd.log 2>&1 &
+      SSH_PID=$!
+      echo "OpenSSH server started (PID: $SSH_PID)"
+    fi
+  fi
+}
+start_sshd
+
+# ---------------------------------------------------------------------------
 # 2. Start cloudflared tunnels
 # ---------------------------------------------------------------------------
 echo "🌐 Starting cloudflared tunnel for Puppeteer CDP port ${CDP_PORT}..."
@@ -374,12 +514,11 @@ TUNNEL_PID=$!
 for i in $(seq 1 30); do
   TUNNEL_URL=$(grep -oP 'https://[-0-9a-z]+\.trycloudflare\.com' "$TUNNEL_LOG" 2>/dev/null | head -1 || true)
   if [ -n "$TUNNEL_URL" ]; then
-    echo "✅ Puppeteer CDP Tunnel URL: $TUNNEL_URL"
+    echo "✅ Puppeteer CDP Tunnel established."
     break
   fi
   if [ $i -eq 30 ]; then
-    echo "❌ Puppeteer CDP tunnel failed to start within 30 seconds:"
-    cat "$TUNNEL_LOG" 2>/dev/null || true
+    echo "❌ Puppeteer CDP tunnel failed to start within 30 seconds."
     exit 1
   fi
   sleep 1
@@ -393,12 +532,11 @@ TUNNEL_SB_CDP_PID=$!
 for i in $(seq 1 30); do
   TUNNEL_SB_CDP_URL=$(grep -oP 'https://[-0-9a-z]+\.trycloudflare\.com' "$TUNNEL_SB_CDP_LOG" 2>/dev/null | head -1 || true)
   if [ -n "$TUNNEL_SB_CDP_URL" ]; then
-    echo "✅ SeleniumBase CDP Tunnel URL: $TUNNEL_SB_CDP_URL"
+    echo "✅ SeleniumBase CDP Tunnel established."
     break
   fi
   if [ $i -eq 30 ]; then
-    echo "❌ SeleniumBase CDP tunnel failed to start within 30 seconds:"
-    cat "$TUNNEL_SB_CDP_LOG" 2>/dev/null || true
+    echo "❌ SeleniumBase CDP tunnel failed to start within 30 seconds."
     exit 1
   fi
   sleep 1
@@ -413,12 +551,11 @@ TUNNEL_API_PID=$!
 for i in $(seq 1 30); do
   TUNNEL_API_URL=$(grep -oP 'https://[-0-9a-z]+\.trycloudflare\.com' "$TUNNEL_API_LOG" 2>/dev/null | head -1 || true)
   if [ -n "$TUNNEL_API_URL" ]; then
-    echo "✅ FastAPI Tunnel URL: $TUNNEL_API_URL"
+    echo "✅ FastAPI Tunnel established."
     break
   fi
   if [ $i -eq 30 ]; then
-    echo "❌ FastAPI tunnel failed to start within 30 seconds:"
-    cat "$TUNNEL_API_LOG" 2>/dev/null || true
+    echo "❌ FastAPI tunnel failed to start within 30 seconds."
     exit 1
   fi
   sleep 1
@@ -433,12 +570,11 @@ if [ -n "$VSCODE_PID" ]; then
   for i in $(seq 1 30); do
     TUNNEL_VSCODE_URL=$(grep -oP 'https://[-0-9a-z]+\.trycloudflare\.com' "$TUNNEL_VSCODE_LOG" 2>/dev/null | head -1 || true)
     if [ -n "$TUNNEL_VSCODE_URL" ]; then
-      echo "✅ Web VS Code Tunnel URL: $TUNNEL_VSCODE_URL"
+      echo "✅ Web VS Code Tunnel established."
       break
     fi
     if [ $i -eq 30 ]; then
-      echo "⚠️ Web VS Code tunnel took longer than 30 seconds to initialize:"
-      cat "$TUNNEL_VSCODE_LOG" 2>/dev/null || true
+      echo "⚠️ Web VS Code tunnel took longer than 30 seconds to initialize."
     fi
     sleep 1
   done
@@ -455,16 +591,40 @@ if [ -n "$CW_PID" ]; then
   for i in $(seq 1 30); do
     TUNNEL_COURSE_WORKER_URL=$(grep -oP 'https://[-0-9a-z]+\.trycloudflare\.com' "$TUNNEL_CW_LOG" 2>/dev/null | head -1 || true)
     if [ -n "$TUNNEL_COURSE_WORKER_URL" ]; then
-      echo "✅ Go Course Worker Tunnel URL: $TUNNEL_COURSE_WORKER_URL"
+      echo "✅ Go Course Worker Tunnel established."
       break
     fi
     if [ $i -eq 30 ]; then
-      echo "⚠️ Go Course Worker tunnel took longer than 30 seconds to initialize:"
-      cat "$TUNNEL_CW_LOG" 2>/dev/null || true
+      echo "⚠️ Go Course Worker tunnel took longer than 30 seconds to initialize."
     fi
     sleep 1
   done
   export COURSE_WORKER_URL="$TUNNEL_COURSE_WORKER_URL"
+fi
+
+if [ -n "$SSH_PID" ] || command -v sshd >/dev/null 2>&1; then
+  echo "🌐 Starting cloudflared tunnel for SSH port ${SSH_PORT}..."
+  TUNNEL_SSH_LOG="/tmp/cloudflared-ssh-tunnel.log"
+  cloudflared tunnel --url "tcp://127.0.0.1:${SSH_PORT}" > "$TUNNEL_SSH_LOG" 2>&1 &
+  TUNNEL_SSH_PID=$!
+
+  for i in $(seq 1 30); do
+    TUNNEL_SSH_URL=$(grep -oP 'tcp://[-0-9a-z]+\.trycloudflare\.com:[0-9]+|https://[-0-9a-z]+\.trycloudflare\.com' "$TUNNEL_SSH_LOG" 2>/dev/null | head -1 || true)
+    if [ -n "$TUNNEL_SSH_URL" ]; then
+      echo "✅ SSH Tunnel established."
+      clean_host="${TUNNEL_SSH_URL#*://}"
+      if [[ "$clean_host" == *":"* ]]; then
+        SSH_HOST="${clean_host%%:*}"
+        SSH_REMOTE_PORT="${clean_host##*:}"
+        SSH_COMMAND="ssh -p ${SSH_REMOTE_PORT} ${SSH_USER}@${SSH_HOST}"
+      else
+        SSH_COMMAND="cloudflared access ssh --hostname ${clean_host}"
+      fi
+      break
+    fi
+    sleep 1
+  done
+  write_ssh_state "$TUNNEL_SSH_URL" "$SSH_PASSWORD" "$SSH_PORT" "$SSH_USER" "$SSH_COMMAND"
 fi
 
 # Pre-warm: open about:blank tab so CDP is ready
@@ -475,7 +635,7 @@ curl -s "http://127.0.0.1:${SB_CDP_PORT}/json/new?about:blank" > /dev/null || tr
 # ---------------------------------------------------------------------------
 # 3. Register with main dashboard
 # ---------------------------------------------------------------------------
-echo "📡 Registering with dashboard at ${WEBHOOK_URL}..."
+echo "📡 Registering worker ${WORKER_ID} with dashboard..."
 
 REGISTERED=false
 HTTP_CODE="000"
@@ -566,7 +726,7 @@ while true; do
       NEW_URL=$(grep -oP 'https://[-0-9a-z]+\.trycloudflare\.com' "$TUNNEL_LOG" 2>/dev/null | head -1 || true)
       if [ -n "$NEW_URL" ]; then
         TUNNEL_URL="$NEW_URL"
-        echo "✅ New CDP Tunnel URL: $TUNNEL_URL"
+        echo "✅ CDP Tunnel refreshed."
         NEED_REREGISTER=true
         break
       fi
@@ -583,7 +743,7 @@ while true; do
       NEW_SB_URL=$(grep -oP 'https://[-0-9a-z]+\.trycloudflare\.com' "$TUNNEL_SB_CDP_LOG" 2>/dev/null | head -1 || true)
       if [ -n "$NEW_SB_URL" ]; then
         TUNNEL_SB_CDP_URL="$NEW_SB_URL"
-        echo "✅ New SeleniumBase CDP Tunnel URL: $TUNNEL_SB_CDP_URL"
+        echo "✅ SeleniumBase CDP Tunnel refreshed."
         NEED_REREGISTER=true
         break
       fi
@@ -600,7 +760,7 @@ while true; do
       NEW_API_URL=$(grep -oP 'https://[-0-9a-z]+\.trycloudflare\.com' "$TUNNEL_API_LOG" 2>/dev/null | head -1 || true)
       if [ -n "$NEW_API_URL" ]; then
         TUNNEL_API_URL="$NEW_API_URL"
-        echo "✅ New FastAPI Tunnel URL: $TUNNEL_API_URL"
+        echo "✅ FastAPI Tunnel refreshed."
         NEED_REREGISTER=true
         break
       fi
@@ -619,7 +779,38 @@ while true; do
         TUNNEL_VSCODE_URL="$NEW_VSCODE_URL"
         export VSCODE_URL="$TUNNEL_VSCODE_URL"
         write_vscode_state "$TUNNEL_VSCODE_URL" "$VSCODE_PASSWORD" "$VSCODE_PORT"
-        echo "✅ New Web VS Code Tunnel URL: $TUNNEL_VSCODE_URL"
+        echo "✅ Web VS Code Tunnel refreshed."
+        NEED_REREGISTER=true
+        break
+      fi
+      sleep 1
+    done
+  fi
+
+  # ── Watchdog 4c: SSH Server & Tunnel ─────────────────────────────────────
+  if [ -n "$SSH_PID" ] && ! kill -0 "$SSH_PID" 2>/dev/null; then
+    echo "⚠️ OpenSSH server PID $SSH_PID died! Restarting sshd..."
+    start_sshd
+  fi
+
+  if [ -n "$TUNNEL_SSH_PID" ] && ! kill -0 "$TUNNEL_SSH_PID" 2>/dev/null; then
+    echo "⚠️ SSH Tunnel PID $TUNNEL_SSH_PID died! Restarting SSH tunnel..."
+    cloudflared tunnel --url "tcp://127.0.0.1:${SSH_PORT}" > "$TUNNEL_SSH_LOG" 2>&1 &
+    TUNNEL_SSH_PID=$!
+    for i in $(seq 1 15); do
+      NEW_SSH_URL=$(grep -oP 'tcp://[-0-9a-z]+\.trycloudflare\.com:[0-9]+|https://[-0-9a-z]+\.trycloudflare\.com' "$TUNNEL_SSH_LOG" 2>/dev/null | head -1 || true)
+      if [ -n "$NEW_SSH_URL" ]; then
+        TUNNEL_SSH_URL="$NEW_SSH_URL"
+        clean_host="${TUNNEL_SSH_URL#*://}"
+        if [[ "$clean_host" == *":"* ]]; then
+          SSH_HOST="${clean_host%%:*}"
+          SSH_REMOTE_PORT="${clean_host##*:}"
+          SSH_COMMAND="ssh -p ${SSH_REMOTE_PORT} ${SSH_USER}@${SSH_HOST}"
+        else
+          SSH_COMMAND="cloudflared access ssh --hostname ${clean_host}"
+        fi
+        write_ssh_state "$TUNNEL_SSH_URL" "$SSH_PASSWORD" "$SSH_PORT" "$SSH_USER" "$SSH_COMMAND"
+        echo "✅ SSH Tunnel refreshed."
         NEED_REREGISTER=true
         break
       fi

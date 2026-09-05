@@ -398,3 +398,40 @@ All functionality was verified via automated integration tests against the live 
 - **Test 7**: Reset verification: worker status returns to `idle`, `activeJob` returns to `null`.
 - **Test 8**: Multi-level extraction: extracted `.zip` files containing nested inner archives successfully unpack all media files and purge the inner archives from disk.
 - **Test 9**: AES-256-CTR streaming encryption: verified random 16-byte IV prepending and bit-for-bit decryption integrity.
+
+---
+
+## 9. Interactive WebSocket Shell, Agent Discovery & SSH Protocol
+
+Every worker node provides direct shell and agent access via WebSocket and OpenSSH.
+
+### A. Interactive WebSocket Shell (`/ws/shell` & `/ws/ssh`)
+- **Protocol**: WebSocket (Bidirectional, ANSI text & control frames)
+- **Endpoint**: `wss://<worker-api-url>/ws/shell` or relayed through dashboard at `wss://<dashboard>/api/workers/ws/shell?workerId=<id>`
+- **PTY Session**: Spawns an interactive login shell (`/bin/bash -l` on Linux) inside a pseudo-terminal.
+- **Control Messages**:
+  - Window Resize: `{"type": "resize", "cols": 120, "rows": 35}` (handled via `termios.TIOCSWINSZ`)
+  - Direct Keystrokes: Plain string or binary chunks forwarded to terminal `stdin`.
+- **Environment**: Automatically inherits paths to Antigravity CLI (`agy`), Go Course Worker (`course-worker`), Node.js, and Python.
+
+### B. Agent Discovery (`GET /api/agents/status`)
+Returns health, presence, and version of running worker agents:
+```json
+{
+  "workerId": "worker-1",
+  "status": "idle",
+  "agents": {
+    "antigravityCli": { "available": true, "version": "1.0.0", "description": "Google Antigravity CLI Agent (agy)" },
+    "courseWorker": { "available": true, "url": "http://127.0.0.1:8085" },
+    "codeServer": { "available": true, "url": "https://...trycloudflare.com" },
+    "dlengine": { "available": true },
+    "puppeteerCdp": { "available": true, "port": 9222 },
+    "seleniumCdp": { "available": true, "port": 9223 }
+  },
+  "ssh": {
+    "port": 2222,
+    "user": "runner",
+    "command": "ssh -p 2222 runner@localhost"
+  }
+}
+```
