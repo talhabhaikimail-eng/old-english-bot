@@ -36,7 +36,7 @@ func LoadConfig() *Config {
 		DLConcurrencyPerPart:     getEnvInt("DL_CONCURRENCY_PER_PART", 16),
 		BaseWorkDir:              getEnv("JOBS_BASE_DIR", "/tmp/course_jobs"),
 		MinFreeDiskBytes:         uint64(getEnvInt64("SAFETY_DISK_MIN_BYTES", 5*1024*1024*1024)), // 5 GB
-		DownloadStallTimeout:     time.Duration(getEnvInt("DOWNLOAD_STALL_TIMEOUT_SEC", 60)) * time.Second,
+		DownloadStallTimeout:     time.Duration(getEnvInt("DOWNLOAD_STALL_TIMEOUT_SEC", 20)) * time.Second,
 		DownloadPartTimeout:      time.Duration(getEnvInt("DOWNLOAD_PART_TIMEOUT_SEC", 2700)) * time.Second, // 45 min
 		ExtractionTimeout:        time.Duration(getEnvInt("EXTRACTION_TIMEOUT_SEC", 3600)) * time.Second,   // 60 min
 		PackagingTimeout:         time.Duration(getEnvInt("PACKAGING_TIMEOUT_SEC", 1800)) * time.Second,    // 30 min

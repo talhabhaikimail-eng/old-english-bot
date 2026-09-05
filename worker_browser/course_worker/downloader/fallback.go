@@ -53,11 +53,19 @@ func (d *Downloader) runFallbackHTTP(
 
 	resp, err := client.Do(req)
 	if err != nil {
+		if IsFatalLinkError(err) {
+			return fmt.Errorf("%w: %v", ErrLinkNotWorking, err)
+		}
 		return err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
+		if resp.StatusCode == 502 || resp.StatusCode == 503 || resp.StatusCode == 504 ||
+			resp.StatusCode == 404 || resp.StatusCode == 403 || resp.StatusCode == 410 ||
+			resp.StatusCode >= 500 {
+			return fmt.Errorf("%w: CDN responded with HTTP %d (%s)", ErrLinkNotWorking, resp.StatusCode, resp.Status)
+		}
 		return fmt.Errorf("CDN responded with HTTP %d", resp.StatusCode)
 	}
 

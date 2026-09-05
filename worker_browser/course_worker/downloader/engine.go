@@ -101,6 +101,10 @@ func (d *Downloader) DownloadPart(
 				}
 			}
 			lastErr = err
+			if IsFatalLinkError(err) {
+				log.Printf("❌ [%s] Fatal link error from dlengine: %v. Aborting immediately.", part.FileName, err)
+				return fmt.Errorf("%w: %v", ErrLinkNotWorking, err)
+			}
 			log.Printf("⚠️ [%s] dlengine attempt %d failed: %v", part.FileName, attempt, err)
 		} else {
 			log.Printf("ℹ️ [%s] dlengine not found; using fallback native HTTP downloader", part.FileName)
@@ -116,6 +120,10 @@ func (d *Downloader) DownloadPart(
 			}
 		}
 		lastErr = err
+		if IsFatalLinkError(err) {
+			log.Printf("❌ [%s] Fatal link error from fallback HTTP: %v. Aborting immediately.", part.FileName, err)
+			return fmt.Errorf("%w: %v", ErrLinkNotWorking, err)
+		}
 		log.Printf("⚠️ [%s] Fallback HTTP attempt %d failed: %v", part.FileName, attempt, err)
 
 		// Exponential backoff
@@ -161,6 +169,13 @@ func (d *Downloader) runDLEngine(
 	cmd := exec.CommandContext(partCtx, d.cfg.DLEnginePath, args...)
 	// Set process group so we can kill all subprocesses cleanly
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		if cmd.Process != nil {
+			return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		}
+		return nil
+	}
+	cmd.WaitDelay = 2 * time.Second
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -185,7 +200,7 @@ func (d *Downloader) runDLEngine(
 	defer close(doneChan)
 
 	go func() {
-		ticker := time.NewTicker(3 * time.Second)
+		ticker := time.NewTicker(2 * time.Second)
 		defer ticker.Stop()
 
 		for {
@@ -218,6 +233,12 @@ func (d *Downloader) runDLEngine(
 				mu.Lock()
 				lastEngineErr = text
 				mu.Unlock()
+				if IsFatalLinkError(errors.New(text)) {
+					log.Printf("⚡ [%s] Fatal link error detected in dlengine stderr: %s. Terminating dlengine immediately.", part.FileName, text)
+					if cmd.Process != nil {
+						_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+					}
+				}
 			}
 		}
 	}()
@@ -253,6 +274,12 @@ func (d *Downloader) runDLEngine(
 			mu.Lock()
 			lastEngineErr = ev.Message
 			mu.Unlock()
+			if IsFatalLinkError(errors.New(ev.Message)) {
+				log.Printf("⚡ [%s] Fatal link error event from dlengine: %s. Terminating dlengine immediately.", part.FileName, ev.Message)
+				if cmd.Process != nil {
+					_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+				}
+			}
 		}
 	}
 
@@ -271,13 +298,24 @@ func (d *Downloader) runDLEngine(
 	errMsg := lastEngineErr
 	mu.Unlock()
 
+	if IsFatalLinkError(errors.New(errMsg)) {
+		return fmt.Errorf("%w: %s", ErrLinkNotWorking, errMsg)
+	}
+
 	if stalled {
 		return ErrDownloadStalled
 	}
 
 	if waitErr != nil && !completed {
 		if errMsg != "" {
-			return fmt.Errorf("dlengine failed (%v): %s", waitErr, errMsg)
+			err := fmt.Errorf("dlengine failed (%v): %s", waitErr, errMsg)
+			if IsFatalLinkError(err) {
+				return fmt.Errorf("%w: %s", ErrLinkNotWorking, errMsg)
+			}
+			return err
+		}
+		if IsFatalLinkError(waitErr) {
+			return fmt.Errorf("%w: %v", ErrLinkNotWorking, waitErr)
 		}
 		return fmt.Errorf("dlengine exited with error: %w", waitErr)
 	}

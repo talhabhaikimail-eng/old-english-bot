@@ -8,6 +8,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -68,6 +69,29 @@ func (p *Pipeline) Execute(
 	}
 
 	// -------------------------------------------------------------
+	// PRE-FLIGHT: PROBE LINKS FAST (FAIL-FAST ON 502 / 404 / DEAD HOST)
+	// -------------------------------------------------------------
+	log.Printf("🔍 [Job %s] Fast probing %d download link(s) for availability...", jobID, len(links))
+	linkURLs := make([]string, len(links))
+	for i, l := range links {
+		linkURLs[i] = l.URL
+	}
+	if probeErr := p.downloader.ProbeAllLinks(ctx, linkURLs); probeErr != nil {
+		state.Phase = model.PhaseFailed
+		state.Status = "failed"
+		if !strings.HasPrefix(probeErr.Error(), "link not working") {
+			state.Error = fmt.Sprintf("link not working: %v", probeErr)
+		} else {
+			state.Error = probeErr.Error()
+		}
+		onUpdate()
+		log.Printf("❌ [Job %s] Pre-flight link probe failed: %v. Aborting immediately without wasting resources.", jobID, state.Error)
+		_ = os.RemoveAll(jobDir)
+		return probeErr
+	}
+	log.Printf("✅ [Job %s] Pre-flight probe passed for all %d link(s).", jobID, len(links))
+
+	// -------------------------------------------------------------
 	// STAGE 1: CONCURRENT DOWNLOAD OF ARCHIVE PARTS
 	// -------------------------------------------------------------
 	state.Phase = model.PhaseDownloading
@@ -107,6 +131,10 @@ func (p *Pipeline) Execute(
 	var dlErrMu sync.Mutex
 	var firstDLErr error
 
+	// Create cancellable context for all part downloads of this course
+	dlCtx, cancelDl := context.WithCancel(ctx)
+	defer cancelDl()
+
 	for i := range state.Parts {
 		part := &state.Parts[i]
 		dlWg.Add(1)
@@ -117,12 +145,12 @@ func (p *Pipeline) Execute(
 			select {
 			case sem <- struct{}{}:
 				defer func() { <-sem }()
-			case <-ctx.Done():
+			case <-dlCtx.Done():
 				pRef.Status = "cancelled"
 				return
 			}
 
-			if ctx.Err() != nil {
+			if dlCtx.Err() != nil {
 				pRef.Status = "cancelled"
 				return
 			}
@@ -130,7 +158,7 @@ func (p *Pipeline) Execute(
 			pRef.Status = "downloading"
 			onUpdate()
 
-			err := p.downloader.DownloadPart(ctx, pRef, func(dlBytes, totBytes int64, pct, speed float64) {
+			err := p.downloader.DownloadPart(dlCtx, pRef, func(dlBytes, totBytes int64, pct, speed float64) {
 				pRef.DownloadedBytes = dlBytes
 				if totBytes > 0 {
 					pRef.TotalBytes = totBytes
@@ -170,7 +198,9 @@ func (p *Pipeline) Execute(
 				pRef.Error = err.Error()
 				dlErrMu.Lock()
 				if firstDLErr == nil {
-					firstDLErr = fmt.Errorf("part %s failed: %w", pRef.FileName, err)
+					firstDLErr = err
+					// Immediately cancel sibling downloads to stop wasting resources
+					cancelDl()
 				}
 				dlErrMu.Unlock()
 			} else {
@@ -184,9 +214,12 @@ func (p *Pipeline) Execute(
 	dlWg.Wait()
 
 	if ctx.Err() != nil {
+		_ = os.RemoveAll(jobDir)
 		return ctx.Err()
 	}
 	if firstDLErr != nil {
+		log.Printf("❌ [Job %s] Download aborted due to error: %v. Purging files and skipping downstream stages.", jobID, firstDLErr)
+		_ = os.RemoveAll(jobDir)
 		return firstDLErr
 	}
 

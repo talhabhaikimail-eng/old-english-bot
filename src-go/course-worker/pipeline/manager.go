@@ -3,12 +3,15 @@ package pipeline
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
 	"course-worker/config"
+	"course-worker/downloader"
 	"course-worker/model"
 )
 
@@ -107,8 +110,19 @@ func (m *CourseManager) SubmitJob(req *model.CoursePayload) (*model.JobState, er
 			} else {
 				state.Phase = model.PhaseFailed
 				state.Status = "failed"
-				state.Error = err.Error()
-				log.Printf("❌ [Job %s] Job failed: %v", jobID, err)
+				if errors.Is(err, downloader.ErrLinkNotWorking) || downloader.IsFatalLinkError(err) {
+					if !strings.HasPrefix(err.Error(), "link not working") {
+						state.Error = fmt.Sprintf("link not working: %v", err)
+					} else {
+						state.Error = err.Error()
+					}
+				} else {
+					state.Error = err.Error()
+				}
+				log.Printf("❌ [Job %s] Job failed: %v", jobID, state.Error)
+			}
+			if state.WorkDir != "" {
+				_ = os.RemoveAll(state.WorkDir)
 			}
 		} else {
 			log.Printf("✅ [Job %s] Job completed successfully!", jobID)

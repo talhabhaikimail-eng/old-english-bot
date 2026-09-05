@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -131,5 +132,59 @@ func TestFullPipelineIntegration(t *testing.T) {
 	partsDir := filepath.Join(state.WorkDir, "parts")
 	if _, err := os.Stat(partsDir); !os.IsNotExist(err) {
 		t.Fatalf("parts directory was not purged: %s", partsDir)
+	}
+}
+
+func TestPipelineFailFastDeadLink(t *testing.T) {
+	// Server returns 502 Bad Gateway
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		w.Write([]byte("502 Next Hop Connection Failed"))
+	}))
+	defer ts.Close()
+
+	cfg := config.LoadConfig()
+	cfg.BaseWorkDir = t.TempDir()
+	p := NewPipeline(cfg)
+
+	payload := &model.CoursePayload{
+		ID:    "test-502-course",
+		Title: "Failing Course 502",
+		DownloadLinks: []model.DownloadLink{
+			{
+				URL:   ts.URL + "/part1.rar",
+				Part:  1,
+				Bytes: 1024,
+			},
+		},
+	}
+
+	state := &model.JobState{
+		ID:        payload.ID,
+		Title:     payload.Title,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+
+	start := time.Now()
+	err := p.Execute(context.Background(), payload, state, func() {})
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected pipeline to fail on 502, but got nil")
+	}
+	if !strings.Contains(err.Error(), "link not working") {
+		t.Fatalf("expected error to contain 'link not working', got: %v", err)
+	}
+	if state.Phase != model.PhaseFailed {
+		t.Fatalf("expected phase 'failed', got: %s", state.Phase)
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("fail-fast took too long (%v), expected < 2s", elapsed)
+	}
+
+	// Verify workDir was wiped
+	if _, err := os.Stat(state.WorkDir); !os.IsNotExist(err) {
+		t.Fatalf("workDir was not wiped on failure: %s", state.WorkDir)
 	}
 }

@@ -1,0 +1,97 @@
+{
+    "id": "6a0aba03-296d-4b7f-9766-779e6d282344",
+    "postId": 142537,
+    "title": "Udemy – OOPs in Python 2024-10",
+    "slug": "oops-in-python",
+    "canonicalUrl": "https://downloadlynet.ir/2024/14/142537/10/oops-in-python/14/",
+    "topic": "Video Tutorial",
+    "primaryCategory": "Software Engineering & Algorithms",
+    "tags": [
+        "Boktiar Ahmed Bappy",
+        "OOPs in Python",
+        "OOPs in Python Download",
+        "OOPs in Python Free",
+        "OOPs in Python Free Download",
+        "Udemy - OOPs in Python",
+        "Udemy - OOPs in Python Download",
+        "Udemy - OOPs in Python free",
+        "Udemy - OOPs in Python Free Download"
+    ],
+    "featuredImage": "https://downloadlynet.ir/wp-content/uploads/2024/10/OOPs-in-Python-C.jpg",
+    "description": "OOPs in Python is a training course on the principles of object-oriented programming (OOP) using the Python programming language, which has been published by Udemy Online Academy. OOPs in Python is a course designed to introduce students to the principles of object-oriented programming (OOP) using the Python programming language. This course covers fundamental OOP concepts such as classes, objects, inheritance, encapsulation, and polymorphism, and shows how to apply these principles to create reusable and modular code. Participants will engage in hands-on exercises to build their own classes and objects, allowing them to understand the structure and behavior of Python programs. The course also explores advanced topics such as method overriding and operator overloading, providing a deeper understanding of how OOP can increase code efficiency and maintainability.This course covers the fundamental principles of OOP such as classes, objects, inheritance, encapsulation, and polymorphism, and emphasizes their application in creating reusable code. Students will participate in hands-on exercises to build classes and understand Python program structure, along with advanced topics such as method overriding and operator overloading to increase code efficiency and maintainability. At the end of the course, students will have the confidence and skills to effectively implement OOP concepts in their Python projects.",
+    "whatYouWillLearn": [
+        "Basic concepts of OOP: classes, objects, methods",
+        "Inheritance: Create a class hierarchy",
+        "Polymorphism: Apply flexible behaviors",
+        "Encapsulation and abstraction: Hiding details",
+        "Magic Methods: Customize class operations",
+        "Multiple Inheritance: Use complex class structures",
+        "Design patterns: Clean and maintainable code",
+        "Dynamic classes: Change classes at runtime",
+        "Debugging and Optimization: Improve performance and code",
+        "and…"
+    ],
+    "requirements": [],
+    "courseSpecs": {},
+    "images": [
+        {
+            "src": "https://downloadlynet.ir/wp-content/uploads/2024/10/OOPs-in-Python-C.jpg",
+            "width": 300,
+            "height": 300
+        },
+        {
+            "alt": "OOPs in Python Content",
+            "src": "https://downloadly.ir/wp-content/uploads/2024/10/OOPs-in-Python-Co.png",
+            "width": 711,
+            "height": 252
+        },
+        {
+            "alt": "OOPs in Python",
+            "src": "https://downloadly.ir/wp-content/uploads/2024/10/OOPs-in-Python.png",
+            "width": 692,
+            "height": 223
+        }
+    ],
+    "sampleVideoUrl": "https://dl.downloadly.ir/Files/Elearning/Sample/OOPs_in_Python_Downloadly.ir.mp4",
+    "installationGuide": "After Extract, watch with your favorite Player.Subtitle: NoneQuality: 1080p",
+    "filePassword": "www.downloadly.ir",
+    "statedSizeText": "4.2 GB",
+    "calculatedSizeBytes": 4593811456,
+    "downloadLinks": [
+        {
+            "url": "https://dl2.downloadly.ir/Files/Elearning/Udemy_OOPs_in_Python_2024-10.part1_Downloadly.ir.rar?nocache=1788171231",
+            "part": 1,
+            "text": "Download Part 1 – 1 GB",
+            "bytes": 1073741824,
+            "sizeText": "1 GB"
+        },
+        {
+            "url": "https://dl2.downloadly.ir/Files/Elearning/Udemy_OOPs_in_Python_2024-10.part2_Downloadly.ir.rar?nocache=1788171231",
+            "part": 2,
+            "text": "Download Part 2 – 1 GB",
+            "bytes": 1073741824,
+            "sizeText": "1 GB"
+        },
+        {
+            "url": "https://dl2.downloadly.ir/Files/Elearning/Udemy_OOPs_in_Python_2024-10.part3_Downloadly.ir.rar?nocache=1788171231",
+            "part": 3,
+            "text": "Download Part 3 – 1 GB",
+            "bytes": 1073741824,
+            "sizeText": "1 GB"
+        },
+        {
+            "url": "https://dl2.downloadly.ir/Files/Elearning/Udemy_OOPs_in_Python_2024-10.part4_Downloadly.ir.rar?nocache=1788171231",
+            "part": 4,
+            "text": "Download Part 4 – 1 GB",
+            "bytes": 1073741824,
+            "sizeText": "1 GB"
+        },
+        {
+            "url": "https://dl2.downloadly.ir/Files/Elearning/Udemy_OOPs_in_Python_2024-10.part5_Downloadly.ir.rar?nocache=1788171231",
+            "part": 5,
+            "text": "Download Part 5 – 285 MB",
+            "bytes": 298844160,
+            "sizeText": "285 MB"
+        }
+    ]
+}
