@@ -22,16 +22,21 @@ export default function WorkerShellPanel({ initialWorkerId }: WorkerShellPanelPr
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'terminal' | 'agents' | 'ssh'>('terminal');
 
-  const terminalContainerRef = useRef<HTMLDivElement>(null);
-  const terminalRef = useRef<Terminal | null>(null);
-  const fitAddonRef = useRef<FitAddon | null>(null);
-  const wsRef = useRef<WebSocket | null>(null);
+  const terminalHostRef = useRef<HTMLDivElement>(null);
+  const sessionsRef = useRef<Map<string, {
+    workerId: string;
+    terminal: Terminal;
+    fitAddon: FitAddon;
+    ws: WebSocket | null;
+    containerEl: HTMLDivElement;
+    status: 'connecting' | 'connected' | 'disconnected' | 'error';
+    error: string | null;
+    targetUrl: string | null;
+    pingTimer: any;
+  }>>(new Map());
   const fullScreenContainerRef = useRef<HTMLDivElement>(null);
   const poolRef = useRef<BrowserPoolPayload | null>(null);
   const selectedWorkerIdRef = useRef<string>(initialWorkerId || '');
-  const connectedWorkerIdRef = useRef<string | null>(null);
-  const connectedUrlRef = useRef<string | null>(null);
-  const pingTimerRef = useRef<any>(null);
 
   // Sync refs with state
   useEffect(() => {
@@ -56,83 +61,170 @@ export default function WorkerShellPanel({ initialWorkerId }: WorkerShellPanelPr
   // Current selected worker object
   const currentWorker: BrowserPoolItem | undefined = pool?.browsers.find(b => b.workerId === selectedWorkerId);
 
-  // Connect WebSocket to worker shell
-  const connectShell = useCallback((force = false) => {
-    const targetWorkerId = selectedWorkerIdRef.current;
-    const worker = poolRef.current?.browsers.find(b => b.workerId === targetWorkerId);
+  // Activate or connect a worker tab (keeping previous tabs alive in background!)
+  const activateWorkerTab = useCallback((workerId: string, forceReconnect = false) => {
+    if (!workerId || !terminalHostRef.current) return;
+
+    // Hide all other containers so they remain alive and streaming in background
+    for (const [id, sess] of sessionsRef.current.entries()) {
+      if (id !== workerId) {
+        sess.containerEl.style.display = 'none';
+      }
+    }
+
+    const worker = poolRef.current?.browsers.find(b => b.workerId === workerId);
+    let session = sessionsRef.current.get(workerId);
+
+    // If session already exists and we are not forcing reconnect, seamlessly reveal it!
+    if (session && !forceReconnect) {
+      session.containerEl.style.display = 'block';
+      setConnStatus(session.status);
+      setConnError(session.error);
+      requestAnimationFrame(() => {
+        try {
+          session?.fitAddon.fit();
+          session?.terminal.focus();
+        } catch {}
+      });
+      return;
+    }
+
     if (!worker) return;
 
-    // Determine target WebSocket URL:
     const directWsUrl = worker.shellWsUrl || (worker.apiUrl ? worker.apiUrl.replace(/^http:/i, 'ws:').replace(/^https:/i, 'wss:') + '/ws/shell' : undefined);
     const proxyWsUrl = api.getWorkerShellWsUrl(worker.workerId);
     const targetUrl = directWsUrl || proxyWsUrl;
 
     if (!targetUrl) return;
 
-    // GUARD: If already connected to this worker with the same target URL, do not reconnect unless forced!
-    if (
-      !force &&
-      wsRef.current &&
-      (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING) &&
-      connectedWorkerIdRef.current === targetWorkerId &&
-      connectedUrlRef.current === targetUrl
-    ) {
-      return;
+    if (session && forceReconnect) {
+      if (session.pingTimer) {
+        clearInterval(session.pingTimer);
+        session.pingTimer = null;
+      }
+      if (session.ws) {
+        session.ws.onclose = null;
+        session.ws.onerror = null;
+        session.ws.onmessage = null;
+        try { session.ws.close(); } catch {}
+        session.ws = null;
+      }
+      session.terminal.clear();
+      session.containerEl.style.display = 'block';
+    } else {
+      // Create dedicated DOM container for this worker
+      const containerEl = document.createElement('div');
+      containerEl.className = 'w-full h-full overflow-hidden';
+      containerEl.style.display = 'block';
+      terminalHostRef.current.appendChild(containerEl);
+
+      const terminal = new Terminal({
+        cursorBlink: true,
+        cursorStyle: 'block',
+        fontSize: 13,
+        fontFamily: 'JetBrains Mono, Menlo, Consolas, "Courier New", monospace',
+        lineHeight: 1.25,
+        theme: {
+          background: '#0a0e17',
+          foreground: '#e2e8f0',
+          cursor: '#38bdf8',
+          cursorAccent: '#0a0e17',
+          selectionBackground: '#0284c7',
+          selectionForeground: '#ffffff',
+          black: '#1e293b',
+          red: '#f43f5e',
+          green: '#10b981',
+          yellow: '#fbbf24',
+          blue: '#38bdf8',
+          magenta: '#c084fc',
+          cyan: '#2dd4bf',
+          white: '#f8fafc',
+          brightBlack: '#475569',
+          brightRed: '#fb7185',
+          brightGreen: '#34d399',
+          brightYellow: '#fde047',
+          brightBlue: '#60a5fa',
+          brightMagenta: '#e879f9',
+          brightCyan: '#5eead4',
+          brightWhite: '#ffffff',
+        },
+        scrollback: 5000,
+        allowTransparency: true,
+      });
+
+      const fitAddon = new FitAddon();
+      terminal.loadAddon(fitAddon);
+      terminal.open(containerEl);
+
+      terminal.onData((data: string) => {
+        const curr = sessionsRef.current.get(workerId);
+        if (curr?.ws && curr.ws.readyState === WebSocket.OPEN) {
+          curr.ws.send(data);
+        }
+      });
+
+      session = {
+        workerId,
+        terminal,
+        fitAddon,
+        ws: null,
+        containerEl,
+        status: 'connecting',
+        error: null,
+        targetUrl: null,
+        pingTimer: null,
+      };
+      sessionsRef.current.set(workerId, session);
     }
 
-    // Teardown existing ping timer and websocket
-    if (pingTimerRef.current) {
-      clearInterval(pingTimerRef.current);
-      pingTimerRef.current = null;
+    session.targetUrl = targetUrl;
+    session.status = 'connecting';
+    session.error = null;
+
+    if (selectedWorkerIdRef.current === workerId) {
+      setConnStatus('connecting');
+      setConnError(null);
     }
 
-    if (wsRef.current) {
-      wsRef.current.onclose = null;
-      wsRef.current.onerror = null;
-      wsRef.current.onmessage = null;
-      try { wsRef.current.close(); } catch {}
-      wsRef.current = null;
-    }
-
-    connectedWorkerIdRef.current = targetWorkerId;
-    connectedUrlRef.current = targetUrl;
-    setConnStatus('connecting');
-    setConnError(null);
-
-    const term = terminalRef.current;
-    if (term) {
-      term.writeln(`\r\n\x1b[33mConnecting to worker [${worker.workerId}] shell...\x1b[0m`);
-    }
+    session.terminal.writeln(`\r\n\x1b[33mConnecting to worker [${worker.workerId}] shell...\x1b[0m`);
 
     let ws: WebSocket;
     try {
       ws = new WebSocket(targetUrl);
     } catch (e: any) {
-      setConnStatus('error');
-      setConnError(`WebSocket instantiation failed: ${e.message}`);
-      connectedWorkerIdRef.current = null;
-      connectedUrlRef.current = null;
+      session.status = 'error';
+      session.error = `WebSocket instantiation failed: ${e.message}`;
+      if (selectedWorkerIdRef.current === workerId) {
+        setConnStatus('error');
+        setConnError(session.error);
+      }
       return;
     }
 
-    wsRef.current = ws;
+    session.ws = ws;
 
     ws.onopen = () => {
-      setConnStatus('connected');
-      setConnError(null);
-      if (term) {
-        term.writeln(`\x1b[32m✔ Connected to interactive PTY shell!\x1b[0m\r\n`);
-        // Send initial resize
-        const fitAddon = fitAddonRef.current;
-        if (fitAddon) {
-          fitAddon.fit();
-          ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
-        }
+      session!.status = 'connected';
+      session!.error = null;
+      if (selectedWorkerIdRef.current === workerId) {
+        setConnStatus('connected');
+        setConnError(null);
       }
+      session!.terminal.writeln(`\x1b[32m✔ Connected to interactive PTY shell!\x1b[0m\r\n`);
+      requestAnimationFrame(() => {
+        try {
+          session?.fitAddon.fit();
+          session?.terminal.focus();
+          ws.send(JSON.stringify({
+            type: 'resize',
+            cols: session?.terminal.cols ?? 80,
+            rows: session?.terminal.rows ?? 24
+          }));
+        } catch {}
+      });
 
-      // Heartbeat ping every 25 seconds to keep Cloudflare quick tunnels alive without dropping
-      if (pingTimerRef.current) clearInterval(pingTimerRef.current);
-      pingTimerRef.current = setInterval(() => {
+      if (session!.pingTimer) clearInterval(session!.pingTimer);
+      session!.pingTimer = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) {
           try {
             ws.send(JSON.stringify({ type: 'ping' }));
@@ -143,70 +235,67 @@ export default function WorkerShellPanel({ initialWorkerId }: WorkerShellPanelPr
 
     ws.onmessage = (event) => {
       if (typeof event.data === 'string') {
-        // Filter out pong heartbeat responses so they don't print to terminal
         if (event.data.includes('"type":"pong"') || event.data.includes('"type": "pong"')) {
           return;
         }
-        term?.write(event.data);
+        session?.terminal.write(event.data);
       } else if (event.data instanceof Blob) {
         event.data.text().then(text => {
           if (text.includes('"type":"pong"') || text.includes('"type": "pong"')) return;
-          term?.write(text);
+          session?.terminal.write(text);
         });
       } else if (event.data instanceof ArrayBuffer) {
         const decoded = new TextDecoder('utf-8').decode(event.data);
         if (decoded.includes('"type":"pong"') || decoded.includes('"type": "pong"')) return;
-        term?.write(decoded);
+        session?.terminal.write(decoded);
       }
     };
 
     ws.onerror = (err) => {
-      console.warn('[Shell WS] WebSocket error:', err);
-      // If direct tunnel failed, try dashboard proxy
+      console.warn(`[Shell WS ${workerId}] WebSocket error:`, err);
       if (targetUrl === directWsUrl && proxyWsUrl && directWsUrl !== proxyWsUrl) {
-        if (term) {
-          term.writeln(`\r\n\x1b[33mDirect connection failed. Falling back to dashboard WebSocket proxy...\x1b[0m`);
-        }
+        session?.terminal.writeln(`\r\n\x1b[33mDirect connection failed. Falling back to dashboard WebSocket proxy...\x1b[0m`);
         try {
-          connectedUrlRef.current = proxyWsUrl;
+          session!.targetUrl = proxyWsUrl;
           const fallbackWs = new WebSocket(proxyWsUrl);
-          wsRef.current = fallbackWs;
+          session!.ws = fallbackWs;
           fallbackWs.onopen = ws.onopen;
           fallbackWs.onmessage = ws.onmessage;
           fallbackWs.onerror = () => {
-            if (wsRef.current === fallbackWs) {
-              setConnStatus('error');
-              setConnError('Unable to connect via direct tunnel or dashboard proxy');
-              connectedWorkerIdRef.current = null;
-              connectedUrlRef.current = null;
+            if (session?.ws === fallbackWs) {
+              session.status = 'error';
+              session.error = 'Unable to connect via direct tunnel or dashboard proxy';
+              if (selectedWorkerIdRef.current === workerId) {
+                setConnStatus('error');
+                setConnError(session.error);
+              }
             }
           };
           fallbackWs.onclose = ws.onclose;
           return;
-        } catch {
-          // ignore
-        }
+        } catch {}
       }
-      if (wsRef.current === ws) {
-        setConnStatus('error');
-        setConnError('WebSocket connection error. Remote worker may still be initializing.');
-        connectedWorkerIdRef.current = null;
-        connectedUrlRef.current = null;
+      if (session?.ws === ws) {
+        session.status = 'error';
+        session.error = 'WebSocket connection error. Remote worker may still be initializing.';
+        if (selectedWorkerIdRef.current === workerId) {
+          setConnStatus('error');
+          setConnError(session.error);
+        }
       }
     };
 
     ws.onclose = (event) => {
-      if (pingTimerRef.current) {
-        clearInterval(pingTimerRef.current);
-        pingTimerRef.current = null;
+      if (session?.pingTimer) {
+        clearInterval(session.pingTimer);
+        session.pingTimer = null;
       }
-      if (wsRef.current === ws) {
-        setConnStatus('disconnected');
-        connectedWorkerIdRef.current = null;
-        connectedUrlRef.current = null;
-        if (term) {
-          term.writeln(`\r\n\x1b[31mShell connection closed (${event.code}${event.reason ? `: ${event.reason}` : ''}).\x1b[0m`);
+      if (session?.ws === ws) {
+        session.status = 'disconnected';
+        if (selectedWorkerIdRef.current === workerId) {
+          setConnStatus('disconnected');
         }
+        session.terminal.writeln(`\r\n\x1b[31mShell connection closed (${event.code}${event.reason ? `: ${event.reason}` : ''}).\x1b[0m`);
       }
     };
   }, []);
@@ -220,14 +309,12 @@ export default function WorkerShellPanel({ initialWorkerId }: WorkerShellPanelPr
 
       let targetId = selectedWorkerIdRef.current;
       if (!targetId && data.browsers.length > 0) {
-        // Look for URL param first
         const searchParams = new URLSearchParams(window.location.search);
         const paramWorkerId = searchParams.get('workerId') || window.location.hash.split('workerId=')[1];
         const match = data.browsers.find(b => b.workerId === paramWorkerId);
         if (match) {
           targetId = match.workerId;
         } else {
-          // Default to first active worker with apiUrl or any worker
           const activeWorker = data.browsers.find(b => b.status === 'active' && b.apiUrl) || data.browsers[0];
           targetId = activeWorker.workerId;
         }
@@ -235,20 +322,18 @@ export default function WorkerShellPanel({ initialWorkerId }: WorkerShellPanelPr
         setSelectedWorkerId(targetId);
       }
 
-      // Check if target worker is available and needs initial connection or if tunnel URL updated
-      if (targetId) {
+      if (targetId && !sessionsRef.current.has(targetId)) {
+        activateWorkerTab(targetId, false);
+      } else if (targetId) {
+        const session = sessionsRef.current.get(targetId);
         const targetWorker = data.browsers.find(b => b.workerId === targetId);
-        if (targetWorker) {
+        if (session && targetWorker) {
           const directWsUrl = targetWorker.shellWsUrl || (targetWorker.apiUrl ? targetWorker.apiUrl.replace(/^http:/i, 'ws:').replace(/^https:/i, 'wss:') + '/ws/shell' : undefined);
           const proxyWsUrl = api.getWorkerShellWsUrl(targetWorker.workerId);
           const targetUrl = directWsUrl || proxyWsUrl;
-
-          if (!connectedWorkerIdRef.current || !wsRef.current || wsRef.current.readyState === WebSocket.CLOSED) {
-            connectShell(false);
-          } else if (connectedWorkerIdRef.current === targetId && connectedUrlRef.current && targetUrl && connectedUrlRef.current !== targetUrl) {
-            // Worker tunnel URL changed, reconnect to updated URL
-            console.log('[Shell] Tunnel URL updated for worker, reconnecting...');
-            connectShell(true);
+          if (session.targetUrl && targetUrl && session.targetUrl !== targetUrl) {
+            console.log(`[Shell ${targetId}] Tunnel URL updated, reconnecting...`);
+            activateWorkerTab(targetId, true);
           }
         }
       }
@@ -257,155 +342,104 @@ export default function WorkerShellPanel({ initialWorkerId }: WorkerShellPanelPr
     }
   };
 
-  // Poll pool data every 8s (updating worker badges and vitals without interrupting shell)
+  // Poll pool data every 8s
   useEffect(() => {
     fetchPool();
     const interval = setInterval(fetchPool, 8000);
     return () => clearInterval(interval);
   }, []);
 
-  // Initialize Terminal ONCE on mount
+  // Global window resize and unmount cleanup
   useEffect(() => {
-    if (!terminalContainerRef.current) return;
-
-    if (terminalRef.current) {
-      terminalRef.current.dispose();
-      terminalRef.current = null;
-    }
-
-    const term = new Terminal({
-      cursorBlink: true,
-      cursorStyle: 'block',
-      fontSize: 13,
-      fontFamily: 'JetBrains Mono, Menlo, Consolas, "Courier New", monospace',
-      lineHeight: 1.25,
-      theme: {
-        background: '#0a0e17',
-        foreground: '#e2e8f0',
-        cursor: '#38bdf8',
-        cursorAccent: '#0a0e17',
-        selectionBackground: '#0284c7',
-        selectionForeground: '#ffffff',
-        black: '#1e293b',
-        red: '#f43f5e',
-        green: '#10b981',
-        yellow: '#fbbf24',
-        blue: '#38bdf8',
-        magenta: '#c084fc',
-        cyan: '#2dd4bf',
-        white: '#f8fafc',
-        brightBlack: '#475569',
-        brightRed: '#fb7185',
-        brightGreen: '#34d399',
-        brightYellow: '#fde047',
-        brightBlue: '#60a5fa',
-        brightMagenta: '#e879f9',
-        brightCyan: '#5eead4',
-        brightWhite: '#ffffff',
-      },
-      scrollback: 5000,
-      allowTransparency: true,
-    });
-
-    const fitAddon = new FitAddon();
-    term.loadAddon(fitAddon);
-
-    term.open(terminalContainerRef.current);
-    terminalRef.current = term;
-    fitAddonRef.current = fitAddon;
-
-    // Send keystrokes to WebSocket
-    term.onData((data: string) => {
-      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-        wsRef.current.send(data);
-      }
-    });
-
-    // Resize listener
     const handleResize = () => {
-      try {
-        fitAddon.fit();
-        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-          wsRef.current.send(JSON.stringify({
-            type: 'resize',
-            cols: term.cols,
-            rows: term.rows
-          }));
-        }
-      } catch {}
+      const session = sessionsRef.current.get(selectedWorkerIdRef.current);
+      if (session && session.containerEl.style.display !== 'none') {
+        try {
+          session.fitAddon.fit();
+          if (session.ws && session.ws.readyState === WebSocket.OPEN) {
+            session.ws.send(JSON.stringify({
+              type: 'resize',
+              cols: session.terminal.cols,
+              rows: session.terminal.rows
+            }));
+          }
+        } catch {}
+      }
     };
 
     window.addEventListener('resize', handleResize);
-    setTimeout(handleResize, 100);
 
     return () => {
       window.removeEventListener('resize', handleResize);
-      if (pingTimerRef.current) {
-        clearInterval(pingTimerRef.current);
-        pingTimerRef.current = null;
+      for (const sess of sessionsRef.current.values()) {
+        if (sess.pingTimer) clearInterval(sess.pingTimer);
+        if (sess.ws) {
+          sess.ws.onclose = null;
+          sess.ws.onerror = null;
+          sess.ws.onmessage = null;
+          try { sess.ws.close(); } catch {}
+        }
+        try { sess.terminal.dispose(); } catch {}
+        try { sess.containerEl.remove(); } catch {}
       }
-      if (wsRef.current) {
-        wsRef.current.onclose = null;
-        wsRef.current.onerror = null;
-        wsRef.current.onmessage = null;
-        try { wsRef.current.close(); } catch {}
-        wsRef.current = null;
-      }
-      connectedWorkerIdRef.current = null;
-      connectedUrlRef.current = null;
-      term.dispose();
-      terminalRef.current = null;
+      sessionsRef.current.clear();
     };
   }, []);
 
-  // Fit terminal when fullscreen toggles without resetting terminal
+  // Fit terminal when fullscreen toggles
   useEffect(() => {
     const timer = setTimeout(() => {
-      try {
-        fitAddonRef.current?.fit();
-        if (terminalRef.current && wsRef.current?.readyState === WebSocket.OPEN) {
-          wsRef.current.send(JSON.stringify({
-            type: 'resize',
-            cols: terminalRef.current.cols,
-            rows: terminalRef.current.rows
-          }));
-        }
-      } catch {}
+      const session = sessionsRef.current.get(selectedWorkerIdRef.current);
+      if (session && session.containerEl.style.display !== 'none') {
+        try {
+          session.fitAddon.fit();
+          session.terminal.focus();
+          if (session.ws && session.ws.readyState === WebSocket.OPEN) {
+            session.ws.send(JSON.stringify({
+              type: 'resize',
+              cols: session.terminal.cols,
+              rows: session.terminal.rows
+            }));
+          }
+        } catch {}
+      }
     }, 120);
     return () => clearTimeout(timer);
   }, [isFullscreen]);
 
-  // Connect whenever selected worker changes (e.g. user clicks another worker tab)
+  // Activate worker tab on tab switch (instantaneous, preserving previous terminal states)
   useEffect(() => {
     if (selectedWorkerId && poolRef.current) {
-      terminalRef.current?.clear();
-      connectShell(false);
+      activateWorkerTab(selectedWorkerId, false);
     }
-  }, [selectedWorkerId, connectShell]);
+  }, [selectedWorkerId, activateWorkerTab]);
 
-  // Quick Command Injection
+  // Quick Command Injection into active tab
   const injectCommand = (cmd: string) => {
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(cmd + '\n');
-      terminalRef.current?.focus();
+    const session = sessionsRef.current.get(selectedWorkerIdRef.current);
+    if (session?.ws && session.ws.readyState === WebSocket.OPEN) {
+      session.ws.send(cmd + '\n');
+      session.terminal.focus();
     } else {
       setToastMsg('⚠️ Terminal not connected. Please reconnect first.');
       setTimeout(() => setToastMsg(null), 3000);
     }
   };
 
-  // Reset persistent shell session on worker
+  // Reset persistent shell session on active worker
   const resetSession = async () => {
-    if (!currentWorker) return;
-    if (!window.confirm(`Reset background persistent shell session for ${currentWorker.workerId}? Any currently running background jobs in this shell will be terminated.`)) return;
+    const targetId = selectedWorkerIdRef.current;
+    const worker = poolRef.current?.browsers.find(b => b.workerId === targetId);
+    if (!worker) return;
+    if (!window.confirm(`Reset background persistent shell session for ${worker.workerId}? Any currently running background jobs in this shell will be terminated.`)) return;
 
     try {
-      if (currentWorker.apiUrl) {
-        await fetch(`${currentWorker.apiUrl}/api/shell/sessions/default/kill`, { method: 'POST' }).catch(() => {});
+      if (worker.apiUrl) {
+        await fetch(`${worker.apiUrl}/api/shell/sessions/default/kill`, { method: 'POST' }).catch(() => {});
       }
       setToastMsg('🔄 Background session reset. Spawning fresh shell...');
       setTimeout(() => {
-        connectShell(true);
+        activateWorkerTab(targetId, true);
       }, 400);
     } catch (e: any) {
       setToastMsg(`Failed to reset: ${e.message}`);
@@ -416,13 +450,19 @@ export default function WorkerShellPanel({ initialWorkerId }: WorkerShellPanelPr
   const toggleFullscreen = () => {
     setIsFullscreen(prev => !prev);
     setTimeout(() => {
-      fitAddonRef.current?.fit();
-      if (terminalRef.current && wsRef.current?.readyState === WebSocket.OPEN) {
-        wsRef.current.send(JSON.stringify({
-          type: 'resize',
-          cols: terminalRef.current.cols,
-          rows: terminalRef.current.rows
-        }));
+      const session = sessionsRef.current.get(selectedWorkerIdRef.current);
+      if (session && session.containerEl.style.display !== 'none') {
+        try {
+          session.fitAddon.fit();
+          session.terminal.focus();
+          if (session.ws && session.ws.readyState === WebSocket.OPEN) {
+            session.ws.send(JSON.stringify({
+              type: 'resize',
+              cols: session.terminal.cols,
+              rows: session.terminal.rows
+            }));
+          }
+        } catch {}
       }
     }, 150);
   };
@@ -482,7 +522,7 @@ export default function WorkerShellPanel({ initialWorkerId }: WorkerShellPanelPr
             <Button
               variant="outline"
               size="sm"
-              onClick={() => connectShell(true)}
+              onClick={() => activateWorkerTab(selectedWorkerId, true)}
               disabled={!currentWorker}
               className="font-mono text-xs uppercase font-bold text-sky-400 border-sky-800 hover:bg-sky-950/50"
               title="Reconnect to existing background persistent session"
@@ -504,7 +544,7 @@ export default function WorkerShellPanel({ initialWorkerId }: WorkerShellPanelPr
             <Button
               variant="outline"
               size="sm"
-              onClick={() => terminalRef.current?.clear()}
+              onClick={() => sessionsRef.current.get(selectedWorkerId)?.terminal.clear()}
               className="font-mono text-xs uppercase font-bold text-muted-foreground hover:text-foreground"
               title="Clear terminal screen"
             >
@@ -596,8 +636,8 @@ export default function WorkerShellPanel({ initialWorkerId }: WorkerShellPanelPr
 
           {/* Terminal Screen Canvas */}
           <div
-            ref={terminalContainerRef}
-            className="flex-1 w-full p-2 overflow-hidden select-text cursor-text"
+            ref={terminalHostRef}
+            className="flex-1 w-full p-2 overflow-hidden select-text cursor-text relative"
           />
         </Card>
 

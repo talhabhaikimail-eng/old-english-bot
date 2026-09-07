@@ -477,6 +477,11 @@ write_ssh_state "" "$SSH_PASSWORD" "$SSH_PORT" "$SSH_USER" "$SSH_COMMAND"
 
 start_sshd() {
   if [ "$(uname -s)" = "Linux" ]; then
+    # If sshd is already running and listening on SSH_PORT, do not restart!
+    if ss -tln 2>/dev/null | grep -q ":${SSH_PORT} " || (command -v nc >/dev/null 2>&1 && nc -z 127.0.0.1 "${SSH_PORT}" 2>/dev/null); then
+      return 0
+    fi
+
     if ! command -v sshd >/dev/null 2>&1; then
       echo "📦 Installing OpenSSH server..."
       sudo apt-get update -y && sudo apt-get install -y openssh-server 2>/dev/null || true
@@ -488,13 +493,15 @@ start_sshd() {
       echo "${SSH_USER}:${SSH_PASSWORD}" | sudo chpasswd 2>/dev/null || true
       sudo ssh-keygen -A 2>/dev/null || true
 
-      sudo /usr/sbin/sshd -p "${SSH_PORT}" \
+      # Run sshd with -D (do not daemonize) so the background process PID remains persistent
+      sudo /usr/sbin/sshd -D -p "${SSH_PORT}" \
         -o "PasswordAuthentication=yes" \
         -o "PermitRootLogin=yes" \
         -o "ChallengeResponseAuthentication=no" \
         -o "UsePAM=yes" \
         > /tmp/sshd.log 2>&1 &
       SSH_PID=$!
+      sleep 1
       echo "OpenSSH server started (PID: $SSH_PID)"
     fi
   fi
@@ -788,9 +795,11 @@ while true; do
   fi
 
   # ── Watchdog 4c: SSH Server & Tunnel ─────────────────────────────────────
-  if [ -n "$SSH_PID" ] && ! kill -0 "$SSH_PID" 2>/dev/null; then
-    echo "⚠️ OpenSSH server PID $SSH_PID died! Restarting sshd..."
-    start_sshd
+  if [ -n "$SSH_PID" ]; then
+    if ! kill -0 "$SSH_PID" 2>/dev/null && ! (ss -tln 2>/dev/null | grep -q ":${SSH_PORT} "); then
+      echo "⚠️ OpenSSH server PID $SSH_PID died! Restarting sshd..."
+      start_sshd
+    fi
   fi
 
   if [ -n "$TUNNEL_SSH_PID" ] && ! kill -0 "$TUNNEL_SSH_PID" 2>/dev/null; then

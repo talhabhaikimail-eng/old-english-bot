@@ -80,11 +80,11 @@ export interface WebhookPayload {
 // Constants
 // ---------------------------------------------------------------------------
 
-/** If no heartbeat for 75 s → mark stale (skip for new search requests). */
-const STALE_TIMEOUT_MS = 75 * 1000;
+/** If no heartbeat for 180 s → mark stale (skip for new search requests). */
+const STALE_TIMEOUT_MS = 180 * 1000;
 
-/** If no heartbeat for 2 min → remove entirely. */
-const DEAD_TIMEOUT_MS = 120 * 1000;
+/** If no heartbeat for 6 min → remove entirely. */
+const DEAD_TIMEOUT_MS = 360 * 1000;
 
 /** Background cleanup interval. */
 const CLEANUP_INTERVAL_MS = 15 * 1000;
@@ -669,11 +669,15 @@ class BrowserPool {
       }
     }
 
-    // Auto-scaling: If active browsers drop below 3, and total browsers are below 30, trigger new spawn.
+    // Auto-scaling: Only trigger auto-spawn if zero active workers exist, or if explicitly enabled via AUTO_SPAWN_WORKERS=true.
+    // Prevents aggressive killing and re-spawning of active background worker runs.
     const activeCount = this.getActive().length;
-    const MAX_TOTAL_BROWSERS = 30;
-    if (activeCount < 3 && this.browsers.size < MAX_TOTAL_BROWSERS) {
-      console.warn(`[BrowserPool] Active browsers dropped below 3 (active: ${activeCount}, total: ${this.browsers.size}). Triggering new worker spawn...`);
+    const shouldAutoSpawn = process.env.AUTO_SPAWN_WORKERS === 'true'
+      ? activeCount < 3
+      : activeCount === 0 && this.browsers.size === 0;
+
+    if (shouldAutoSpawn) {
+      console.warn(`[BrowserPool] Zero active browser workers available (active: ${activeCount}, total: ${this.browsers.size}). Triggering new worker spawn...`);
       this.restartWorkers();
     }
   }
