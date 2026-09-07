@@ -1365,13 +1365,20 @@ async def websocket_shell_endpoint(websocket: WebSocket):
             bytes_data = msg.get("bytes")
 
             if text_data is not None:
-                if text_data.startswith("{") and "resize" in text_data:
+                if text_data.startswith("{"):
                     try:
                         ctrl = json.loads(text_data)
-                        if ctrl.get("type") == "resize":
+                        ctrl_type = ctrl.get("type")
+                        if ctrl_type == "resize":
                             cols = int(ctrl.get("cols", 80))
                             rows = int(ctrl.get("rows", 24))
                             session.resize(cols, rows)
+                            continue
+                        elif ctrl_type in ("ping", "heartbeat"):
+                            try:
+                                await websocket.send_text(json.dumps({"type": "pong"}))
+                            except Exception:
+                                pass
                             continue
                     except Exception:
                         pass
