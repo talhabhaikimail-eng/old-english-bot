@@ -1,0 +1,636 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Qwen Image 2.1 — Web UI & Gallery</title>
+  <style>
+    :root {
+      --bg: #0b0f19;
+      --card-bg: #151d2e;
+      --border: #223049;
+      --accent: #6366f1;
+      --accent-hover: #4f46e5;
+      --text: #f3f4f6;
+      --text-muted: #94a3b8;
+      --success: #10b981;
+      --danger: #ef4444;
+    }
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    }
+    body {
+      background-color: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    header {
+      background: rgba(21, 29, 46, 0.9);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
+      padding: 0.8rem 2rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+    .badge {
+      font-size: 0.75rem;
+      background: rgba(99, 102, 241, 0.2);
+      color: #a5b4fc;
+      border: 1px solid rgba(99, 102, 241, 0.4);
+      padding: 0.2rem 0.6rem;
+      border-radius: 9999px;
+      font-weight: 600;
+    }
+    .cpu-badge {
+      background: rgba(16, 185, 129, 0.15);
+      color: #6ee7b7;
+      border: 1px solid rgba(16, 185, 129, 0.3);
+    }
+    .nav-tabs {
+      display: flex;
+      gap: 0.5rem;
+    }
+    .tab-btn {
+      background: transparent;
+      border: 1px solid transparent;
+      color: var(--text-muted);
+      padding: 0.5rem 1rem;
+      border-radius: 0.5rem;
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 0.9rem;
+      transition: all 0.2s;
+    }
+    .tab-btn.active {
+      background: rgba(99, 102, 241, 0.2);
+      color: #fff;
+      border-color: rgba(99, 102, 241, 0.5);
+    }
+    main {
+      flex: 1;
+      max-width: 1300px;
+      width: 100%;
+      margin: 0 auto;
+      padding: 1.5rem;
+    }
+    .tab-content {
+      display: none;
+    }
+    .tab-content.active {
+      display: grid;
+      grid-template-columns: 460px 1fr;
+      gap: 1.5rem;
+    }
+    #gallery-tab.active {
+      display: block;
+    }
+    @media (max-width: 960px) {
+      .tab-content.active {
+        grid-template-columns: 1fr;
+      }
+    }
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 1rem;
+      padding: 1.5rem;
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.4);
+    }
+    .form-group {
+      margin-bottom: 1.25rem;
+    }
+    label {
+      display: block;
+      font-size: 0.875rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      margin-bottom: 0.5rem;
+    }
+    textarea, select, input[type="text"], input[type="number"] {
+      width: 100%;
+      background: #0d1321;
+      border: 1px solid var(--border);
+      border-radius: 0.6rem;
+      padding: 0.75rem 1rem;
+      color: var(--text);
+      font-size: 0.95rem;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    textarea:focus, select:focus, input:focus {
+      border-color: var(--accent);
+    }
+    textarea {
+      resize: vertical;
+      min-height: 100px;
+    }
+    .row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+    }
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      background: rgba(99, 102, 241, 0.08);
+      border: 1px solid rgba(99, 102, 241, 0.2);
+      padding: 0.75rem 1rem;
+      border-radius: 0.6rem;
+      cursor: pointer;
+    }
+    .toggle-row input {
+      width: 1.2rem;
+      height: 1.2rem;
+      accent-color: var(--accent);
+      cursor: pointer;
+    }
+    .toggle-label {
+      cursor: pointer;
+      user-select: none;
+      font-size: 0.9rem;
+      font-weight: 500;
+      color: #c7d2fe;
+    }
+    .btn {
+      width: 100%;
+      background: var(--accent);
+      color: white;
+      border: none;
+      padding: 0.9rem;
+      font-size: 1rem;
+      font-weight: 700;
+      border-radius: 0.75rem;
+      cursor: pointer;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 0.5rem;
+      transition: background 0.2s, transform 0.1s;
+    }
+    .btn:hover:not(:disabled) {
+      background: var(--accent-hover);
+    }
+    .btn:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+    .preview-container {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 480px;
+      border: 2px dashed var(--border);
+      border-radius: 1rem;
+      position: relative;
+      overflow: hidden;
+      background: #090d16;
+    }
+    .preview-container.has-image {
+      border-style: solid;
+      background: repeating-conic-gradient(#1e293b 0% 25%, #0f172a 0% 50%) 50% / 20px 20px;
+    }
+    .preview-image {
+      max-width: 100%;
+      max-height: 540px;
+      object-fit: contain;
+      border-radius: 0.5rem;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+    }
+    .placeholder {
+      text-align: center;
+      color: var(--text-muted);
+      padding: 2rem;
+    }
+    .spinner {
+      width: 48px;
+      height: 48px;
+      border: 4px solid rgba(99, 102, 241, 0.2);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+      margin-bottom: 1rem;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    .status-box {
+      margin-top: 1rem;
+      font-size: 0.875rem;
+      text-align: center;
+      color: var(--text-muted);
+    }
+    .action-bar {
+      margin-top: 1rem;
+      display: flex;
+      gap: 1rem;
+      width: 100%;
+    }
+    .btn-secondary {
+      background: #223049;
+      color: var(--text);
+    }
+    .btn-secondary:hover {
+      background: #2e4162;
+    }
+    .tips {
+      margin-top: 1.25rem;
+      padding: 0.85rem;
+      background: rgba(15, 23, 42, 0.6);
+      border: 1px solid var(--border);
+      border-radius: 0.6rem;
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      line-height: 1.5;
+    }
+
+    /* Gallery styles */
+    .gallery-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 1.5rem;
+      margin-top: 1rem;
+    }
+    .gallery-card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 0.8rem;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+      transition: transform 0.2s, border-color 0.2s;
+    }
+    .gallery-card:hover {
+      transform: translateY(-3px);
+      border-color: rgba(99, 102, 241, 0.5);
+    }
+    .gallery-img-wrap {
+      width: 100%;
+      height: 260px;
+      background: repeating-conic-gradient(#1e293b 0% 25%, #0f172a 0% 50%) 50% / 16px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      cursor: pointer;
+    }
+    .gallery-img-wrap img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+    .gallery-details {
+      padding: 1rem;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+    .gallery-prompt {
+      font-size: 0.85rem;
+      color: var(--text);
+      line-height: 1.4;
+      display: -webkit-box;
+      -webkit-line-clamp: 3;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+      margin-bottom: 0.75rem;
+    }
+    .gallery-meta {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 0.75rem;
+    }
+    .gallery-actions {
+      display: flex;
+      gap: 0.5rem;
+    }
+    .gallery-actions .btn {
+      padding: 0.4rem 0.6rem;
+      font-size: 0.8rem;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <h2>Qwen Image 2.1</h2>
+      <span class="badge">Async Pipeline</span>
+      <span class="badge cpu-badge">Zen 4 CPU</span>
+    </div>
+    <div class="nav-tabs">
+      <button id="nav-gen" class="tab-btn active" onclick="switchTab('gen')">🎨 Generate</button>
+      <button id="nav-gallery" class="tab-btn" onclick="switchTab('gallery')">🖼️ Gallery & History (<span id="gallery-count">0</span>)</button>
+    </div>
+  </header>
+
+  <main>
+    <!-- GENERATE TAB -->
+    <div id="gen-tab" class="tab-content active">
+      <div class="card">
+        <div class="form-group">
+          <label for="prompt">Prompt</label>
+          <textarea id="prompt" placeholder="Describe the image you want to generate...">A majestic golden eagle soaring over snow-capped mountains during golden hour, cinematic lighting</textarea>
+        </div>
+
+        <div class="form-group">
+          <label for="negative-prompt">Negative Prompt (Optional)</label>
+          <input type="text" id="negative-prompt" placeholder="ugly, blurry, distorted" value="blurry, distorted, low quality">
+        </div>
+
+        <div class="row">
+          <div class="form-group">
+            <label for="size">Resolution</label>
+            <select id="size">
+              <option value="256x256" selected>256 x 256 (CPU Fast: ~40s)</option>
+              <option value="384x384">384 x 384 (CPU Balanced: ~90s)</option>
+              <option value="512x512">512 x 512 (Quality: ~2-3 min)</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label for="steps">Steps</label>
+            <input type="number" id="steps" value="6" min="1" max="25">
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="form-group">
+            <label for="cfg">CFG Guidance</label>
+            <input type="number" id="cfg" value="6.0" step="0.5" min="1" max="15">
+          </div>
+
+          <div class="form-group">
+            <label for="seed">Seed (-1 = Random)</label>
+            <input type="number" id="seed" value="-1">
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="toggle-row">
+            <input type="checkbox" id="transparent-bg">
+            <span class="toggle-label">Native RGBA Transparency (Transparent Background)</span>
+          </label>
+        </div>
+
+        <button id="generate-btn" class="btn" onclick="submitGeneration()">
+          <span>✨ Generate Image</span>
+        </button>
+
+        <div id="status" class="status-box">Ready to generate.</div>
+
+        <div class="tips">
+          <strong>⚡ No Timeout Guarantee:</strong> Generations run via asynchronous background jobs with live polling. Cloudflare 524 timeouts are 100% prevented, and every generated image is permanently saved in the Gallery.
+        </div>
+      </div>
+
+      <div class="card" style="display:flex; flex-direction:column;">
+        <div id="preview-box" class="preview-container">
+          <div id="placeholder" class="placeholder">
+            <p style="font-size: 2.5rem; margin-bottom: 0.5rem;">🎨</p>
+            <p>Your generated image will appear here.</p>
+          </div>
+          <div id="loading" style="display: none; flex-direction: column; align-items: center;">
+            <div class="spinner"></div>
+            <p id="loading-timer" style="font-weight: 600;">Generating...</p>
+            <p id="job-status-detail" style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem;">Running DiT denoising on CPU...</p>
+          </div>
+          <img id="result-img" class="preview-image" style="display: none;" alt="Generated image">
+        </div>
+
+        <div id="action-bar" class="action-bar" style="display: none;">
+          <button class="btn btn-secondary" onclick="downloadImage()">⬇️ Download PNG</button>
+          <button class="btn btn-secondary" onclick="openNewTab()">🔍 View Fullscreen</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- GALLERY TAB -->
+    <div id="gallery-tab" class="tab-content">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+        <h3>Saved Generated Images</h3>
+        <button class="btn btn-secondary" style="width: auto; padding: 0.5rem 1rem;" onclick="loadGallery()">🔄 Refresh</button>
+      </div>
+      <div id="gallery-list" class="gallery-grid">
+        <p style="color:var(--text-muted)">Loading gallery...</p>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    let currentImageUrl = null;
+    let pollInterval = null;
+
+    function switchTab(tab) {
+      document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
+      document.querySelectorAll(".tab-content").forEach(c => c.classList.remove("active"));
+      
+      if (tab === "gen") {
+        document.getElementById("nav-gen").classList.add("active");
+        document.getElementById("gen-tab").classList.add("active");
+      } else {
+        document.getElementById("nav-gallery").classList.add("active");
+        document.getElementById("gallery-tab").classList.add("active");
+        loadGallery();
+      }
+    }
+
+    async function submitGeneration() {
+      const prompt = document.getElementById("prompt").value.trim();
+      const negPrompt = document.getElementById("negative-prompt").value.trim();
+      const sizeVal = document.getElementById("size").value;
+      const [w, h] = sizeVal.split("x").map(Number);
+      const steps = parseInt(document.getElementById("steps").value, 10) || 6;
+      const cfg = parseFloat(document.getElementById("cfg").value) || 6.0;
+      let seed = parseInt(document.getElementById("seed").value, 10);
+      const transparent = document.getElementById("transparent-bg").checked;
+
+      if (!prompt) {
+        alert("Please enter a prompt!");
+        return;
+      }
+
+      const btn = document.getElementById("generate-btn");
+      const status = document.getElementById("status");
+      const placeholder = document.getElementById("placeholder");
+      const loading = document.getElementById("loading");
+      const resultImg = document.getElementById("result-img");
+      const previewBox = document.getElementById("preview-box");
+      const actionBar = document.getElementById("action-bar");
+      const timerEl = document.getElementById("loading-timer");
+      const statusDetail = document.getElementById("job-status-detail");
+
+      btn.disabled = true;
+      placeholder.style.display = "none";
+      resultImg.style.display = "none";
+      actionBar.style.display = "none";
+      previewBox.classList.remove("has-image");
+      loading.style.display = "flex";
+
+      let seconds = 0;
+      timerEl.textContent = `Queued... (${seconds}s)`;
+      const timer = setInterval(() => {
+        seconds++;
+        timerEl.textContent = `Generating... (${seconds}s)`;
+      }, 1000);
+
+      status.textContent = "Submitting job to queue...";
+
+      try {
+        const res = await fetch("/api/generate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            prompt: prompt,
+            negative_prompt: negPrompt,
+            width: w,
+            height: h,
+            steps: steps,
+            cfg: cfg,
+            seed: seed,
+            transparent: transparent
+          })
+        });
+
+        if (!res.ok) {
+          throw new Error(await res.text());
+        }
+
+        const data = await res.json();
+        const jobId = data.id;
+        status.textContent = `Job submitted (${jobId}). Denoising on Zen 4 CPU...`;
+
+        // Start polling every 2s
+        pollInterval = setInterval(async () => {
+          try {
+            const check = await fetch(`/api/jobs/${jobId}`);
+            if (!check.ok) return;
+            const jobData = await check.json();
+
+            if (jobData.status === "generating") {
+              statusDetail.textContent = "DiT Denoising in progress on CPU...";
+            }
+
+            if (jobData.status === "completed" && jobData.entry) {
+              clearInterval(pollInterval);
+              clearInterval(timer);
+              loading.style.display = "none";
+              btn.disabled = false;
+
+              currentImageUrl = jobData.entry.url;
+              resultImg.src = currentImageUrl;
+              resultImg.style.display = "block";
+              previewBox.classList.add("has-image");
+              actionBar.style.display = "flex";
+              status.textContent = `✅ Completed in ${seconds}s (Seed: ${jobData.entry.seed}) — Saved to Gallery!`;
+              updateGalleryCount();
+            } else if (jobData.status === "failed") {
+              clearInterval(pollInterval);
+              clearInterval(timer);
+              loading.style.display = "none";
+              btn.disabled = false;
+              placeholder.style.display = "block";
+              status.innerHTML = `<span style="color:var(--danger)">Generation failed: ${JSON.stringify(jobData.error)}</span>`;
+            }
+          } catch (e) {
+            console.error("Polling error:", e);
+          }
+        }, 2000);
+
+      } catch (err) {
+        clearInterval(timer);
+        loading.style.display = "none";
+        btn.disabled = false;
+        placeholder.style.display = "block";
+        status.innerHTML = `<span style="color:var(--danger)">Error: ${err.message}</span>`;
+      }
+    }
+
+    async function loadGallery() {
+      const listEl = document.getElementById("gallery-list");
+      try {
+        const res = await fetch("/api/history");
+        const items = await res.json();
+        document.getElementById("gallery-count").textContent = items.length;
+
+        if (items.length === 0) {
+          listEl.innerHTML = '<p style="color:var(--text-muted)">No images generated yet.</p>';
+          return;
+        }
+
+        listEl.innerHTML = items.map(item => `
+          <div class="gallery-card">
+            <div class="gallery-img-wrap" onclick="window.open('${item.url}', '_blank')">
+              <img src="${item.url}" alt="Saved image" loading="lazy">
+            </div>
+            <div class="gallery-details">
+              <div class="gallery-prompt" title="${item.prompt}">${item.prompt}</div>
+              <div class="gallery-meta">
+                <span>${item.width}x${item.height} • ${item.steps} steps</span>
+                <span>Seed: ${item.seed}</span>
+              </div>
+              <div class="gallery-actions">
+                <a href="${item.url}" download="${item.filename}" class="btn btn-secondary">⬇️ Download</a>
+                <button class="btn btn-secondary" onclick="usePrompt('${escapeHtml(item.prompt)}')">📋 Use Prompt</button>
+              </div>
+            </div>
+          </div>
+        `).join("");
+      } catch (e) {
+        listEl.innerHTML = `<p style="color:var(--danger)">Error loading gallery: ${e.message}</p>`;
+      }
+    }
+
+    async function updateGalleryCount() {
+      try {
+        const res = await fetch("/api/history");
+        const items = await res.json();
+        document.getElementById("gallery-count").textContent = items.length;
+      } catch (e) {}
+    }
+
+    function usePrompt(p) {
+      document.getElementById("prompt").value = p;
+      switchTab('gen');
+    }
+
+    function downloadImage() {
+      if (!currentImageUrl) return;
+      const a = document.createElement("a");
+      a.href = currentImageUrl;
+      a.download = `qwen_image_2.1_${Date.now()}.png`;
+      a.click();
+    }
+
+    function openNewTab() {
+      if (!currentImageUrl) return;
+      window.open(currentImageUrl, "_blank");
+    }
+
+    function escapeHtml(str) {
+      return (str || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+    }
+
+    // Init gallery count on load
+    updateGalleryCount();
+  </script>
+</body>
+</html>
