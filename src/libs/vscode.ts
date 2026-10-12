@@ -80,7 +80,7 @@ export async function startVSCode(options: VSCodeOptions = {}): Promise<{ url?: 
         const sessRes = await fetch(`${GO_MANAGER_URL}/api/go/containers/sessions`);
         const sessions = await sessRes.json() as any[];
         const found = sessions.find(s => s.id === sessionId || s.id === `docker-${hash}`);
-        const baseDomain = options.isDemo ? (process.env.PORTFOLIO_DOMAIN || 'talhacodes.site') : (process.env.MAIN_DOMAIN || 'ufone-claim.site');
+        const baseDomain = options.isDemo ? (process.env.PORTFOLIO_DOMAIN || 'talhacodes.site') : (process.env.MAIN_DOMAIN || 'talhacodes.site');
         const defaultSubdomain = options.isDemo ? `demo-${hash}.${baseDomain}` : `vscode-${hash}.${baseDomain}`;
         const url = found?.url || (options.customDomain ? `https://${options.customDomain}` : `https://${defaultSubdomain}`);
 

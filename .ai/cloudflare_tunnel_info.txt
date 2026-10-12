@@ -1,0 +1,37 @@
+DASHBOARD TUNNEL CONFIGURATION:
+- Service Domain: DASHBOARD_DOMAIN env var (services.talhacodes.site)
+- Tunnel Name: "services main tunnel"
+- Tunnel ID: bb28e320-2ce9-4cb5-971f-65f1a5ce3ac7
+- Target Host: localhost (or 127.0.0.1)
+- Target Port: 4000
+- Target Service / URL: http://localhost:4000 (HTTP)
+- Env Var: CLOUDFLARE_TUNNEL_TOKEN (must contain the token for tunnel ID bb28e320-2ce9-4cb5-971f-65f1a5ce3ac7)
+- Workflow: .github/workflows/run-bridge.yml installs cloudflared and runs npm start.
+- Process: src/index.ts calls startDashboard(4000) which serves on 127.0.0.1:4000 and runs `cloudflared tunnel --no-autoupdate run --token $CLOUDFLARE_TUNNEL_TOKEN`.
+- Sub-services proxied via dashboard (port 4000):
+  - Container Manager: 127.0.0.1:18080
+  - Contact Scraper: 127.0.0.1:8081
+  - CV Generator: 127.0.0.1:8082
+
+BROWSER TUNNEL CONFIGURATION:
+- Service Domain: BROWSER_DOMAIN env var (browser.talhacodes.site)
+- Tunnel Name: "browser-talhacodes"
+- Tunnel ID: 2808d6e8-b1a2-4e76-b493-b0b6d2bcb94c
+- Target Host: localhost (or 127.0.0.1)
+- Target Port: BROWSER_PORT env var (default: 10080)
+- Target Service / URL: http://localhost:10080 (HTTP)
+- Env Var: BROWSER_TUNNEL_TOKEN (must contain the token for tunnel ID 2808d6e8-b1a2-4e76-b493-b0b6d2bcb94c)
+- Process: src/libs/browser.ts launches Docker Chromium container mapping host port 10080 -> container port 3000 (KasmVNC/web GUI), and runs `cloudflared tunnel --no-autoupdate run --token $BROWSER_TUNNEL_TOKEN`.
+- CDP Port: 10222 (for automated Google sign-in / cookies).
+
+CLOUDFLARE ZONES:
+- talhacodes.site: bdab676dc795f7321758573495898fd0
+- ufone-claim.site: 743f86bdacd1b4fa23620db280c6d05f
+
+CRITICAL GOTCHAS FOR GITHUB ACTIONS DEPLOYMENT:
+1. Entire .env file content is stored in GitHub Repository Secrets as `ENV_FILE`.
+2. Both workflows (.github/workflows/run-bridge.yml and browser-worker.yml) write `printf '%s' "$ENV_FILE" > .env`, then `source .env`.
+3. Updating GitHub Repository Secrets does NOT update or restart already-running workflows!
+   Because run-bridge runs for 5 hours (18000s) and automatically re-dispatches itself, an existing run will continue running with the OLD secrets unless explicitly cancelled.
+4. Concurrency has now been configured in run-bridge.yml with cancel-in-progress: true so that new pushes / manual triggers automatically terminate old runs.
+5. In .env, ensure CLOUDFLARE_TUNNEL_TOKEN is set to the token for "services main tunnel" (bb28e320...) and BROWSER_TUNNEL_TOKEN is set to the token for "browser-talhacodes" (2808d6e8...). Previously these tokens were mixed up and pointing to the old ufone-claim.site tunnel.
