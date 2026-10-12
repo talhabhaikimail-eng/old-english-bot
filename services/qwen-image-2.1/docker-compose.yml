@@ -1,0 +1,19 @@
+services:
+  qwen-image:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: qwen-image-2.1
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - THREADS=4
+      # Provide your tunnel token to expose securely via Cloudflare
+      - CLOUDFLARE_TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN:-}
+      - USE_TRYCLOUDFLARE=false
+    volumes:
+      # Persistent storage for downloaded weights (so container recreate doesn't re-download 9GB)
+      - ./models:/models
+      # Persistent storage for generated images (visible in the Gallery tab)
+      - ./outputs:/outputs
