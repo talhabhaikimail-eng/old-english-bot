@@ -1,0 +1,32 @@
+ROOT CAUSE ANALYSIS AND FIX SUMMARY:
+
+1. MULTIPLE DISCORD-WHATSAPP BRIDGES RUNNING:
+- In .github/workflows/run-bridge.yml, there was NO concurrency group configured.
+- The previous kill mechanism relied strictly on `POST https://${customDomain}/api/kill`.
+- When DASHBOARD_DOMAIN changed, pinging the new domain could never contact old instances running on the old domain.
+- Furthermore, on services.talhacodes.site, Cloudflare Bot Fight Mode / WAF challenged GitHub Actions datacenter IPs with 403 Forbidden ("Just a moment..." challenge), blocking the kill signal from reaching the target.
+- Because old runs were not killed and each ran with a 5-hour timeout + scheduled runs + self-triggers, 4 bridge workflows accumulated concurrently.
+- FIX:
+  * Added `concurrency: { group: 'discord-whatsapp-bridge', cancel-in-progress: true }` in run-bridge.yml.
+  * Added a step in run-bridge.yml to query GitHub Actions API and cancel any existing runs of run-bridge.yml.
+  * In exposeDashboard() (dashboard-server.ts), added a GitHub Actions API check using PAT_TOKEN to directly cancel older bridge workflow runs, and added browser headers to the HTTP /api/kill request.
+  * Successfully cancelled the 3 zombie bridge runs (38350194516, 38352164930, 38365299587) so only 1 remains active.
+
+2. RUNAWAY CONTINUOUS SPAWNING OF BROWSER WORKERS:
+- In browser-pool.ts, if activeCount === 0 && browsers.size === 0, it auto-spawned browser workers every 2-4 minutes.
+- When workers started in GitHub Actions (browser-worker.yml -> browser-worker.sh), they attempted to register via `POST https://${DASHBOARD_DOMAIN}/api/browsers/webhook`.
+- Cloudflare on talhacodes.site returned HTTP 403 Managed Challenge to the runner's curl request.
+- Because registration failed, the worker exited with code 1.
+- With 0 workers ever registering, the bridge saw 0 workers forever and triggered new spawns indefinitely every few minutes.
+- With 4 bridges running, all 4 were spawning simultaneously, creating a flood of actions.
+- FIX:
+  * In browser-pool.ts restartWorkers(): Added check so that if any browser-worker run is already in_progress or queued, NO new run is dispatched.
+  * Increased cooldown threshold to 8 minutes.
+  * Added exponential backoff and spam suppression if consecutive spawns yield 0 registered workers.
+  * In browser-worker.sh: Added browser headers to webhook curl calls and explicit Cloudflare Bot Fight Mode challenge detection.
+  * Cancelled stuck browser worker runs via GitHub API.
+
+3. REQUIRED USER ACTION IN CLOUDFLARE:
+- In Cloudflare Dashboard -> talhacodes.site -> Security -> Bots:
+  Turn OFF "Bot Fight Mode" (or add a WAF Custom Rule to Skip / Allow traffic to services.talhacodes.site).
+  Cloudflare's free Bot Fight Mode blocks all datacenter IPs (like GitHub Actions runners) with Turnstile challenges that command-line tools cannot complete.

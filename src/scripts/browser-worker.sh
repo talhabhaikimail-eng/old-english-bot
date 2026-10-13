@@ -99,6 +99,9 @@ EOF
   curl -s -o /tmp/webhook-resp.txt -w "%{http_code}" --max-time "$max_time" \
     -X POST "$WEBHOOK_URL" \
     -H "Content-Type: application/json" \
+    -H "Accept: application/json, text/plain, */*" \
+    -H "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
+    -H "x-worker-secret: ${WEBHOOK_SECRET}" \
     -d "$json_data" 2>/dev/null || echo "000"
 }
 
@@ -653,6 +656,11 @@ for attempt in $(seq 1 20); do
     REGISTERED=true
     echo "✅ Successfully registered worker ${WORKER_ID} with dashboard!"
     break
+  fi
+
+  if grep -qE "challenges.cloudflare.com|Just a moment" /tmp/webhook-resp.txt 2>/dev/null || [ "$HTTP_CODE" = "403" ]; then
+    echo "🚨 CLOUDFLARE BOT FIGHT MODE / WAF CHALLENGE DETECTED on ${DASHBOARD_DOMAIN}!"
+    echo "👉 Cloudflare is blocking GitHub Actions runner IPs. In Cloudflare Dashboard -> talhacodes.site -> Security -> Bots, turn OFF 'Bot Fight Mode'."
   fi
 
   echo "⚠️ Registration attempt ${attempt} failed with status code ${HTTP_CODE}. Retrying..."

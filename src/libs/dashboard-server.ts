@@ -3118,7 +3118,49 @@ export async function exposeDashboard(localPort = 4000): Promise<string> {
 
   // ── Mode 1: Named tunnel with fixed custom domain ──────────────────────────
   if (tunnelToken && customDomain) {
-    // Before claiming the domain, send a kill request to any running instance currently serving the domain
+    // 1. If running with GitHub PAT, directly cancel other in-progress runs of run-bridge.yml via GitHub API
+    const pat = process.env.GITHUB_PAT || process.env.PAT_TOKEN;
+    const repo = process.env.GITHUB_REPOSITORY || process.env.GITHUB_REPO;
+    const currentRunId = process.env.GITHUB_RUN_ID;
+
+    if (pat && repo) {
+      try {
+        console.log(`🔍 Checking GitHub Actions for concurrent bridge runs in ${repo}...`);
+        const runsRes = await fetch(`https://api.github.com/repos/${repo}/actions/workflows/run-bridge.yml/runs?status=in_progress&per_page=50`, {
+          headers: {
+            Accept: 'application/vnd.github+json',
+            Authorization: `Bearer ${pat}`,
+            'X-GitHub-Api-Version': '2022-11-28',
+            'User-Agent': 'Node-Fetch',
+          },
+        });
+        if (runsRes.ok) {
+          const runsData: any = await runsRes.json();
+          const otherRuns = (runsData.workflow_runs || []).filter((r: any) => !currentRunId || String(r.id) !== String(currentRunId));
+          if (otherRuns.length > 0) {
+            console.log(`🛑 Found ${otherRuns.length} concurrent bridge workflow run(s). Cancelling...`);
+            for (const r of otherRuns) {
+              await fetch(`https://api.github.com/repos/${repo}/actions/runs/${r.id}/cancel`, {
+                method: 'POST',
+                headers: {
+                  Accept: 'application/vnd.github+json',
+                  Authorization: `Bearer ${pat}`,
+                  'X-GitHub-Api-Version': '2022-11-28',
+                },
+              }).catch(() => {});
+              console.log(`   Cancelled older bridge run ID ${r.id}.`);
+            }
+            await new Promise((r) => setTimeout(r, 2000));
+          } else {
+            console.log('✅ No concurrent bridge runs in GitHub Actions.');
+          }
+        }
+      } catch (err: any) {
+        console.warn('ℹ️ GitHub Actions bridge check note:', err?.message || err);
+      }
+    }
+
+    // 2. Before claiming the domain, also send an HTTP kill request to any running instance currently serving the domain
     try {
       console.log(`📡 Checking for existing instance at https://${customDomain} and sending kill signal...`);
       const usernameEnv = process.env.DASHBOARD_USERNAME;
@@ -3128,10 +3170,17 @@ export async function exposeDashboard(localPort = 4000): Promise<string> {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 4000);
 
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/json, text/plain, */*',
+      };
       if (token) {
         headers['Authorization'] = `Basic ${token}`;
         headers['x-dashboard-token'] = token;
+      }
+      if (process.env.WEBHOOK_SECRET || process.env.WORKER_API_SECRET) {
+        headers['x-worker-secret'] = process.env.WEBHOOK_SECRET || process.env.WORKER_API_SECRET || '';
       }
 
       const killUrl = `https://${customDomain}/api/kill${token ? `?token=${encodeURIComponent(token)}` : ''}`;

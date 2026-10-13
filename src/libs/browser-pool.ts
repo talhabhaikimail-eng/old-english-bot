@@ -99,6 +99,7 @@ class BrowserPool {
   private cleanupTimer: ReturnType<typeof setInterval> | null = null;
   private failureTimestamps: number[] = [];
   private lastRestartTime = 0;
+  private consecutiveEmptySpawns = 0;
   private readonly RESTART_COOLDOWN_MS = 2 * 60 * 1000;
   public onRegister?: (browser: RemoteBrowser) => void;
 
@@ -180,6 +181,8 @@ class BrowserPool {
       };
       this.browsers.set(workerId, browserEntry);
     }
+
+    this.consecutiveEmptySpawns = 0;
 
     // Eagerly connect to the browser and open an idle page for caching
     if (!skipWarmup) {
@@ -542,7 +545,11 @@ class BrowserPool {
   /** Trigger a restart of all browser workers via GitHub Actions. */
   async restartWorkers(forceRestart = false): Promise<void> {
     const now = Date.now();
-    if (now - this.lastRestartTime < this.RESTART_COOLDOWN_MS) {
+    const effectiveCooldown = this.consecutiveEmptySpawns >= 3
+      ? Math.min(15 * 60 * 1000, this.RESTART_COOLDOWN_MS * Math.pow(2, this.consecutiveEmptySpawns - 2))
+      : this.RESTART_COOLDOWN_MS;
+
+    if (now - this.lastRestartTime < effectiveCooldown) {
       return;
     }
     this.lastRestartTime = now;
@@ -594,8 +601,17 @@ class BrowserPool {
             await new Promise((resolve) => setTimeout(resolve, 2000));
           }
         } else {
-          // Check if there is any active run created in the last 4 minutes
-          const RECENT_RUN_THRESHOLD_MS = 4 * 60 * 1000;
+          // If any browser worker run is already in-progress or queued, DO NOT spawn duplicate runs!
+          const inProgressRuns = activeRuns.filter(
+            (run: any) => run.status === 'in_progress' || run.status === 'queued' || run.status === 'waiting' || run.status === 'pending'
+          );
+          if (inProgressRuns.length > 0) {
+            console.log(`[BrowserPool] ${inProgressRuns.length} browser worker run(s) are already active/queued in GitHub Actions. Skipping duplicate spawn.`);
+            return;
+          }
+
+          // Check if any run was triggered recently (within 8 minutes, allowing runner setup + Chrome download)
+          const RECENT_RUN_THRESHOLD_MS = 8 * 60 * 1000;
           const recentRun = activeRuns.find((run: any) => {
             const createdTime = new Date(run.created_at).getTime();
             return now - createdTime < RECENT_RUN_THRESHOLD_MS;
@@ -608,10 +624,6 @@ class BrowserPool {
           }
 
           // Cancel stale QUEUED runs before dispatching a fresh one.
-          // A run stuck in "queued" for >4 min will not produce workers in
-          // time; leaving them piles up an unbounded Actions backlog (this
-          // caused hundreds of queued runs). In-progress runs are real
-          // workers and must NOT be touched here.
           const staleQueued = activeRuns.filter(
             (run: any) => run.status === 'queued' || run.status === 'waiting' || run.status === 'pending'
           );
@@ -677,7 +689,15 @@ class BrowserPool {
       : activeCount === 0 && this.browsers.size === 0;
 
     if (shouldAutoSpawn) {
-      console.warn(`[BrowserPool] Zero active browser workers available (active: ${activeCount}, total: ${this.browsers.size}). Triggering new worker spawn...`);
+      if (this.consecutiveEmptySpawns >= 5) {
+        if (now - this.lastRestartTime > 30 * 60 * 1000) {
+          this.consecutiveEmptySpawns = 0;
+        } else {
+          return; // Suppress auto-spawn flood when workers consistently fail to register
+        }
+      }
+      this.consecutiveEmptySpawns++;
+      console.warn(`[BrowserPool] Zero active browser workers available (active: ${activeCount}, total: ${this.browsers.size}, attempt: ${this.consecutiveEmptySpawns}). Triggering new worker spawn...`);
       this.restartWorkers();
     }
   }
