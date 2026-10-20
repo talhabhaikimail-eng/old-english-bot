@@ -155,10 +155,39 @@ jobs:
           npm run dashboard:build
           echo "✅ Dashboard built"
 
-      - name: Install System Dependencies 
+      - name: Get runner image version
+        id: image
+        run: echo "version=${ImageOS}-${ImageVersion}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore system packages
+        id: apt-debs
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/apt-debs
+          key: apt-debs-${{ steps.image.outputs.version }}-ffmpeg-libsox-dev-wkhtmltopdf-xvfb
+
+      - name: Install System Dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg libsox-dev wkhtmltopdf xvfb
+          PKGS="ffmpeg libsox-dev wkhtmltopdf xvfb"
+          # Skip the slow man page index rebuild during install
+          sudo rm -f /var/lib/man-db/auto-update
+          if [ "${{ steps.apt-debs.outputs.cache-hit }}" = "true" ] && sudo apt-get install -y --no-download ~/apt-debs/*.deb; then
+            echo "✅ Installed from cached packages"
+          else
+            sudo apt-get update
+            sudo apt-get install -y --download-only $PKGS
+            mkdir -p ~/apt-debs
+            cp /var/cache/apt/archives/*.deb ~/apt-debs/
+            sudo apt-get install -y $PKGS
+          fi
+
+      # Saved immediately (not in a post step) because bridge runs usually end cancelled
+      - name: Save system packages
+        if: steps.apt-debs.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/apt-debs
+          key: ${{ steps.apt-debs.outputs.cache-primary-key }}
 
       - name: Start VNC and Tunnel
         run: |
