@@ -138,7 +138,13 @@ jobs:
           fi
 
       - name: Install dependencies
-        run: npm ci
+        run: |
+          for i in 1 2 3 4 5; do
+            npm ci && break
+            if [ "$i" -eq 5 ]; then exit 1; fi
+            echo "⚠️ npm ci failed (attempt $i), retrying in 30s..."
+            sleep 30
+          done
 
       - name: Build project
         run: npm run build
