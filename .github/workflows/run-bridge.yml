@@ -165,17 +165,44 @@ jobs:
           curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
           sudo dpkg -i cloudflared.deb
 
+      - name: Restore Go binaries
+        id: go-bins
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            container-manager
+            contact-scraper
+            cv-server
+          key: go-bins-${{ runner.os }}-${{ hashFiles('src-go/container-manager/**', 'src-go/contact-scraper/**', 'src-go/create-cv/**') }}
+
       - name: Prepare Go environment
+        if: steps.go-bins.outputs.cache-hit != 'true'
         uses: actions/setup-go@v5
         with:
           go-version-file: 'src-go/container-manager/go.mod'
           cache-dependency-path: src-go/container-manager/go.sum
 
+      - name: Build Go binaries
+        if: steps.go-bins.outputs.cache-hit != 'true'
+        run: |
+          (cd src-go/container-manager && go build -o ../../container-manager .) & P1=$!
+          (cd src-go/contact-scraper && go build -o ../../contact-scraper .) & P2=$!
+          (cd src-go/create-cv && go build -o ../../cv-server .) & P3=$!
+          wait $P1 && wait $P2 && wait $P3
+
+      # Saved immediately (not in a post step) because bridge runs usually end cancelled
+      - name: Save Go binaries
+        if: steps.go-bins.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            container-manager
+            contact-scraper
+            cv-server
+          key: ${{ steps.go-bins.outputs.cache-primary-key }}
+
       - name: Start session manager
         run: |
-          cd src-go/container-manager
-          go build -o ../../container-manager .
-          cd ../..
           chmod +x container-manager
           ./container-manager > container-manager.log 2>&1 &
 
@@ -193,9 +220,6 @@ jobs:
 
       - name: Start contact scraper
         run: |
-          cd src-go/contact-scraper
-          go build -o ../../contact-scraper .
-          cd ../..
           chmod +x contact-scraper
           PORT=8081 ./contact-scraper > contact-scraper.log 2>&1 &
 
@@ -213,9 +237,6 @@ jobs:
 
       - name: Start CV generator server
         run: |
-          cd src-go/create-cv
-          go build -o ../../cv-server .
-          cd ../..
           chmod +x cv-server
           PORT=8082 xvfb-run ./cv-server > cv-server.log 2>&1 &
 
