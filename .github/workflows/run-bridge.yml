@@ -7,10 +7,6 @@ on:
   schedule:
     - cron: "0 */5 * * *" # Fallback in case the self-trigger fails
 
-concurrency:
-  group: discord-whatsapp-bridge
-  cancel-in-progress: true
-
 jobs:
   run-whatsapp:
     runs-on: ubuntu-latest
