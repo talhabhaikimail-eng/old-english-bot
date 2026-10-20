@@ -26,8 +26,22 @@ jobs:
               -H "Accept: application/vnd.github+json" \
               -H "Authorization: Bearer $PAT_TOKEN" \
               -H "X-GitHub-Api-Version: 2022-11-28" \
-              "https://api.github.com/repos/${{ github.repository }}/actions/workflows/run-bridge.yml/runs?status=in_progress&per_page=100")
-            OTHER_IDS=$(echo "$RUNS_JSON" | jq -r '.workflow_runs[] | select(.id != ${{ github.run_id }}) | .id')
+              "https://api.github.com/repos/${{ github.repository }}/actions/workflows/run-bridge.yml/runs?per_page=30")
+
+            # Newest run always wins: if a newer run exists, cancel this one instead
+            NEWER_IDS=$(echo "$RUNS_JSON" | jq -r '.workflow_runs[] | select(.status != "completed" and .id > ${{ github.run_id }}) | .id')
+            if [ -n "$NEWER_IDS" ]; then
+              echo "🛑 Newer bridge run exists ($NEWER_IDS), cancelling this run..."
+              curl -s -X POST \
+                -H "Accept: application/vnd.github+json" \
+                -H "Authorization: Bearer $PAT_TOKEN" \
+                -H "X-GitHub-Api-Version: 2022-11-28" \
+                "https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/cancel" > /dev/null || true
+              sleep 60
+              exit 1
+            fi
+
+            OTHER_IDS=$(echo "$RUNS_JSON" | jq -r '.workflow_runs[] | select(.status != "completed" and .id < ${{ github.run_id }}) | .id')
             for RUN_ID in $OTHER_IDS; do
               if [ -n "$RUN_ID" ] && [ "$RUN_ID" != "null" ]; then
                 echo "🛑 Cancelling old bridge run ID $RUN_ID..."
