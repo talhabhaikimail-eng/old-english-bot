@@ -6,6 +6,7 @@ import { api, BrowserPoolItem, BrowserPoolPayload } from '../api';
 import { Button } from '@/components/ui/button';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { SquareTerminal, Zap, RefreshCw, RotateCcw, Eraser, Maximize2, Minimize2, Activity, HardDrive, GraduationCap, FileText, Globe, KeyRound, ExternalLink } from 'lucide-react';
 
 interface WorkerShellPanelProps {
   initialWorkerId?: string;
@@ -421,7 +422,7 @@ export default function WorkerShellPanel({ initialWorkerId }: WorkerShellPanelPr
       session.ws.send(cmd + '\n');
       session.terminal.focus();
     } else {
-      setToastMsg('⚠️ Terminal not connected. Please reconnect first.');
+      setToastMsg('Terminal not connected. Please reconnect first.');
       setTimeout(() => setToastMsg(null), 3000);
     }
   };
@@ -437,7 +438,7 @@ export default function WorkerShellPanel({ initialWorkerId }: WorkerShellPanelPr
       if (worker.apiUrl) {
         await fetch(`${worker.apiUrl}/api/shell/sessions/default/kill`, { method: 'POST' }).catch(() => {});
       }
-      setToastMsg('🔄 Background session reset. Spawning fresh shell...');
+      setToastMsg('Background session reset. Spawning fresh shell...');
       setTimeout(() => {
         activateWorkerTab(targetId, true);
       }, 400);
@@ -472,49 +473,56 @@ export default function WorkerShellPanel({ initialWorkerId }: WorkerShellPanelPr
   return (
     <div
       ref={fullScreenContainerRef}
-      className={`space-y-4 font-mono text-sm transition-all ${
+      className={`space-y-4 text-[13px] transition-all ${
         isFullscreen
-          ? 'fixed inset-0 z-50 bg-[#060911] p-4 flex flex-col h-screen w-screen overflow-hidden'
+          ? 'fixed inset-0 z-50 bg-background p-4 flex flex-col h-screen w-screen overflow-hidden'
           : 'relative'
       }`}
     >
       {/* Top Header Card */}
-      <Card className="border border-border bg-card p-3 shadow-md">
+      <Card className="p-4 gap-3">
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
           <div>
-            <div className="flex items-center gap-2">
-              <span className="text-xl">💻</span>
-              <CardTitle className="text-sm uppercase font-bold tracking-wider text-foreground">
-                Distributed Worker Shell Console (WebSSH & PTY)
-              </CardTitle>
+            <div className="flex items-center gap-2 flex-wrap">
+              <SquareTerminal className="size-4 text-muted-foreground" />
+              <CardTitle>Distributed worker shell console</CardTitle>
               <Badge
                 variant="outline"
-                className={`text-[10px] uppercase font-bold ${
+                className={
                   connStatus === 'connected'
-                    ? 'border-emerald-600 bg-emerald-950/60 text-emerald-400'
+                    ? 'border-primary/30 bg-primary/10 text-primary'
                     : connStatus === 'connecting'
-                    ? 'border-yellow-600 bg-yellow-950/60 text-yellow-400'
-                    : 'border-rose-600 bg-rose-950/60 text-rose-400'
-                }`}
+                    ? 'border-amber-500/30 bg-amber-500/10 text-amber-500'
+                    : 'border-destructive/30 bg-destructive/10 text-destructive'
+                }
               >
-                ● {connStatus.toUpperCase()}
+                <span
+                  className={`size-1.5 rounded-full ${
+                    connStatus === 'connected'
+                      ? 'bg-primary'
+                      : connStatus === 'connecting'
+                      ? 'bg-amber-500'
+                      : 'bg-destructive'
+                  }`}
+                />
+                {connStatus.charAt(0).toUpperCase() + connStatus.slice(1)}
               </Badge>
               <Badge
-                variant="outline"
-                className="text-[10px] font-bold border-indigo-500/40 bg-indigo-950/40 text-indigo-300 hidden md:inline-flex"
+                variant="secondary"
+                className="hidden md:inline-flex"
                 title="This shell runs in the background. Closing this page will not stop your tasks."
               >
-                ⚡ PERSISTENT (BACKGROUND)
+                <Zap /> Persistent (background)
               </Badge>
             </div>
-            <CardDescription className="text-xs text-muted-foreground mt-0.5">
+            <CardDescription className="mt-1">
               Direct bidirectional PTY shell running continuously in worker background. Closing this tab will NOT terminate your background commands or agents.
             </CardDescription>
           </div>
 
           <div className="flex items-center gap-2 flex-wrap">
             {toastMsg && (
-              <div className="px-3 py-1 text-xs border border-sky-600 bg-sky-950/80 text-sky-200 font-mono animate-in fade-in">
+              <div className="px-3 py-1 text-xs rounded-md border border-primary/30 bg-primary/10 text-primary animate-in fade-in">
                 {toastMsg}
               </div>
             )}
@@ -524,52 +532,52 @@ export default function WorkerShellPanel({ initialWorkerId }: WorkerShellPanelPr
               size="sm"
               onClick={() => activateWorkerTab(selectedWorkerId, true)}
               disabled={!currentWorker}
-              className="font-mono text-xs uppercase font-bold text-sky-400 border-sky-800 hover:bg-sky-950/50"
               title="Reconnect to existing background persistent session"
             >
-              🔄 REATTACH
+              <RefreshCw className="size-3.5" /> Reattach
             </Button>
 
             <Button
-              variant="outline"
+              variant="destructive"
               size="sm"
               onClick={resetSession}
               disabled={!currentWorker}
-              className="font-mono text-xs uppercase font-bold text-rose-400 border-rose-900/60 hover:bg-rose-950/50"
               title="Kill and restart this worker's background shell session"
             >
-              ⚠️ RESET
+              <RotateCcw className="size-3.5" /> Reset
             </Button>
 
             <Button
               variant="outline"
               size="sm"
               onClick={() => sessionsRef.current.get(selectedWorkerId)?.terminal.clear()}
-              className="font-mono text-xs uppercase font-bold text-muted-foreground hover:text-foreground"
               title="Clear terminal screen"
             >
-              🧹 CLEAR
+              <Eraser className="size-3.5" /> Clear
             </Button>
 
             <Button
               variant={isFullscreen ? 'default' : 'outline'}
               size="sm"
               onClick={toggleFullscreen}
-              className="font-mono text-xs uppercase font-bold"
               title={isFullscreen ? 'Exit Full Screen' : 'Open Full Page / Full Screen'}
             >
-              {isFullscreen ? '✕ EXIT FULLSCREEN' : '⛶ FULLSCREEN'}
+              {isFullscreen ? (
+                <><Minimize2 className="size-3.5" /> Exit fullscreen</>
+              ) : (
+                <><Maximize2 className="size-3.5" /> Fullscreen</>
+              )}
             </Button>
           </div>
         </div>
 
         {/* Worker Switcher Tabs */}
-        <div className="mt-3 pt-3 border-t border-border flex items-center gap-2 overflow-x-auto pb-1">
-          <span className="text-[10px] uppercase font-bold text-muted-foreground whitespace-nowrap">
-            WORKER NODE:
+        <div className="pt-3 border-t border-border flex items-center gap-2 overflow-x-auto pb-1">
+          <span className="text-xs font-medium text-muted-foreground whitespace-nowrap">
+            Worker node:
           </span>
           {browsers.length === 0 ? (
-            <span className="text-xs text-muted-foreground italic">No workers currently registered in pool</span>
+            <span className="text-xs text-muted-foreground">No workers currently registered in pool</span>
           ) : (
             browsers.map(b => {
               const isSelected = b.workerId === selectedWorkerId;
@@ -577,25 +585,25 @@ export default function WorkerShellPanel({ initialWorkerId }: WorkerShellPanelPr
                 <button
                   key={b.workerId}
                   onClick={() => setSelectedWorkerId(b.workerId)}
-                  className={`flex items-center gap-1.5 px-3 py-1 text-xs border rounded-sm transition-all whitespace-nowrap ${
+                  className={`flex items-center gap-1.5 px-3 py-1 text-xs border rounded-md transition-colors whitespace-nowrap ${
                     isSelected
-                      ? 'border-sky-500 bg-sky-950/60 text-sky-200 font-bold shadow-sm'
-                      : 'border-border bg-secondary/50 text-muted-foreground hover:text-foreground hover:bg-secondary'
+                      ? 'border-primary/40 bg-primary/10 text-primary font-medium'
+                      : 'border-border bg-secondary/40 text-muted-foreground hover:text-foreground hover:bg-secondary'
                   }`}
                 >
                   <span
-                    className={`w-2 h-2 rounded-full ${
-                      b.status === 'active' ? 'bg-emerald-400' : 'bg-yellow-400'
+                    className={`size-2 rounded-full ${
+                      b.status === 'active' ? 'bg-primary' : 'bg-muted-foreground'
                     }`}
                   />
-                  <span>{b.workerId}</span>
+                  <span className="font-mono">{b.workerId}</span>
                   {b.antigravityCli && (
-                    <span className={`text-[9px] px-1 rounded border ${
+                    <span className={`inline-flex items-center gap-0.5 text-[10px] px-1.5 rounded-full border ${
                       b.antigravityAuth
-                        ? 'bg-emerald-950/80 text-emerald-300 border-emerald-700 font-bold'
-                        : 'bg-indigo-950 text-indigo-300 border-indigo-800'
+                        ? 'bg-primary/10 text-primary border-primary/30 font-medium'
+                        : 'bg-secondary text-muted-foreground border-border'
                     }`}>
-                      {b.antigravityAuth ? 'AGY ⚡ (Auth)' : 'AGY'}
+                      {b.antigravityAuth ? (<>AGY <Zap className="size-2.5" /> Auth</>) : 'AGY'}
                     </span>
                   )}
                 </button>
@@ -608,28 +616,28 @@ export default function WorkerShellPanel({ initialWorkerId }: WorkerShellPanelPr
       {/* Main Terminal and Agent Controls */}
       <div className={`grid grid-cols-1 ${isFullscreen ? 'flex-1 min-h-0' : ''} gap-3`}>
         {/* Terminal Window */}
-        <Card className={`border border-border bg-[#0a0e17] overflow-hidden flex flex-col ${
+        <Card className={`bg-[#0a0e17] gap-0 py-0 overflow-hidden flex flex-col ${
           isFullscreen ? 'flex-1 min-h-0' : 'h-[540px]'
         }`}>
           {/* Terminal Title Bar */}
-          <div className="bg-secondary/90 border-b border-border px-3 py-1.5 flex items-center justify-between text-xs">
+          <div className="bg-secondary border-b border-border px-3 py-2 flex items-center justify-between text-xs">
             <div className="flex items-center gap-2">
               <span className="flex gap-1.5">
-                <span className="w-2.5 h-2.5 rounded-full bg-rose-500/80 inline-block" />
-                <span className="w-2.5 h-2.5 rounded-full bg-yellow-500/80 inline-block" />
-                <span className="w-2.5 h-2.5 rounded-full bg-emerald-500/80 inline-block" />
+                <span className="size-2.5 rounded-full bg-destructive/80 inline-block" />
+                <span className="size-2.5 rounded-full bg-amber-500/80 inline-block" />
+                <span className="size-2.5 rounded-full bg-primary/80 inline-block" />
               </span>
-              <span className="text-muted-foreground text-[11px]">
+              <span className="text-muted-foreground text-xs font-mono">
                 bash — {currentWorker ? currentWorker.workerId : 'No worker selected'}
               </span>
             </div>
 
-            <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
+            <div className="flex items-center gap-3 text-xs text-muted-foreground">
               {currentWorker?.sshPort && (
-                <span>SSH Port: <strong className="text-foreground">{currentWorker.sshPort}</strong></span>
+                <span>SSH port: <strong className="font-mono font-medium text-foreground">{currentWorker.sshPort}</strong></span>
               )}
               {currentWorker?.apiUrl && (
-                <span className="hidden sm:inline">API: <strong className="text-sky-400">{currentWorker.apiUrl.replace(/^https?:\/\//, '')}</strong></span>
+                <span className="hidden sm:inline">API: <strong className="font-mono font-medium text-foreground">{currentWorker.apiUrl.replace(/^https?:\/\//, '')}</strong></span>
               )}
             </div>
           </div>
@@ -645,11 +653,11 @@ export default function WorkerShellPanel({ initialWorkerId }: WorkerShellPanelPr
         {!isFullscreen && (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
             {/* Agent Actions Column */}
-            <Card className="lg:col-span-2 border border-border bg-card p-3">
-              <CardTitle className="text-xs uppercase font-bold tracking-wider text-foreground flex items-center gap-1.5">
-                <span>⚡</span> Agent Shortcuts & Command Presets
+            <Card className="lg:col-span-2 p-4 gap-1">
+              <CardTitle className="flex items-center gap-1.5">
+                <Zap className="size-4 text-muted-foreground" /> Agent shortcuts &amp; command presets
               </CardTitle>
-              <CardDescription className="text-xs text-muted-foreground mt-0.5">
+              <CardDescription>
                 Execute autonomous agent workflows and inspect diagnostics directly inside the live shell.
               </CardDescription>
 
@@ -658,81 +666,81 @@ export default function WorkerShellPanel({ initialWorkerId }: WorkerShellPanelPr
                   variant="outline"
                   size="sm"
                   onClick={() => injectCommand('agy --version && agy --help')}
-                  className="font-mono text-xs justify-start border-indigo-500/30 hover:bg-indigo-950/40 text-indigo-300"
+                  className="justify-start"
                 >
-                  ⚡ Antigravity CLI (agy)
+                  <Zap className="size-3.5" /> Antigravity CLI (agy)
                 </Button>
 
                 <Button
                   variant="outline"
                   size="sm"
                   onClick={() => injectCommand('ps aux | grep -E "agy|chrome|course|python|node"')}
-                  className="font-mono text-xs justify-start border-emerald-500/30 hover:bg-emerald-950/40 text-emerald-300"
+                  className="justify-start"
                 >
-                  📊 Inspect Running Agents
+                  <Activity className="size-3.5" /> Inspect running agents
                 </Button>
 
                 <Button
                   variant="outline"
                   size="sm"
                   onClick={() => injectCommand('df -h && free -h && uptime')}
-                  className="font-mono text-xs justify-start border-sky-500/30 hover:bg-sky-950/40 text-sky-300"
+                  className="justify-start"
                 >
-                  💾 System Vitals (Disk/RAM)
+                  <HardDrive className="size-3.5" /> System vitals (disk/RAM)
                 </Button>
 
                 <Button
                   variant="outline"
                   size="sm"
                   onClick={() => injectCommand('curl -s http://127.0.0.1:8085/worker/status | jq . || curl -s http://127.0.0.1:8085/worker/status')}
-                  className="font-mono text-xs justify-start border-emerald-500/30 hover:bg-emerald-950/40 text-emerald-300"
+                  className="justify-start"
                 >
-                  🎓 Course Worker Status
+                  <GraduationCap className="size-3.5" /> Course worker status
                 </Button>
 
                 <Button
                   variant="outline"
                   size="sm"
                   onClick={() => injectCommand('tail -n 25 /tmp/worker_api.log')}
-                  className="font-mono text-xs justify-start border-amber-500/30 hover:bg-amber-950/40 text-amber-300"
+                  className="justify-start"
                 >
-                  📋 Worker API Logs
+                  <FileText className="size-3.5" /> Worker API logs
                 </Button>
 
                 <Button
                   variant="outline"
                   size="sm"
                   onClick={() => injectCommand('curl -s https://api.ipify.org && echo ""')}
-                  className="font-mono text-xs justify-start border-border hover:bg-secondary text-foreground"
+                  className="justify-start"
                 >
-                  🌐 Check Runner Public IP
+                  <Globe className="size-3.5" /> Check runner public IP
                 </Button>
               </div>
             </Card>
 
             {/* Direct SSH Details Card */}
-            <Card className="border border-border bg-card p-3 flex flex-col justify-between">
+            <Card className="p-4 gap-3 justify-between">
               <div>
-                <CardTitle className="text-xs uppercase font-bold tracking-wider text-foreground flex items-center justify-between">
-                  <span>🔑 OpenSSH Access</span>
-                  <Badge variant="outline" className="text-[9px] text-muted-foreground font-mono">
-                    PORT {currentWorker?.sshPort || 2222}
+                <CardTitle className="flex items-center justify-between">
+                  <span className="flex items-center gap-1.5"><KeyRound className="size-4 text-muted-foreground" /> OpenSSH access</span>
+                  <Badge variant="outline" className="font-mono">
+                    Port {currentWorker?.sshPort || 2222}
                   </Badge>
                 </CardTitle>
-                <CardDescription className="text-xs text-muted-foreground mt-0.5">
-                  Direct SSH terminal command & credentials.
+                <CardDescription className="mt-0.5">
+                  Direct SSH terminal command &amp; credentials.
                 </CardDescription>
 
                 <div className="space-y-2 mt-3 text-xs">
                   {/* SSH Command */}
-                  <div className="bg-secondary/70 border border-border p-1.5 rounded-sm">
-                    <div className="text-[9px] uppercase font-bold text-muted-foreground flex justify-between">
-                      <span>SSH Command:</span>
+                  <div className="bg-secondary/40 border border-border p-2 rounded-md">
+                    <div className="text-xs font-medium text-muted-foreground flex justify-between">
+                      <span>SSH command:</span>
                       <button
                         onClick={() => handleCopy(currentWorker?.sshCommand || `ssh -p ${currentWorker?.sshPort || 2222} ${currentWorker?.sshUser || 'runner'}@localhost`, 'ssh-cmd')}
-                        className="text-sky-400 hover:underline"
+                        className="text-primary hover:underline"
                       >
-                        {copiedKey === 'ssh-cmd' ? 'COPIED!' : 'COPY'}
+                        {copiedKey === 'ssh-cmd' ? 'Copied!' : 'Copy'}
                       </button>
                     </div>
                     <code className="text-[11px] text-foreground block truncate mt-0.5 select-all font-mono">
@@ -742,21 +750,21 @@ export default function WorkerShellPanel({ initialWorkerId }: WorkerShellPanelPr
 
                   {/* Password */}
                   {currentWorker?.sshPassword && (
-                    <div className="bg-secondary/70 border border-border p-1.5 rounded-sm">
-                      <div className="text-[9px] uppercase font-bold text-muted-foreground flex justify-between">
+                    <div className="bg-secondary/40 border border-border p-2 rounded-md">
+                      <div className="text-xs font-medium text-muted-foreground flex justify-between">
                         <span>Password:</span>
                         <div className="flex gap-2">
                           <button
                             onClick={() => setShowPassword(p => !p)}
                             className="text-muted-foreground hover:text-foreground"
                           >
-                            {showPassword ? 'HIDE' : 'SHOW'}
+                            {showPassword ? 'Hide' : 'Show'}
                           </button>
                           <button
                             onClick={() => handleCopy(currentWorker.sshPassword!, 'ssh-pwd')}
-                            className="text-sky-400 hover:underline"
+                            className="text-primary hover:underline"
                           >
-                            {copiedKey === 'ssh-pwd' ? 'COPIED!' : 'COPY'}
+                            {copiedKey === 'ssh-pwd' ? 'Copied!' : 'Copy'}
                           </button>
                         </div>
                       </div>
@@ -773,9 +781,9 @@ export default function WorkerShellPanel({ initialWorkerId }: WorkerShellPanelPr
                   variant="outline"
                   size="sm"
                   onClick={() => window.open(currentWorker.vscodeUrl, '_blank')}
-                  className="w-full mt-2 font-mono text-xs text-sky-400 border-sky-800 hover:bg-sky-950/40"
+                  className="w-full"
                 >
-                  🔵 OPEN WEB VS CODE ↗
+                  Open web VS Code <ExternalLink className="size-3.5" />
                 </Button>
               )}
             </Card>

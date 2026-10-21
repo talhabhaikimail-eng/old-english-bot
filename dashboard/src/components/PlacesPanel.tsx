@@ -4,6 +4,8 @@ import { Button } from '@/components/ui/button';
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
+import { Switch } from '@/components/ui/switch';
+import { MapPin, Phone, Globe, User, BarChart3, Image as ImageIcon, X, ChevronDown, ChevronLeft, ChevronRight, ExternalLink, Check, Square, Search, Link2, Radio, FileText, Map as MapIcon, Loader2, Star } from 'lucide-react';
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 
@@ -97,8 +99,8 @@ function BulkActions({ entries, streaming }: { entries: PlaceEntry[], streaming:
 
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <div className="flex items-center gap-1 bg-[var(--btn-secondary-bg)] border-[var(--card-border)] rounded-md px-2 py-0.5 border">
-        <label className="text-[10px] text-[var(--text-muted)] font-bold uppercase">Workers:</label>
+      <div className="flex items-center gap-1.5 rounded-md border border-border bg-secondary/40 px-2 py-0.5">
+        <label className="text-xs font-medium text-muted-foreground">Workers</label>
         <Input 
           type="number"
           min="1"
@@ -106,24 +108,23 @@ function BulkActions({ entries, streaming }: { entries: PlaceEntry[], streaming:
           value={chunkSize}
           onChange={(e) => setChunkSize(parseInt(e.target.value) || 1)}
           disabled={isBulkScraping}
-          className="h-6 w-12 px-1 py-0 text-xs text-center bg-transparent border-none focus:ring-0 text-[var(--text-main)]"
+          className="h-6 w-12 px-1 py-0 text-xs text-center bg-transparent border-none focus:ring-0"
         />
       </div>
       <Button 
         onClick={handleBulkScrape} 
         disabled={isBulkScraping || entries.length === 0 || streaming} 
         size="sm" 
-        variant="outline" 
-        className="h-7 text-xs bg-[var(--accent-active-bg)] border-[var(--accent-active-border)] text-[var(--accent-active-text)] hover:opacity-80"
+        variant="default" 
       >
-        {isBulkScraping ? 'Scraping All...' : 'Scrape Contacts For All'}
+        {isBulkScraping ? 'Scraping all...' : 'Scrape contacts for all'}
       </Button>
       <Button 
         onClick={() => handleDownload('csv')} 
         disabled={entries.length === 0} 
         size="sm" 
         variant="outline" 
-        className="h-7 text-xs bg-[var(--btn-secondary-bg)] border-[var(--card-border)] text-[var(--text-main)] hover:bg-[var(--btn-secondary-hover)]"
+        
       >
         Download CSV
       </Button>
@@ -132,7 +133,7 @@ function BulkActions({ entries, streaming }: { entries: PlaceEntry[], streaming:
         disabled={entries.length === 0} 
         size="sm" 
         variant="outline" 
-        className="h-7 text-xs bg-[var(--btn-secondary-bg)] border-[var(--card-border)] text-[var(--text-main)] hover:bg-[var(--btn-secondary-hover)]"
+        
       >
         Download JSON
       </Button>
@@ -148,15 +149,15 @@ function StarRating({ rating }: { rating: number }) {
       {Array.from({ length: 5 }, (_, i) => (
         <span
           key={i}
-          className={`text-xs ${
+          className={`${
             i < full
               ? 'text-amber-400'
               : i === full && half
               ? 'text-amber-400/60'
-              : 'text-white/15'
+              : 'text-muted-foreground/30'
           }`}
         >
-          ★
+          <Star className="size-3 fill-current" />
         </span>
       ))}
     </span>
@@ -167,14 +168,9 @@ function StatusBadge({ openNow }: { openNow: boolean | null }) {
   if (openNow === null) return null;
   return (
     <Badge
-      variant="outline"
-      className={`inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full border ${
-        openNow
-          ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
-          : 'bg-red-500/10 border-red-500/30 text-red-400'
-      }`}
+      variant={openNow ? 'default' : 'destructive'}
     >
-      <span className={`w-1.5 h-1.5 rounded-full ${openNow ? 'bg-emerald-400' : 'bg-red-400'}`} />
+      <span className={`size-1.5 rounded-full ${openNow ? 'bg-primary' : 'bg-destructive'}`} />
       {openNow ? 'Open now' : 'Closed'}
     </Badge>
   );
@@ -236,26 +232,25 @@ function PlaceCard({ place, isNew }: { place: PlaceResult; isNew: boolean }) {
 
   return (
     <Card
-      className={`glass rounded-2xl border transition-all duration-500 overflow-hidden group ${
+      className={`gap-0 py-0 transition-colors group ${
         isNew
-          ? 'border-[var(--accent-active-border)] shadow-lg animate-in fade-in slide-in-from-bottom-2 duration-400'
-          : 'border-[var(--card-border)] hover:border-[var(--accent-active-border)]'
+          ? 'border-primary/50 animate-in fade-in slide-in-from-bottom-2 duration-300'
+          : 'hover:border-primary/40'
       }`}
-      style={{ backgroundColor: 'var(--card-bg)' }}
     >
       {/* Header */}
-      <div className="p-5">
+      <div className="p-4">
         <div className="flex items-start justify-between gap-3 mb-2">
           <div className="flex-1 min-w-0">
-            <CardTitle className="text-[var(--text-main)] font-semibold text-base leading-tight truncate group-hover:text-[var(--accent-active-text)] transition-colors">
+            <CardTitle className="text-sm text-foreground font-semibold tracking-tight leading-tight truncate">
               {place.name}
             </CardTitle>
             {place.category && (
-              <p className="text-xs text-[var(--text-muted)] mt-0.5">{place.category}</p>
+              <p className="text-xs text-muted-foreground mt-0.5">{place.category}</p>
             )}
           </div>
           {place.priceLevel && (
-            <Badge variant="outline" className="flex-shrink-0 text-xs font-bold bg-[var(--accent-active-bg)] border-[var(--accent-active-border)] text-[var(--accent-active-text)] px-2 py-0.5 rounded-lg">
+            <Badge variant="default" className="flex-shrink-0">
               {place.priceLevel}
             </Badge>
           )}
@@ -263,10 +258,10 @@ function PlaceCard({ place, isNew }: { place: PlaceResult; isNew: boolean }) {
 
         {place.rating !== null && (
           <div className="flex items-center gap-2 mb-3">
-            <span className="text-amber-400 font-bold text-sm">{place.rating.toFixed(1)}</span>
+            <span className="text-amber-400 font-semibold text-sm">{place.rating.toFixed(1)}</span>
             <StarRating rating={place.rating} />
             {place.reviewCount !== null && (
-              <span className="text-xs text-[var(--text-muted)]">
+              <span className="text-xs text-muted-foreground">
                 ({place.reviewCount.toLocaleString()} reviews)
               </span>
             )}
@@ -276,80 +271,80 @@ function PlaceCard({ place, isNew }: { place: PlaceResult; isNew: boolean }) {
         <div className="flex flex-wrap items-center gap-2 mb-3">
           <StatusBadge openNow={place.openNow} />
           {place.todaysHours && (
-            <span className="text-xs text-[var(--text-muted)]">{place.todaysHours}</span>
+            <span className="text-xs text-muted-foreground">{place.todaysHours}</span>
           )}
         </div>
 
         <div className="space-y-1.5">
           {place.address && (
-            <div className="flex items-start gap-2 text-xs text-[var(--text-subtle)]">
-              <span className="mt-0.5 flex-shrink-0">📍</span>
+            <div className="flex items-start gap-2 text-xs text-muted-foreground">
+              <MapPin className="size-3.5 mt-0.5 flex-shrink-0" />
               <span>{place.address}</span>
             </div>
           )}
           {place.phone && (
-            <div className="flex items-center gap-2 text-xs text-[var(--text-subtle)]">
-              <span>📞</span>
-              <a href={`tel:${place.phone}`} className="hover:text-[var(--accent-active-text)] transition-colors">
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Phone className="size-3.5 flex-shrink-0" />
+              <a href={`tel:${place.phone}`} className="hover:text-primary transition-colors">
                 {place.phone}
               </a>
             </div>
           )}
           {place.website && (
             <div className="flex items-center gap-2 text-xs">
-              <span>🌐</span>
+              <Globe className="size-3.5 flex-shrink-0 text-muted-foreground" />
               <a
                 href={place.website}
                 target="_blank"
                 rel="noreferrer"
-                className="text-[var(--accent-active-text)] hover:underline truncate max-w-[240px]"
+                className="text-primary hover:underline truncate max-w-[240px]"
               >
                 {place.website.replace(/^https?:\/\//, '')}
               </a>
               <Button 
                 size="sm" 
                 variant="outline" 
-                className="h-6 text-[10px] px-2 ml-2 bg-[var(--accent-active-bg)] border-[var(--accent-active-border)] text-[var(--accent-active-text)] hover:opacity-80"
+                className="ml-2"
                 onClick={handleScrape}
                 disabled={isScraping}
               >
-                {isScraping ? 'Scraping...' : 'Scrape Contacts'}
+                {isScraping ? 'Scraping...' : 'Scrape contacts'}
               </Button>
             </div>
           )}
         </div>
 
         {scrapeResult && (
-          <div className="mt-4 p-3 bg-[var(--code-bg)] border border-[var(--card-border)] rounded-lg">
-            <p className="text-[10px] uppercase tracking-wider text-[var(--text-muted)] font-bold mb-2">Scraped Contacts</p>
+          <div className="mt-4 p-3 bg-secondary/40 border border-border rounded-lg">
+            <p className="text-xs font-medium text-muted-foreground mb-2">Scraped contacts</p>
             
             {scrapeResult.emails?.length > 0 ? (
               <div className="space-y-2 mb-2">
                 {scrapeResult.emails.map((email: string, i: number) => (
-                  <div key={i} className="flex items-center justify-between gap-2 bg-[var(--btn-secondary-bg)] p-1.5 rounded border border-[var(--btn-secondary-border)]">
-                    <a href={`mailto:${email}`} className="text-xs text-[var(--accent-active-text)] hover:underline truncate">
+                  <div key={i} className="flex items-center justify-between gap-2 bg-secondary p-1.5 rounded-md border border-border">
+                    <a href={`mailto:${email}`} className="text-xs text-primary hover:underline truncate">
                       {email}
                     </a>
                     <Button 
                       size="sm" 
                       variant="ghost" 
-                      className="h-6 px-2 text-[10px] bg-[var(--accent-active-bg)] text-[var(--accent-active-text)] hover:opacity-80"
+                      className="text-primary"
                       onClick={() => openEmailForm(email)}
                     >
-                      Send Custom Email
+                      Send custom email
                     </Button>
                   </div>
                 ))}
               </div>
             ) : (
-              <p className="text-xs text-[var(--text-muted)] mb-2">No emails found.</p>
+              <p className="text-xs text-muted-foreground mb-2">No emails found.</p>
             )}
 
             {scrapeResult.phones?.length > 0 && (
               <div className="flex flex-wrap gap-1 mb-2">
                 {scrapeResult.phones.map((p: string, i: number) => (
-                  <Badge key={i} variant="outline" className="text-[10px] bg-[var(--btn-secondary-bg)] border-[var(--btn-secondary-border)] text-[var(--text-subtle)]">
-                    📞 {p}
+                  <Badge key={i} variant="secondary">
+                    <Phone />{p}
                   </Badge>
                 ))}
               </div>
@@ -358,8 +353,8 @@ function PlaceCard({ place, isNew }: { place: PlaceResult; isNew: boolean }) {
             {scrapeResult.socials && Object.keys(scrapeResult.socials).length > 0 && (
               <div className="flex flex-wrap gap-1">
                 {Object.entries(scrapeResult.socials).map(([platform, url]) => (
-                  <a key={platform} href={url as string} target="_blank" rel="noreferrer" className="text-[10px] px-2 py-0.5 rounded-full bg-[var(--btn-secondary-bg)] border border-[var(--btn-secondary-border)] text-[var(--text-subtle)] hover:text-[var(--text-main)] transition-colors capitalize">
-                    {platform} ↗
+                  <a key={platform} href={url as string} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-secondary border border-border text-muted-foreground hover:text-foreground transition-colors capitalize">
+                    {platform}<ExternalLink className="size-3" />
                   </a>
                 ))}
               </div>
@@ -368,38 +363,38 @@ function PlaceCard({ place, isNew }: { place: PlaceResult; isNew: boolean }) {
         )}
 
         {emailFormVisible && (
-          <div className="mt-3 p-3 bg-[var(--accent-active-bg)] border border-[var(--accent-active-border)] rounded-lg shadow-lg">
+          <div className="mt-3 p-3 bg-secondary/40 border border-border rounded-lg">
             <div className="flex items-center justify-between mb-2">
-              <p className="text-xs font-bold text-[var(--text-main)]">Send Email to <span className="text-[var(--accent-active-text)]">{emailTarget}</span></p>
-              <Button size="sm" variant="ghost" className="h-5 w-5 p-0 text-[var(--text-muted)] hover:text-[var(--text-main)]" onClick={() => setEmailFormVisible(false)}>✕</Button>
+              <p className="text-xs font-semibold text-foreground">Send email to <span className="text-primary">{emailTarget}</span></p>
+              <Button size="icon-sm" variant="ghost" onClick={() => setEmailFormVisible(false)}><X /></Button>
             </div>
             <form onSubmit={handleSendEmail} className="space-y-3">
               <div>
-                <label className="block text-[10px] uppercase font-bold text-[var(--text-muted)] mb-1">Subject</label>
+                <label className="block text-xs font-medium text-muted-foreground mb-1">Subject</label>
                 <Input 
                   placeholder="Subject" 
                   value={emailSubject} 
                   onChange={e => setEmailSubject(e.target.value)}
                   required
-                  className="h-8 text-xs bg-[var(--input-bg)] border-[var(--input-border)] text-[var(--input-text)]"
+                  className="h-8 text-xs"
                 />
               </div>
 
               <div>
                 <div className="flex items-center justify-between mb-1">
-                  <label className="block text-[10px] uppercase font-bold text-[var(--text-muted)]">Body</label>
-                  <div className="flex bg-[var(--input-bg)] rounded border border-[var(--input-border)] overflow-hidden">
+                  <label className="block text-xs font-medium text-muted-foreground">Body</label>
+                  <div className="flex bg-background rounded-md border border-border overflow-hidden">
                     <button 
                       type="button"
                       onClick={() => setEmailBodyType('text')}
-                      className={`px-2 py-0.5 text-[10px] ${emailBodyType === 'text' ? 'bg-[var(--accent-active-bg)] text-[var(--accent-active-text)] font-bold' : 'text-[var(--text-muted)] hover:bg-[var(--btn-secondary-bg)]'}`}
+                      className={`px-2 py-0.5 text-xs ${emailBodyType === 'text' ? 'bg-primary/10 text-primary font-medium' : 'text-muted-foreground hover:bg-secondary'}`}
                     >
-                      Plain Text
+                      Plain text
                     </button>
                     <button 
                       type="button"
                       onClick={() => setEmailBodyType('html')}
-                      className={`px-2 py-0.5 text-[10px] ${emailBodyType === 'html' ? 'bg-[var(--accent-active-bg)] text-[var(--accent-active-text)] font-bold' : 'text-[var(--text-muted)] hover:bg-[var(--btn-secondary-bg)]'}`}
+                      className={`px-2 py-0.5 text-xs ${emailBodyType === 'html' ? 'bg-primary/10 text-primary font-medium' : 'text-muted-foreground hover:bg-secondary'}`}
                     >
                       HTML
                     </button>
@@ -411,24 +406,24 @@ function PlaceCard({ place, isNew }: { place: PlaceResult; isNew: boolean }) {
                     placeholder="Plain Text Body" 
                     value={emailText} 
                     onChange={e => setEmailText(e.target.value)}
-                    className="w-full h-24 p-2 text-xs bg-[var(--input-bg)] border border-[var(--input-border)] rounded-md text-[var(--input-text)] focus:outline-none focus:border-[var(--accent-active-border)] resize-none"
+                    className="w-full h-24 p-2 text-xs bg-background border border-border rounded-md text-foreground focus:outline-none focus:border-primary/50 resize-none"
                   />
                 ) : (
                   <textarea 
                     placeholder="HTML Body" 
                     value={emailHtml} 
                     onChange={e => setEmailHtml(e.target.value)}
-                    className="w-full h-24 p-2 text-xs bg-[var(--input-bg)] border border-[var(--input-border)] rounded-md text-[var(--input-text)] font-mono focus:outline-none focus:border-[var(--accent-active-border)] resize-none"
+                    className="w-full h-24 p-2 text-xs bg-background border border-border rounded-md text-foreground font-mono focus:outline-none focus:border-primary/50 resize-none"
                   />
                 )}
               </div>
 
               <div className="flex items-center justify-between pt-1">
-                <span className="text-[10px]">
-                  {emailStatus?.type === 'success' && <span className="text-emerald-500">{emailStatus.msg}</span>}
-                  {emailStatus?.type === 'error' && <span className="text-red-500">{emailStatus.msg}</span>}
+                <span className="text-xs">
+                  {emailStatus?.type === 'success' && <span className="text-primary">{emailStatus.msg}</span>}
+                  {emailStatus?.type === 'error' && <span className="text-destructive">{emailStatus.msg}</span>}
                 </span>
-                <Button type="submit" size="sm" disabled={isSendingEmail} className="h-7 text-xs bg-[var(--accent-active-bg)] text-[var(--accent-active-text)] hover:opacity-90 px-4">
+                <Button type="submit" size="sm" disabled={isSendingEmail}>
                   {isSendingEmail ? 'Sending...' : 'Send'}
                 </Button>
               </div>
@@ -437,7 +432,7 @@ function PlaceCard({ place, isNew }: { place: PlaceResult; isNew: boolean }) {
         )}
 
         {place.description && (
-          <p className="mt-3 text-xs text-[var(--text-subtle)] leading-relaxed line-clamp-2">
+          <p className="mt-3 text-xs text-muted-foreground leading-relaxed line-clamp-2">
             {place.description}
           </p>
         )}
@@ -448,22 +443,22 @@ function PlaceCard({ place, isNew }: { place: PlaceResult; isNew: boolean }) {
           <Button
             onClick={() => setExpanded((v) => !v)}
             variant="ghost"
-            className="w-full px-5 py-2 h-auto flex items-center justify-between text-xs text-[var(--text-subtle)] hover:text-[var(--text-main)] border-t border-[var(--card-border)] hover:bg-[var(--btn-secondary-bg)] rounded-none transition-all font-normal"
+            className="w-full px-4 py-2 h-auto flex items-center justify-between text-xs border-t border-border rounded-none font-normal"
           >
             <span>{expanded ? 'Show less' : 'More details'}</span>
-            <span className={`transition-transform duration-200 ${expanded ? 'rotate-180' : ''}`}>▾</span>
+            <ChevronDown className={`size-4 transition-transform duration-200 ${expanded ? 'rotate-180' : ''}`} />
           </Button>
 
           {expanded && (
-            <div className="px-5 pb-5 space-y-4 border-t border-[var(--card-border)] pt-4">
+            <div className="px-4 pb-4 space-y-4 border-t border-border pt-4">
               {place.weeklyHours && Object.keys(place.weeklyHours).length > 0 && (
                 <div>
-                  <p className="text-[10px] uppercase tracking-wider text-[var(--text-muted)] mb-2 font-bold">Hours</p>
+                  <p className="text-xs font-medium text-muted-foreground mb-2">Hours</p>
                   <div className="grid grid-cols-2 gap-x-4 gap-y-1">
                     {Object.entries(place.weeklyHours).map(([day, hrs]) => (
                       <div key={day} className="flex justify-between gap-2 text-xs">
-                        <span className="text-[var(--text-subtle)] font-medium">{day}</span>
-                        <span className="text-[var(--text-muted)] text-right">{hrs}</span>
+                        <span className="text-muted-foreground font-medium">{day}</span>
+                        <span className="text-muted-foreground text-right">{hrs}</span>
                       </div>
                     ))}
                   </div>
@@ -472,10 +467,10 @@ function PlaceCard({ place, isNew }: { place: PlaceResult; isNew: boolean }) {
 
               {(place.amenities?.length ?? 0) > 0 && (
                 <div>
-                  <p className="text-[10px] uppercase tracking-wider text-[var(--text-muted)] mb-2 font-bold">Amenities</p>
+                  <p className="text-xs font-medium text-muted-foreground mb-2">Amenities</p>
                   <div className="flex flex-wrap gap-1.5">
                     {place.amenities.map((a, i) => (
-                      <Badge key={i} variant="outline" className="text-[10px] bg-[var(--btn-secondary-bg)] border-[var(--card-border)] text-[var(--text-subtle)] px-2 py-0.5 rounded-full font-normal">
+                      <Badge key={i} variant="secondary">
                         {a}
                       </Badge>
                     ))}
@@ -485,8 +480,8 @@ function PlaceCard({ place, isNew }: { place: PlaceResult; isNew: boolean }) {
 
               {place.lat !== null && place.lng !== null && (
                 <div className="flex items-center gap-3">
-                  <p className="text-[10px] uppercase tracking-wider text-[var(--text-muted)] font-bold">Coordinates</p>
-                  <p className="text-xs text-[var(--text-subtle)] font-mono">
+                  <p className="text-xs font-medium text-muted-foreground">Coordinates</p>
+                  <p className="text-xs text-muted-foreground font-mono">
                     {place.lat.toFixed(6)}, {place.lng.toFixed(6)}
                   </p>
                 </div>
@@ -494,17 +489,17 @@ function PlaceCard({ place, isNew }: { place: PlaceResult; isNew: boolean }) {
 
               <div className="flex flex-wrap gap-2">
                 {place.hasPopularTimes && (
-                  <Badge variant="outline" className="text-[10px] text-purple-600 dark:text-purple-400 bg-purple-500/10 border-purple-500/20 px-2 py-0.5 rounded-full font-normal">
-                    📊 Popular times
+                  <Badge variant="secondary">
+                    <BarChart3 />Popular times
                   </Badge>
                 )}
                 {place.photosCount !== null && (
-                  <Badge variant="outline" className="text-[10px] text-[var(--text-muted)] bg-[var(--btn-secondary-bg)] border-[var(--card-border)] px-2 py-0.5 rounded-full font-normal">
-                    🖼 {place.photosCount.toLocaleString()} photos
+                  <Badge variant="secondary">
+                    <ImageIcon />{place.photosCount.toLocaleString()} photos
                   </Badge>
                 )}
                 {place.placeId && (
-                  <Badge variant="outline" className="text-[10px] text-[var(--text-muted)] bg-[var(--btn-secondary-bg)] border-[var(--card-border)] px-2 py-0.5 rounded-full font-mono font-normal">
+                  <Badge variant="secondary" className="font-mono">
                     ID: {place.placeId.slice(0, 24)}…
                   </Badge>
                 )}
@@ -515,14 +510,14 @@ function PlaceCard({ place, isNew }: { place: PlaceResult; isNew: boolean }) {
       )}
 
       {place.mapsUrl && (
-        <div className="px-5 py-3 border-t border-[var(--card-border)] flex justify-end">
+        <div className="px-4 py-3 border-t border-border flex justify-end">
           <a
             href={place.mapsUrl}
             target="_blank"
             rel="noreferrer"
-            className="inline-flex items-center gap-1.5 text-xs text-[var(--accent-active-text)] hover:opacity-80 transition-colors font-medium"
+            className="inline-flex items-center gap-1.5 text-xs text-primary hover:underline font-medium"
           >
-            Open in Maps ↗
+            Open in Maps<ExternalLink className="size-3.5" />
           </a>
         </div>
       )}
@@ -534,28 +529,28 @@ function PlaceCard({ place, isNew }: { place: PlaceResult; isNew: boolean }) {
 
 function StreamProgress({ round, total, done }: { round: number; total: number; done: boolean }) {
   return (
-    <Card className="glass rounded-xl border border-[#0061FF]/20 p-4 flex items-center gap-4">
-      <div className="relative w-8 h-8 flex-shrink-0">
+    <Card className="p-4 flex-row items-center gap-4">
+      <div className="relative size-8 flex-shrink-0">
         {!done ? (
           <>
-            <div className="absolute inset-0 rounded-full border-2 border-[#0061FF]/20" />
-            <div className="absolute inset-0 rounded-full border-2 border-[#0061FF] border-t-transparent animate-spin" />
+            <div className="absolute inset-0 rounded-full border-2 border-primary/20" />
+            <div className="absolute inset-0 rounded-full border-2 border-primary border-t-transparent animate-spin" />
           </>
         ) : (
-          <div className="w-8 h-8 rounded-full bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center text-emerald-400 text-sm animate-in fade-in">
-            ✓
+          <div className="size-8 rounded-full bg-primary/10 border border-primary/30 flex items-center justify-center text-primary animate-in fade-in">
+            <Check className="size-4" />
           </div>
         )}
       </div>
       <div className="flex-1 min-w-0">
-        <p className="text-white/70 text-sm font-medium">
+        <p className="text-foreground text-sm font-medium">
           {done ? `Done — ${total} places scraped` : `Scrolling feed… ${total} places found`}
         </p>
-        <p className="text-white/30 text-xs mt-0.5">
+        <p className="text-muted-foreground text-xs mt-0.5">
           {done ? 'All results loaded' : `Scroll round ${round} of up to 20`}
         </p>
       </div>
-      <span className="text-2xl font-bold text-[#0061FF] tabular-nums">{total}</span>
+      <span className="text-xl font-semibold text-primary tabular-nums">{total}</span>
     </Card>
   );
 }
@@ -593,18 +588,18 @@ function UrlDetailsPanel() {
   };
 
   return (
-    <div className="space-y-6">
-      <Card className="glass p-6 rounded-2xl border border-white/[0.07] shadow-xl">
+    <div className="space-y-4">
+      <Card className="p-4">
         <div className="flex items-start justify-between mb-1">
           <div>
-            <CardTitle className="text-lg font-bold text-white flex items-center gap-2">
-              <span>🔗 Direct Place URL Extractor</span>
+            <CardTitle className="text-sm font-semibold tracking-tight flex items-center gap-2">
+              <Link2 className="size-4 text-muted-foreground" /><span>Direct place URL extractor</span>
             </CardTitle>
-            <CardDescription className="text-sm text-[var(--text-muted)] mt-1">
+            <CardDescription className="text-xs text-muted-foreground mt-0.5">
               Extract overview attributes, photos, and customer reviews instantly (sub-second performance).
             </CardDescription>
           </div>
-          <Badge variant="outline" className="text-xs text-[#00E5FF] bg-[#00E5FF]/10 border border-[#00E5FF]/20 px-2 py-0.5 rounded-full font-normal">
+          <Badge variant="default">
             0 clicks · Sub-second
           </Badge>
         </div>
@@ -614,7 +609,7 @@ function UrlDetailsPanel() {
             <Input
               id="place-url-input"
               type="text"
-              className="flex-1 bg-black/20 border border-white/10 rounded-xl px-4 py-2.5 text-white placeholder-white/30 focus:outline-none focus:border-[#00E5FF]/50 transition-colors text-xs font-mono"
+              className="flex-1 font-mono text-xs"
               placeholder="https://www.google.com/maps/place/..."
               value={url}
               onChange={(e) => setUrl(e.target.value)}
@@ -623,35 +618,35 @@ function UrlDetailsPanel() {
             <Button
               type="submit"
               disabled={!url.trim() || loading}
-              className="px-6 py-2.5 h-auto bg-gradient-to-r from-[#00E5FF] to-[#0061FF] rounded-xl text-white font-medium hover:opacity-90 disabled:opacity-50 transition-all shadow-lg shadow-[#00E5FF]/20 whitespace-nowrap"
+              className="whitespace-nowrap"
             >
-              {loading ? '⚡ Extracting…' : '🚀 Extract Details'}
+              {loading ? <><Loader2 className="animate-spin" />Extracting…</> : <><Search />Extract details</>}
             </Button>
           </div>
         </form>
 
         {error && (
-          <div className="mt-4 p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-sm">
+          <div className="mt-4 p-3 rounded-md bg-destructive/10 border border-destructive/30 text-destructive text-sm">
             {error}
           </div>
         )}
       </Card>
 
       {detail && (
-        <Card className="glass p-6 rounded-2xl border border-white/[0.1] shadow-2xl space-y-6">
+        <Card className="p-4 space-y-5">
           {/* Header */}
-          <div className="flex flex-col md:flex-row md:items-start justify-between gap-4 border-b border-white/[0.08] pb-6">
+          <div className="flex flex-col md:flex-row md:items-start justify-between gap-4 border-b border-border pb-5">
             <div>
-              <h2 className="text-xl font-bold text-white">{detail.name}</h2>
+              <h2 className="text-base font-semibold tracking-tight text-foreground">{detail.name}</h2>
               {detail.category && (
-                <p className="text-xs text-[#00E5FF] mt-1 font-medium">{detail.category}</p>
+                <p className="text-xs text-primary mt-1 font-medium">{detail.category}</p>
               )}
               {detail.rating !== null && (
                 <div className="flex items-center gap-2 mt-2">
-                  <span className="text-amber-400 font-bold text-base">{detail.rating.toFixed(1)}</span>
+                  <span className="text-amber-400 font-semibold text-sm">{detail.rating.toFixed(1)}</span>
                   <StarRating rating={detail.rating} />
                   {detail.reviewCount !== null && (
-                    <span className="text-xs text-white/40">({detail.reviewCount.toLocaleString()} reviews)</span>
+                    <span className="text-xs text-muted-foreground">({detail.reviewCount.toLocaleString()} reviews)</span>
                   )}
                 </div>
               )}
@@ -659,7 +654,7 @@ function UrlDetailsPanel() {
             <div className="flex flex-wrap items-center gap-2">
               <StatusBadge openNow={detail.openNow} />
               {detail.priceLevel && (
-                <Badge variant="outline" className="text-xs font-bold text-[#00E5FF] bg-[#00E5FF]/10 border border-[#00E5FF]/20 px-2 py-0.5 rounded-lg">
+                <Badge variant="default">
                   {detail.priceLevel}
                 </Badge>
               )}
@@ -669,11 +664,11 @@ function UrlDetailsPanel() {
           {/* Attributes & Badges */}
           {detail.attributes && detail.attributes.length > 0 && (
             <div>
-              <p className="text-xs font-semibold uppercase tracking-wider text-white/40 mb-3">Attributes & Highlights</p>
+              <p className="text-xs font-medium text-muted-foreground mb-3">Attributes & highlights</p>
               <div className="flex flex-wrap gap-2">
                 {detail.attributes.map((attr, i) => (
-                  <Badge key={i} variant="outline" className="bg-white/[0.05] border-white/10 text-white/80 px-3 py-1 rounded-xl text-xs font-normal">
-                    ✨ {attr}
+                  <Badge key={i} variant="secondary">
+                    {attr}
                   </Badge>
                 ))}
               </div>
@@ -681,39 +676,39 @@ function UrlDetailsPanel() {
           )}
 
           {/* Overview Info Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-black/20 p-4 rounded-xl border border-white/[0.05]">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-secondary/40 p-4 rounded-lg border border-border">
             {detail.address && (
-              <div className="flex items-start gap-2 text-xs text-white/70">
-                <span className="text-base">📍</span>
+              <div className="flex items-start gap-2 text-xs text-foreground">
+                <MapPin className="size-4 text-muted-foreground mt-0.5" />
                 <div>
-                  <span className="text-white/40 block text-[10px] uppercase font-bold">Address</span>
+                  <span className="text-muted-foreground block text-xs font-medium">Address</span>
                   <span>{detail.address}</span>
                 </div>
               </div>
             )}
             {detail.phone && (
-              <div className="flex items-start gap-2 text-xs text-white/70">
-                <span className="text-base">📞</span>
+              <div className="flex items-start gap-2 text-xs text-foreground">
+                <Phone className="size-4 text-muted-foreground mt-0.5" />
                 <div>
-                  <span className="text-white/40 block text-[10px] uppercase font-bold">Phone</span>
-                  <a href={`tel:${detail.phone}`} className="hover:text-[#00E5FF] transition-colors">{detail.phone}</a>
+                  <span className="text-muted-foreground block text-xs font-medium">Phone</span>
+                  <a href={`tel:${detail.phone}`} className="hover:text-primary transition-colors">{detail.phone}</a>
                 </div>
               </div>
             )}
             {detail.website && (
-              <div className="flex items-start gap-2 text-xs text-white/70">
-                <span className="text-base">🌐</span>
+              <div className="flex items-start gap-2 text-xs text-foreground">
+                <Globe className="size-4 text-muted-foreground mt-0.5" />
                 <div>
-                  <span className="text-white/40 block text-[10px] uppercase font-bold">Website</span>
-                  <a href={detail.website} target="_blank" rel="noreferrer" className="text-[#0061FF] hover:underline truncate block max-w-xs">{detail.website}</a>
+                  <span className="text-muted-foreground block text-xs font-medium">Website</span>
+                  <a href={detail.website} target="_blank" rel="noreferrer" className="text-primary hover:underline truncate block max-w-xs">{detail.website}</a>
                 </div>
               </div>
             )}
             {detail.plusCode && (
-              <div className="flex items-start gap-2 text-xs text-white/70">
-                <span className="text-base">📍</span>
+              <div className="flex items-start gap-2 text-xs text-foreground">
+                <MapPin className="size-4 text-muted-foreground mt-0.5" />
                 <div>
-                  <span className="text-white/40 block text-[10px] uppercase font-bold">Plus Code</span>
+                  <span className="text-muted-foreground block text-xs font-medium">Plus code</span>
                   <span>{detail.plusCode}</span>
                 </div>
               </div>
@@ -723,14 +718,14 @@ function UrlDetailsPanel() {
           {/* Gallery Images */}
           {detail.images && detail.images.length > 0 && (
             <div>
-              <p className="text-xs font-semibold uppercase tracking-wider text-white/40 mb-3">Photos ({detail.images.length})</p>
-              <div className="flex gap-3 overflow-x-auto pb-2 scrollbar-thin scrollbar-thumb-white/10">
+              <p className="text-xs font-medium text-muted-foreground mb-3">Photos ({detail.images.length})</p>
+              <div className="flex gap-3 overflow-x-auto pb-2 scrollbar-thin">
                 {detail.images.map((img, i) => (
                   <img
                     key={i}
                     src={img}
                     alt={`Photo ${i + 1}`}
-                    className="w-32 h-24 object-cover rounded-xl border border-white/10 flex-shrink-0 hover:scale-105 transition-transform"
+                    className="w-32 h-24 object-cover rounded-lg border border-border flex-shrink-0"
                     onError={(e) => (e.currentTarget.style.display = 'none')}
                   />
                 ))}
@@ -741,23 +736,23 @@ function UrlDetailsPanel() {
           {/* Customer Reviews */}
           {detail.reviews && detail.reviews.length > 0 && (
             <div>
-              <p className="text-xs font-semibold uppercase tracking-wider text-white/40 mb-3">Customer Reviews ({detail.reviews.length})</p>
+              <p className="text-xs font-medium text-muted-foreground mb-3">Customer reviews ({detail.reviews.length})</p>
               <div className="space-y-3">
                 {detail.reviews.map((rev, i) => (
-                  <div key={i} className="p-4 rounded-xl bg-white/[0.02] border border-white/[0.05] space-y-2">
+                  <div key={i} className="p-4 rounded-lg bg-secondary/40 border border-border space-y-2">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
                         {rev.authorAvatar ? (
-                          <img src={rev.authorAvatar} alt="" className="w-6 h-6 rounded-full" />
+                          <img src={rev.authorAvatar} alt="" className="size-6 rounded-full" />
                         ) : (
-                          <div className="w-6 h-6 rounded-full bg-white/10 flex items-center justify-center text-[10px] text-white/60">👤</div>
+                          <div className="size-6 rounded-full bg-secondary border border-border flex items-center justify-center text-muted-foreground"><User className="size-3.5" /></div>
                         )}
-                        <span className="text-xs font-semibold text-white">{rev.authorName || 'Anonymous'}</span>
+                        <span className="text-xs font-semibold text-foreground">{rev.authorName || 'Anonymous'}</span>
                       </div>
                       {rev.rating !== null && <StarRating rating={rev.rating} />}
                     </div>
-                    {rev.text && <p className="text-xs text-white/70 leading-relaxed">{rev.text}</p>}
-                    {rev.relativeTime && <span className="text-[10px] text-white/30 block">{rev.relativeTime}</span>}
+                    {rev.text && <p className="text-xs text-muted-foreground leading-relaxed">{rev.text}</p>}
+                    {rev.relativeTime && <span className="text-xs text-muted-foreground block">{rev.relativeTime}</span>}
                   </div>
                 ))}
               </div>
@@ -797,14 +792,14 @@ function PaginatedPanel() {
   const handleSubmit = (e?: React.FormEvent) => { e?.preventDefault(); runSearch(1); };
 
   return (
-    <div className="space-y-6">
-      <Card className="glass p-6 rounded-2xl border border-white/[0.07] shadow-xl">
+    <div className="space-y-4">
+      <Card className="p-4">
         <div className="flex items-start justify-between mb-1">
           <div>
-            <CardTitle className="text-lg font-bold text-white">Paginated Places Search</CardTitle>
-            <CardDescription className="text-xs text-[var(--text-muted)] mt-1">Fetches one page (20 results) at a time via the browser pool.</CardDescription>
+            <CardTitle className="text-sm font-semibold tracking-tight">Paginated places search</CardTitle>
+            <CardDescription className="text-xs text-muted-foreground mt-0.5">Fetches one page (20 results) at a time via the browser pool.</CardDescription>
           </div>
-          <Badge variant="outline" className="text-xs text-white/30 bg-white/[0.04] border border-white/[0.07] px-2 py-0.5 rounded-full font-normal">pool · page {page}</Badge>
+          <Badge variant="secondary">pool · page {page}</Badge>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-3 mt-4">
@@ -812,7 +807,7 @@ function PaginatedPanel() {
             <Input
               id="places-pool-query"
               type="text"
-              className="flex-1 bg-black/20 border border-white/10 rounded-xl px-4 py-2.5 text-white placeholder-white/30 focus:outline-none focus:border-[#0061FF]/50 transition-colors"
+              className="flex-1"
               placeholder='e.g. "coffee shops in Chicago"'
               value={query}
               onChange={(e) => setQuery(e.target.value)}
@@ -821,46 +816,41 @@ function PaginatedPanel() {
             <Button
               type="submit"
               disabled={!query.trim() || loading}
-              className="px-6 py-2.5 h-auto bg-gradient-to-r from-[#0061FF] to-[#00E5FF] rounded-xl text-white font-medium hover:opacity-90 disabled:opacity-50 transition-all shadow-lg shadow-[#0061FF]/20 whitespace-nowrap"
+              className="whitespace-nowrap"
             >
-              {loading ? '⏳ Searching…' : '🔍 Search'}
+              {loading ? <><Loader2 className="animate-spin" />Searching…</> : <><Search />Search</>}
             </Button>
           </div>
 
           <label className="flex items-center gap-2 cursor-pointer select-none w-fit">
-            <div
-              onClick={() => setDeepScrape(v => !v)}
-              className={`relative w-9 h-5 rounded-full transition-colors ${deepScrape ? 'bg-[#0061FF]' : 'bg-white/10'}`}
-            >
-              <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${deepScrape ? 'translate-x-4' : ''}`} />
-            </div>
-            <span className="text-xs text-white/50">Deep scrape (phone, website, hours)</span>
+            <Switch type="button" checked={deepScrape} onCheckedChange={setDeepScrape} />
+            <span className="text-xs text-muted-foreground">Deep scrape (phone, website, hours)</span>
           </label>
         </form>
 
         {error && (
-          <div className="mt-4 p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-sm">{error}</div>
+          <div className="mt-4 p-3 rounded-md bg-destructive/10 border border-destructive/30 text-destructive text-sm">{error}</div>
         )}
       </Card>
 
       {result && (
         <>
           <div className="flex items-center justify-between">
-            <span className="text-white/60 text-sm">{result.totalResultsText ?? `${result.results.length} results`}</span>
+            <span className="text-muted-foreground text-sm">{result.totalResultsText ?? `${result.results.length} results`}</span>
             <div className="flex items-center gap-2">
               <Button
                 onClick={() => runSearch(page - 1)}
                 disabled={page <= 1 || loading}
                 variant="outline"
-                className="px-3 py-1.5 h-auto rounded-lg bg-white/[0.05] border border-white/[0.08] text-white/60 text-sm hover:bg-white/[0.09] disabled:opacity-30 transition-all"
-              >← Prev</Button>
-              <span className="text-white/40 text-xs px-2">Page {page}</span>
+                size="sm"
+              ><ChevronLeft /> Prev</Button>
+              <span className="text-muted-foreground text-xs px-2">Page {page}</span>
               <Button
                 onClick={() => runSearch(page + 1)}
                 disabled={!result.hasNextPage || loading}
                 variant="outline"
-                className="px-3 py-1.5 h-auto rounded-lg bg-white/[0.05] border border-white/[0.08] text-white/60 text-sm hover:bg-white/[0.09] disabled:opacity-30 transition-all"
-              >Next →</Button>
+                size="sm"
+              >Next <ChevronRight /></Button>
             </div>
           </div>
 
@@ -871,7 +861,7 @@ function PaginatedPanel() {
           </div>
 
           {result.results.length === 0 && (
-            <p className="text-center text-white/30 py-12 text-sm">No results found for this page.</p>
+            <p className="text-center text-muted-foreground py-12 text-sm">No results found for this page.</p>
           )}
         </>
       )}
@@ -968,24 +958,20 @@ function GoogleSearchPanel() {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       {/* Sub-mode toggle */}
-      <div className="flex gap-1 p-1 bg-white/[0.04] border border-white/[0.07] rounded-xl w-fit">
+      <div className="flex flex-wrap gap-1 p-1 bg-secondary/40 border border-border rounded-lg w-fit">
         {([
-          { id: 'stream', label: '📡 Auto-paginate' },
-          { id: 'paginated', label: '📄 Single page' }
-        ] as { id: GsSubMode; label: string }[]).map(({ id, label }) => (
+          { id: 'stream', label: 'Auto-paginate', icon: Radio },
+          { id: 'paginated', label: 'Single page', icon: FileText }
+        ] as { id: GsSubMode; label: string; icon: typeof Radio }[]).map(({ id, label, icon: Icon }) => (
           <Button
             key={id}
             onClick={() => setSubMode(id)}
-            variant="outline"
-            className={`px-4 py-1.5 h-auto rounded-lg text-sm font-medium transition-all ${
-              subMode === id
-                ? 'bg-[#00E5FF] text-black shadow shadow-[#00E5FF]/30 hover:bg-[#00E5FF]/80'
-                : 'text-white/40 hover:text-white/70 border-transparent bg-transparent hover:bg-white/5'
-            }`}
+            variant={subMode === id ? 'secondary' : 'ghost'}
+            size="sm"
           >
-            {label}
+            <Icon />{label}
           </Button>
         ))}
       </div>
@@ -993,15 +979,15 @@ function GoogleSearchPanel() {
       {/* ── Streaming / auto-paginate mode ─────────────────────────────── */}
       {subMode === 'stream' && (
         <>
-          <Card className="bg-[] glass p-6 rounded-2xl border border-white/[0.07] shadow-xl">
+          <Card className="p-4">
             <div className="flex items-start justify-between mb-1">
               <div>
-                <CardTitle className="text-lg font-bold text-white">Google Search Places — Auto-paginate</CardTitle>
-                <CardDescription className="text-sm text-[var(--text-muted)] mt-1">
+                <CardTitle className="text-sm font-semibold tracking-tight">Google Search places: auto-paginate</CardTitle>
+                <CardDescription className="text-xs text-muted-foreground mt-0.5">
                   Iterates Google Search pages (start=0, 20, 40…) and streams results live.
                 </CardDescription>
               </div>
-              <Badge variant="outline" className="text-xs text-white/30 bg-white/[0.04] border border-white/[0.07] px-2 py-0.5 rounded-full font-normal">
+              <Badge variant="secondary">
                 udm=1 · sse
               </Badge>
             </div>
@@ -1011,7 +997,7 @@ function GoogleSearchPanel() {
                 <Input
                   id="gs-stream-query"
                   type="text"
-                  className="flex-1 bg-black/20 border border-white/10 rounded-xl px-4 py-2.5 text-white placeholder-white/30 focus:outline-none focus:border-[#00E5FF]/50 transition-colors"
+                  className="flex-1"
                   placeholder='e.g. "banks in pakistan place"'
                   value={sQuery}
                   onChange={e => setSQuery(e.target.value)}
@@ -1021,29 +1007,29 @@ function GoogleSearchPanel() {
                   <Button
                     type="button"
                     onClick={handleStop}
-                    variant="outline"
-                    className="px-6 py-2.5 h-auto bg-red-500/20 border border-red-500/30 rounded-xl text-red-400 font-medium hover:bg-red-500/30 transition-all whitespace-nowrap"
+                    variant="destructive"
+                    className="whitespace-nowrap"
                   >
-                    ⏹ Stop
+                    <Square /> Stop
                   </Button>
                 ) : (
                   <Button
                     type="submit"
                     disabled={!sQuery.trim()}
-                    className="px-6 py-2.5 h-auto bg-gradient-to-r from-[#00E5FF] to-[#0061FF] rounded-xl text-white font-medium hover:opacity-90 disabled:opacity-50 transition-all shadow-lg shadow-[#00E5FF]/20 whitespace-nowrap"
+                    className="whitespace-nowrap"
                   >
-                    🔍 Search
+                    <Search /> Search
                   </Button>
                 )}
               </div>
               <div className="flex items-center gap-3">
-                <label className="text-xs text-white/40" htmlFor="gs-max-pages">Max pages:</label>
+                <label className="text-xs font-medium text-muted-foreground" htmlFor="gs-max-pages">Max pages</label>
                 <select
                   id="gs-max-pages"
                   value={maxPages}
                   onChange={e => setMaxPages(Number(e.target.value))}
                   disabled={streaming}
-                  className="bg-black/20 border border-white/10 rounded-lg px-3 py-1.5 text-white text-xs focus:outline-none focus:border-[#00E5FF]/50"
+                  className="h-7 bg-background border border-border rounded-md px-2 text-foreground text-xs focus:outline-none focus:border-primary/50"
                 >
                   {[1,2,5,10,20,50].map(n => (
                     <option key={n} value={n}>{n} ({n * 20} results max)</option>
@@ -1053,7 +1039,7 @@ function GoogleSearchPanel() {
             </form>
 
             {sError && (
-              <div className="mt-4 p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-sm">{sError}</div>
+              <div className="mt-4 p-3 rounded-md bg-destructive/10 border border-destructive/30 text-destructive text-sm">{sError}</div>
             )}
           </Card>
 
@@ -1064,12 +1050,12 @@ function GoogleSearchPanel() {
           {sEntries.length > 0 && (
             <div className="space-y-4">
               <div className="flex flex-wrap items-center justify-between gap-3">
-                <span className="text-white/60 text-sm font-medium">
+                <span className="text-muted-foreground text-sm font-medium">
                   {sEntries.length} place{sEntries.length !== 1 ? 's' : ''}
-                  {streaming && <span className="ml-2 text-[#00E5FF] animate-pulse">● live</span>}
+                  {streaming && <span className="ml-2 inline-flex items-center gap-1 text-primary text-xs"><span className="size-1.5 rounded-full bg-primary animate-pulse" />Live</span>}
                 </span>
                 {sDone && !streaming && (
-                  <Badge variant="outline" className="text-xs text-emerald-400/70 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-full font-normal">✓ Complete</Badge>
+                  <Badge variant="default"><Check />Complete</Badge>
                 )}
               </div>
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -1082,11 +1068,11 @@ function GoogleSearchPanel() {
 
           {streaming && sEntries.length === 0 && (
             <div className="flex flex-col items-center justify-center gap-4 p-16">
-              <div className="relative w-12 h-12">
-                <div className="absolute inset-0 rounded-full border-2 border-[#00E5FF]/20" />
-                <div className="absolute inset-0 rounded-full border-2 border-[#00E5FF] border-t-transparent animate-spin" />
+              <div className="relative size-10">
+                <div className="absolute inset-0 rounded-full border-2 border-primary/20" />
+                <div className="absolute inset-0 rounded-full border-2 border-primary border-t-transparent animate-spin" />
               </div>
-              <p className="text-white/40 text-sm">Navigating to Google Search…</p>
+              <p className="text-muted-foreground text-sm">Navigating to Google Search…</p>
             </div>
           )}
         </>
@@ -1094,14 +1080,14 @@ function GoogleSearchPanel() {
 
       {/* ── Single-page paginated mode ──────────────────────────────────── */}
       {subMode === 'paginated' && (
-        <div className="space-y-6">
-          <Card className="glass p-6 rounded-2xl border border-white/[0.07] shadow-xl">
+        <div className="space-y-4">
+          <Card className="p-4">
             <div className="flex items-start justify-between mb-1">
               <div>
-                <CardTitle className="text-lg font-bold text-white">Google Search Places — Single Page</CardTitle>
-                <CardDescription className="text-sm text-[var(--text-muted)] mt-1">Fetches one page (20 results) at a time via Google Search URL.</CardDescription>
+                <CardTitle className="text-sm font-semibold tracking-tight">Google Search places: single page</CardTitle>
+                <CardDescription className="text-xs text-muted-foreground mt-0.5">Fetches one page (20 results) at a time via Google Search URL.</CardDescription>
               </div>
-              <Badge variant="outline" className="text-xs text-white/30 bg-white/[0.04] border border-white/[0.07] px-2 py-0.5 rounded-full font-normal">udm=1 · page {pPage}</Badge>
+              <Badge variant="secondary">udm=1 · page {pPage}</Badge>
             </div>
 
             <form onSubmit={(e) => { e.preventDefault(); runPagedSearch(1); }} className="space-y-3 mt-4">
@@ -1109,7 +1095,7 @@ function GoogleSearchPanel() {
                 <Input
                   id="gs-paged-query"
                   type="text"
-                  className="flex-1 bg-black/20 border border-white/10 rounded-xl px-4 py-2.5 text-white placeholder-white/30 focus:outline-none focus:border-[#00E5FF]/50 transition-colors"
+                  className="flex-1"
                   placeholder='e.g. "banks in pakistan place"'
                   value={pQuery}
                   onChange={e => setPQuery(e.target.value)}
@@ -1118,36 +1104,36 @@ function GoogleSearchPanel() {
                 <Button
                   type="submit"
                   disabled={!pQuery.trim() || pLoading}
-                  className="px-6 py-2.5 h-auto bg-gradient-to-r from-[#00E5FF] to-[#0061FF] rounded-xl text-white font-medium hover:opacity-90 disabled:opacity-50 transition-all shadow-lg shadow-[#00E5FF]/20 whitespace-nowrap"
+                  className="whitespace-nowrap"
                 >
-                  {pLoading ? '⏳ Searching…' : '🔍 Search'}
+                  {pLoading ? <><Loader2 className="animate-spin" />Searching…</> : <><Search />Search</>}
                 </Button>
               </div>
             </form>
 
             {pError && (
-              <div className="mt-4 p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-sm">{pError}</div>
+              <div className="mt-4 p-3 rounded-md bg-destructive/10 border border-destructive/30 text-destructive text-sm">{pError}</div>
             )}
           </Card>
 
           {pResult && (
             <>
               <div className="flex items-center justify-between">
-                <span className="text-white/60 text-sm">{pResult.totalResultsText ?? `${pResult.results.length} results`}</span>
+                <span className="text-muted-foreground text-sm">{pResult.totalResultsText ?? `${pResult.results.length} results`}</span>
                 <div className="flex items-center gap-2">
                   <Button
                     onClick={() => runPagedSearch(pPage - 1)}
                     disabled={pPage <= 1 || pLoading}
                     variant="outline"
-                    className="px-3 py-1.5 h-auto rounded-lg bg-white/[0.05] border border-white/[0.08] text-white/60 text-sm hover:bg-white/[0.09] disabled:opacity-30 transition-all"
-                  >← Prev</Button>
-                  <span className="text-white/40 text-xs px-2">Page {pPage}</span>
+                    size="sm"
+                  ><ChevronLeft /> Prev</Button>
+                  <span className="text-muted-foreground text-xs px-2">Page {pPage}</span>
                   <Button
                     onClick={() => runPagedSearch(pPage + 1)}
                     disabled={!pResult.hasNextPage || pLoading}
                     variant="outline"
-                    className="px-3 py-1.5 h-auto rounded-lg bg-white/[0.05] border border-white/[0.08] text-white/60 text-sm hover:bg-white/[0.09] disabled:opacity-30 transition-all"
-                  >Next →</Button>
+                    size="sm"
+                  >Next <ChevronRight /></Button>
                 </div>
               </div>
 
@@ -1158,7 +1144,7 @@ function GoogleSearchPanel() {
               </div>
 
               {pResult.results.length === 0 && (
-                <p className="text-center text-white/30 py-12 text-sm">No results found for this page.</p>
+                <p className="text-center text-muted-foreground py-12 text-sm">No results found for this page.</p>
               )}
             </>
           )}
@@ -1250,26 +1236,22 @@ export default function PlacesPanel() {
   };
 
   return (
-    <div className="space-y-6 text-sm">
+    <div className="space-y-4 text-sm">
       {/* Mode toggle */}
-      <div className="flex gap-1 p-1 bg-white/[0.04] border border-white/[0.07] rounded-xl w-fit">
+      <div className="flex flex-wrap gap-1 p-1 bg-secondary/40 border border-border rounded-lg w-fit">
         {([
-          { id: 'url-details',   label: '🔗 Direct URL Scraper' },
-          { id: 'google-search', label: '🔍 Google Search' },
-          { id: 'stream',        label: '📡 Maps Stream' },
-          { id: 'paginated',     label: '📄 Maps Paginated' },
-        ] as { id: Mode; label: string }[]).map(({ id, label }) => (
+          { id: 'url-details',   label: 'Direct URL scraper', icon: Link2 },
+          { id: 'google-search', label: 'Google Search', icon: Search },
+          { id: 'stream',        label: 'Maps stream', icon: Radio },
+          { id: 'paginated',     label: 'Maps paginated', icon: FileText },
+        ] as { id: Mode; label: string; icon: typeof Radio }[]).map(({ id, label, icon: Icon }) => (
           <Button
             key={id}
             onClick={() => setMode(id)}
-            variant="outline"
-            className={`px-4 py-1.5 h-auto rounded-lg text-sm font-medium transition-all ${
-              mode === id
-                ? 'bg-[#0061FF] text-white shadow shadow-[#0061FF]/30 hover:bg-[#0061FF]/80 border-transparent'
-                : 'text-white/40 hover:text-white/70 border-transparent bg-transparent hover:bg-white/5'
-            }`}
+            variant={mode === id ? 'secondary' : 'ghost'}
+            size="sm"
           >
-            {label}
+            <Icon />{label}
           </Button>
         ))}
       </div>
@@ -1281,15 +1263,15 @@ export default function PlacesPanel() {
       {mode === 'stream' && (
       <>
       {/* Search card */}
-      <Card className="glass p-6 rounded-2xl border border-white/[0.07] shadow-xl">
+      <Card className="p-4">
         <div className="flex items-start justify-between mb-1">
           <div>
-            <CardTitle className="text-lg font-bold text-white">Google Maps Places Search</CardTitle>
-            <CardDescription className="text-sm text-[var(--text-muted)] mt-1">
+            <CardTitle className="text-sm font-semibold tracking-tight">Google Maps places search</CardTitle>
+            <CardDescription className="text-xs text-muted-foreground mt-0.5">
               Results appear in real-time as the browser scrolls through Google Maps.
             </CardDescription>
           </div>
-          <Badge variant="outline" className="text-xs text-white/30 bg-white/[0.04] border border-white/[0.07] px-2 py-0.5 rounded-full font-normal">
+          <Badge variant="secondary">
             live stream
           </Badge>
         </div>
@@ -1299,7 +1281,7 @@ export default function PlacesPanel() {
             <Input
               id="places-query"
               type="text"
-              className="flex-1 bg-black/20 border border-white/10 rounded-xl px-4 py-2.5 text-white placeholder-white/30 focus:outline-none focus:border-[#0061FF]/50 transition-colors"
+              className="flex-1"
               placeholder='e.g. "pizza near Times Square" or "dentists in London"'
               value={query}
               onChange={(e) => setQuery(e.target.value)}
@@ -1309,25 +1291,25 @@ export default function PlacesPanel() {
               <Button
                 type="button"
                 onClick={handleStop}
-                variant="outline"
-                className="px-6 py-2.5 h-auto bg-red-500/20 border border-red-500/30 rounded-xl text-red-400 font-medium hover:bg-red-500/30 transition-all whitespace-nowrap"
+                variant="destructive"
+                className="whitespace-nowrap"
               >
-                ⏹ Stop
+                <Square /> Stop
               </Button>
             ) : (
               <Button
                 type="submit"
                 disabled={!query.trim()}
-                className="px-6 py-2.5 h-auto bg-gradient-to-r from-[#0061FF] to-[#00E5FF] rounded-xl text-white font-medium hover:opacity-90 disabled:opacity-50 transition-all shadow-lg shadow-[#0061FF]/20 whitespace-nowrap"
+                className="whitespace-nowrap"
               >
-                🗺 Search Places
+                <MapIcon /> Search places
               </Button>
             )}
           </div>
         </form>
 
         {error && (
-          <div className="mt-4 p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-sm">
+          <div className="mt-4 p-3 rounded-md bg-destructive/10 border border-destructive/30 text-destructive text-sm">
             {error}
           </div>
         )}
@@ -1355,9 +1337,9 @@ export default function PlacesPanel() {
             return (
               <>
                 <div className="flex flex-wrap items-center justify-between gap-3">
-                  <span className="text-[var(--text-muted)] text-sm font-medium">
+                  <span className="text-muted-foreground text-sm font-medium">
                     {filteredEntries.length} place{filteredEntries.length !== 1 ? 's' : ''}
-                    {streaming && <span className="ml-2 text-[var(--accent-active-text)] animate-pulse">● live</span>}
+                    {streaming && <span className="ml-2 inline-flex items-center gap-1 text-primary text-xs"><span className="size-1.5 rounded-full bg-primary animate-pulse" />Live</span>}
                     {filteredEntries.length !== entries.length && ` (filtered from ${entries.length})`}
                   </span>
             <div className="flex items-center gap-3">
@@ -1366,23 +1348,23 @@ export default function PlacesPanel() {
                   size="sm" 
                   variant="outline" 
                   onClick={() => setFilterEmail(v => !v)}
-                  className={`h-7 text-xs ${filterEmail ? 'bg-[var(--accent-active-bg)] border-[var(--accent-active-border)] text-[var(--accent-active-text)]' : 'bg-[var(--btn-secondary-bg)] border-[var(--card-border)] text-[var(--text-main)] hover:bg-[var(--btn-secondary-hover)]'}`}
+                  className={filterEmail ? 'bg-primary/10 border-primary/30 text-primary' : ''}
                 >
-                  Has Email
+                  Has email
                 </Button>
                 <Button 
                   size="sm" 
                   variant="outline" 
                   onClick={() => setFilterPhone(v => !v)}
-                  className={`h-7 text-xs ${filterPhone ? 'bg-[var(--accent-active-bg)] border-[var(--accent-active-border)] text-[var(--accent-active-text)]' : 'bg-[var(--btn-secondary-bg)] border-[var(--card-border)] text-[var(--text-main)] hover:bg-[var(--btn-secondary-hover)]'}`}
+                  className={filterPhone ? 'bg-primary/10 border-primary/30 text-primary' : ''}
                 >
-                  Has Phone
+                  Has phone
                 </Button>
               </div>
               <BulkActions entries={filteredEntries} streaming={streaming} />
               {done && !streaming && (
-                <Badge variant="outline" className="text-xs text-emerald-500 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-full font-normal">
-                  ✓ Complete
+                <Badge variant="default">
+                  <Check />Complete
                 </Badge>
               )}
             </div>
@@ -1406,11 +1388,11 @@ export default function PlacesPanel() {
       {/* Empty state while searching with no results yet */}
       {streaming && entries.length === 0 && (
         <div className="flex flex-col items-center justify-center gap-4 p-16">
-          <div className="relative w-12 h-12">
-            <div className="absolute inset-0 rounded-full border-2 border-[#0061FF]/20" />
-            <div className="absolute inset-0 rounded-full border-2 border-[#0061FF] border-t-transparent animate-spin" />
+          <div className="relative size-10">
+            <div className="absolute inset-0 rounded-full border-2 border-primary/20" />
+            <div className="absolute inset-0 rounded-full border-2 border-primary border-t-transparent animate-spin" />
           </div>
-          <p className="text-white/40 text-sm">Navigating to Google Maps…</p>
+          <p className="text-muted-foreground text-sm">Navigating to Google Maps…</p>
         </div>
       )}
       </>

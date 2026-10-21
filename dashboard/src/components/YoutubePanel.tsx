@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardTitle, CardDescription } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
+import { Cookie, Search, Link2, Download, ArrowLeft, ArrowRight } from 'lucide-react';
 
 function fmtViews(n: number) {
   if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M`;
@@ -14,21 +15,21 @@ function fmtViews(n: number) {
 const standardQualities: YtQuality[] = [
   {
     key: 'audio-video',
-    label: '🎬 Audio + Video (Best Merged)',
+    label: 'Audio + video (best merged)',
     sizeBytes: null,
     audioOnly: false,
     formatId: 'best[ext=mp4]/best'
   },
   {
     key: 'video-only',
-    label: '📹 Video Only (Highest Res)',
+    label: 'Video only (highest res)',
     sizeBytes: null,
     audioOnly: false,
     formatId: 'bestvideo[ext=mp4]/bestvideo'
   },
   {
     key: 'audio-only',
-    label: '🎵 Audio Only (m4a)',
+    label: 'Audio only (m4a)',
     sizeBytes: null,
     audioOnly: true,
     formatId: 'bestaudio[ext=m4a]/bestaudio'
@@ -149,13 +150,13 @@ export default function YoutubePanel() {
   };
 
   return (
-    <div className="space-y-4 text-sm">
+    <div className="space-y-4 text-[13px]">
       {/* Cookie Export */}
       <Card className="border border-border bg-card p-4 space-y-3">
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div>
-            <CardTitle className="font-mono text-xs uppercase tracking-wider text-foreground">🍪 Cookie Exporter</CardTitle>
-            <CardDescription className="text-xs text-muted-foreground mt-0.5 font-mono">
+            <CardTitle className="flex items-center gap-2"><Cookie className="size-4 text-muted-foreground" />Cookie exporter</CardTitle>
+            <CardDescription className="text-xs text-muted-foreground mt-0.5">
               Export authenticated browser cookies for yt-dlp to download restricted content.
             </CardDescription>
           </div>
@@ -164,36 +165,35 @@ export default function YoutubePanel() {
             disabled={cookieExporting}
             variant="outline"
             size="sm"
-            className="font-mono text-xs uppercase"
           >
-            {cookieExporting ? 'EXPORTING...' : 'EXPORT COOKIES'}
+            {cookieExporting ? 'Exporting...' : 'Export cookies'}
           </Button>
         </div>
         {cookieResult && (
-          <div className="text-xs px-3 py-2 border border-border bg-secondary font-mono">
-            {cookieResult.success ? '[SUCCESS]' : '[ERROR]'} {cookieResult.message}
+          <div className={`text-xs px-3 py-2 rounded-md border ${cookieResult.success ? 'bg-primary/10 text-primary border-primary/30' : 'bg-destructive/10 text-destructive border-destructive/30'}`}>
+            {cookieResult.message}
           </div>
         )}
       </Card>
 
       {/* Search */}
       <Card className="border border-border bg-card p-4 space-y-3">
-        <CardTitle className="font-mono text-xs uppercase tracking-wider text-foreground">🔍 Search YouTube</CardTitle>
+        <CardTitle className="flex items-center gap-2"><Search className="size-4 text-muted-foreground" />Search YouTube</CardTitle>
         <div className="flex flex-col sm:flex-row gap-2">
           <Input value={query} onChange={e => setQuery(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && search()}
             placeholder="Search YouTube query..."
             className="flex-1" />
           <Button onClick={search} disabled={searching || !query}
-            className="sm:px-5 font-mono text-xs uppercase">
-            {searching ? 'SEARCHING...' : 'SEARCH'}
+            className="sm:px-5">
+            {searching ? 'Searching...' : 'Search'}
           </Button>
         </div>
       </Card>
 
       {/* Direct URL */}
       <Card className="border border-border bg-card p-4 space-y-4">
-        <CardTitle className="font-mono text-xs uppercase tracking-wider text-foreground">🔗 Direct Link Download</CardTitle>
+        <CardTitle className="flex items-center gap-2"><Link2 className="size-4 text-muted-foreground" />Direct link download</CardTitle>
         <div className="flex flex-col sm:flex-row gap-2">
           <Input value={directUrl} onChange={e => {
             setDirectUrl(e.target.value);
@@ -202,15 +202,14 @@ export default function YoutubePanel() {
             placeholder="https://youtube.com/watch?v=…"
             className="flex-1 font-mono text-xs" />
           <Button onClick={() => loadInfo(directUrl)} disabled={loadingInfo || !directUrl}
-            variant="outline"
-            className="font-mono text-xs uppercase">
-            {loadingInfo ? 'FETCHING...' : 'GET METADATA'}
+            variant="outline">
+            {loadingInfo ? 'Fetching...' : 'Get metadata'}
           </Button>
         </div>
 
         {directUrl && !info && (
           <div className="space-y-3 border-t border-border pt-3">
-            <p className="text-xs font-mono text-muted-foreground uppercase font-bold">Select Quality Profile:</p>
+            <p className="text-xs font-medium text-muted-foreground">Select quality profile</p>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
               {standardQualities.map(q => (
                 <Button
@@ -218,9 +217,9 @@ export default function YoutubePanel() {
                   onClick={() => setSelectedQuality(q)}
                   variant="outline"
                   size="sm"
-                  className={`font-mono text-xs transition-all text-left justify-start ${selectedQuality.key === q.key
-                      ? 'bg-foreground text-background border-foreground font-bold'
-                      : 'bg-secondary text-muted-foreground'
+                  className={`text-xs transition-all text-left justify-start ${selectedQuality.key === q.key
+                      ? 'bg-primary/10 text-primary border-primary/40 hover:bg-primary/15'
+                      : 'text-muted-foreground'
                     }`}
                 >
                   {q.label}
@@ -231,42 +230,42 @@ export default function YoutubePanel() {
             <Button
               onClick={() => startDownloadJob(directUrl, selectedQuality)}
               disabled={!directUrl || activeJob?.status === 'pending' || activeJob?.status === 'downloading'}
-              className="w-full py-2.5 font-mono text-xs font-bold uppercase tracking-wider"
+              className="w-full"
             >
-              START DOWNLOAD JOB
+              <Download /> Start download job
             </Button>
           </div>
         )}
       </Card>
 
-      {error && <p className="text-xs text-foreground bg-secondary border border-border px-4 py-3 font-mono">[ERROR] {error}</p>}
+      {error && <p className="text-xs text-destructive bg-destructive/10 border border-destructive/30 rounded-md px-4 py-3">{error}</p>}
 
       {/* Active Job Progress */}
       {activeJob && (
-        <Card className="border border-border bg-card p-4 space-y-3 font-mono">
+        <Card className="border border-border bg-card p-4 space-y-3">
           <div className="flex items-center justify-between">
-            <CardTitle className="text-xs uppercase flex items-center gap-2">
-              DOWNLOAD JOB: <Badge variant="outline" className="text-[10px]">{activeJob.status.toUpperCase()}</Badge>
+            <CardTitle className="flex items-center gap-2">
+              Download job <Badge variant={activeJob.status === 'failed' ? 'destructive' : activeJob.status === 'completed' ? 'default' : 'secondary'}>{activeJob.status}</Badge>
             </CardTitle>
           </div>
           <p className="text-xs text-muted-foreground truncate">{activeJob.message || 'Processing stream...'}</p>
 
           {/* Progress Bar */}
-          <div className="w-full bg-secondary h-2 border border-border overflow-hidden">
+          <div className="w-full bg-secondary h-1.5 rounded-full overflow-hidden">
             <div
-              className="h-full bg-foreground transition-all duration-300"
+              className="h-full bg-primary rounded-full transition-all duration-300"
               style={{ width: `${activeJob.progress}%` }}
             />
           </div>
           <div className="flex justify-between items-center text-xs text-muted-foreground">
-            <span>PROGRESS: {activeJob.progress}%</span>
+            <span>Progress: {activeJob.progress}%</span>
             {activeJob.status === 'completed' && activeJob.downloadUrl && (
               <a
                 href={activeJob.downloadUrl}
                 download={activeJob.title || 'video.mp4'}
-                className="text-foreground underline font-bold"
+                className="text-primary hover:underline font-medium"
               >
-                [ SAVE FILE MANUALLY ]
+                Save file manually
               </a>
             )}
           </div>
@@ -277,13 +276,13 @@ export default function YoutubePanel() {
       {results.length > 0 && !info && (
         <div className="space-y-2">
           {results.map(v => (
-            <Card key={v.videoId} className="border border-border bg-card p-3 flex flex-col sm:flex-row gap-3 cursor-pointer hover:bg-secondary transition-colors" onClick={() => selectSearchResult(v)}>
-              <img src={v.thumbnail} alt="" className="w-full sm:w-28 h-20 object-cover flex-shrink-0 bg-secondary border border-border" />
+            <Card key={v.videoId} className="border border-border bg-card p-3 flex flex-col sm:flex-row gap-3 cursor-pointer hover:bg-secondary/50 transition-colors" onClick={() => selectSearchResult(v)}>
+              <img src={v.thumbnail} alt="" className="w-full sm:w-28 h-20 object-cover flex-shrink-0 bg-secondary border border-border rounded-md" />
               <div className="flex-1 min-w-0">
-                <p className="text-xs font-bold text-foreground font-mono truncate">{v.title}</p>
-                <p className="text-[11px] text-muted-foreground mt-1 font-mono">{v.author} · {v.duration} · {fmtViews(v.views)} views · {v.ago}</p>
+                <p className="text-sm font-semibold text-foreground truncate">{v.title}</p>
+                <p className="text-xs text-muted-foreground mt-1">{v.author} · {v.duration} · {fmtViews(v.views)} views · {v.ago}</p>
               </div>
-              <Button variant="outline" size="xs" className="self-end sm:self-center font-mono text-[10px] uppercase">Select →</Button>
+              <Button variant="outline" size="sm" className="self-end sm:self-center">Select <ArrowRight /></Button>
             </Card>
           ))}
         </div>
@@ -298,23 +297,23 @@ export default function YoutubePanel() {
         return (
           <Card className="border border-border bg-card p-4 space-y-4">
             <div className="flex gap-3 items-start border-b border-border pb-3">
-              <img src={info.thumbnail} alt="" className="w-28 h-20 object-cover bg-secondary flex-shrink-0 border border-border" />
+              <img src={info.thumbnail} alt="" className="w-28 h-20 object-cover bg-secondary flex-shrink-0 border border-border rounded-md" />
               <div className="min-w-0">
-                <CardTitle className="text-xs font-mono font-bold truncate text-foreground">{info.title}</CardTitle>
-                <p className="text-xs text-muted-foreground font-mono mt-1">{info.uploader} {info.viewCount ? `· ${fmtViews(info.viewCount)} views` : ''}</p>
+                <CardTitle className="truncate">{info.title}</CardTitle>
+                <p className="text-xs text-muted-foreground mt-1">{info.uploader} {info.viewCount ? `· ${fmtViews(info.viewCount)} views` : ''}</p>
               </div>
             </div>
 
             <div className="space-y-4">
               {standard.length > 0 && (
                 <div className="space-y-2">
-                  <p className="text-xs font-bold font-mono uppercase text-foreground">Standard Formats</p>
+                  <p className="text-xs font-medium text-foreground">Standard formats</p>
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                     {standard.map(q => (
                       <Button key={q.key} onClick={() => startDownloadJob(info.url, q)} disabled={activeJob?.status === 'pending' || activeJob?.status === 'downloading'}
                         variant="outline"
                         size="sm"
-                        className="font-mono text-xs text-left justify-start">
+                        className="text-xs text-left justify-start">
                         {q.label}
                       </Button>
                     ))}
@@ -324,13 +323,13 @@ export default function YoutubePanel() {
 
               {specificVideo.length > 0 && (
                 <div className="space-y-2">
-                  <p className="text-xs font-bold font-mono uppercase text-muted-foreground">Specific Video Streams</p>
+                  <p className="text-xs font-medium text-muted-foreground">Specific video streams</p>
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 max-h-60 overflow-y-auto pr-1">
                     {specificVideo.map(q => (
                       <Button key={q.key} onClick={() => startDownloadJob(info.url, q)} disabled={activeJob?.status === 'pending' || activeJob?.status === 'downloading'}
                         variant="outline"
                         size="sm"
-                        className="font-mono text-xs text-left truncate justify-start"
+                        className="text-xs text-left truncate justify-start"
                         title={q.label}>
                         {q.label}
                       </Button>
@@ -341,13 +340,13 @@ export default function YoutubePanel() {
 
               {specificAudio.length > 0 && (
                 <div className="space-y-2">
-                  <p className="text-xs font-bold font-mono uppercase text-muted-foreground">Specific Audio Streams</p>
+                  <p className="text-xs font-medium text-muted-foreground">Specific audio streams</p>
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 max-h-48 overflow-y-auto pr-1">
                     {specificAudio.map(q => (
                       <Button key={q.key} onClick={() => startDownloadJob(info.url, q)} disabled={activeJob?.status === 'pending' || activeJob?.status === 'downloading'}
                         variant="outline"
                         size="sm"
-                        className="font-mono text-xs text-left truncate justify-start"
+                        className="text-xs text-left truncate justify-start"
                         title={q.label}>
                         {q.label}
                       </Button>
@@ -358,7 +357,7 @@ export default function YoutubePanel() {
             </div>
 
             <div className="border-t border-border pt-3">
-              <Button onClick={() => setInfo(null)} variant="ghost" size="xs" className="font-mono text-xs">[ ← BACK TO RESULTS ]</Button>
+              <Button onClick={() => setInfo(null)} variant="ghost" size="sm"><ArrowLeft /> Back to results</Button>
             </div>
           </Card>
         );

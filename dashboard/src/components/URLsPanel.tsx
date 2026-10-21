@@ -1,4 +1,7 @@
 import React, { useState } from 'react';
+import {
+  Link2, Monitor, Terminal, Code2, Globe, Zap, ExternalLink, Copy, Check,
+} from 'lucide-react';
 import { ToolUrl } from '../api';
 import { Card, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -14,67 +17,69 @@ export default function URLsPanel({ tools }: { tools: Record<string, ToolUrl> })
     setTimeout(() => setCopiedKey(null), 2000);
   };
 
-  const ICON: Record<string, string> = {
-    dashboard: '🖥️',
-    terminal: '💻',
-    vscode: '🔵',
-    browser: '🌐',
-    novnc: '🖥️',
-    bypasser: '⚡',
+  const ICON: Record<string, React.ComponentType<{ className?: string }>> = {
+    dashboard: Monitor,
+    terminal: Terminal,
+    vscode: Code2,
+    browser: Globe,
+    novnc: Monitor,
+    bypasser: Zap,
   };
 
   const getIcon = (k: string) => {
-    if (k.startsWith('vscode')) return '🔵';
-    if (k.startsWith('terminal')) return '💻';
-    if (k.startsWith('browser')) return '🌐';
-    return ICON[k] ?? '🔗';
+    if (k.startsWith('vscode')) return Code2;
+    if (k.startsWith('terminal')) return Terminal;
+    if (k.startsWith('browser')) return Globe;
+    return ICON[k] ?? Link2;
   };
 
   if (keys.length === 0) {
     return (
-      <Card className="border border-border bg-card p-8 sm:p-12 text-center max-w-2xl mx-auto space-y-2 font-mono">
-        <div className="text-2xl">🔗</div>
-        <p className="font-bold text-xs uppercase tracking-wider text-foreground">No Live Tunnels Connected</p>
+      <Card className="p-8 sm:p-12 text-center max-w-2xl mx-auto flex flex-col items-center gap-2">
+        <Link2 className="size-6 text-muted-foreground" />
+        <p className="font-semibold text-sm tracking-tight text-foreground">No live tunnels connected</p>
         <p className="text-xs text-muted-foreground">Active tunnels automatically register here as sessions launch.</p>
       </Card>
     );
   }
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-5xl mx-auto text-sm">
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-w-5xl mx-auto text-[13px]">
       {keys.map(key => {
         const t = tools[key];
         const displayLabel = t.label || key;
+        const Icon = getIcon(key);
         return (
           <Card
             key={key}
-            className="border border-border bg-card p-4 sm:p-5 space-y-3 flex flex-col"
+            className="p-4 space-y-3 flex flex-col"
           >
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-2.5">
-                <div className="w-8 h-8 border border-border bg-secondary flex items-center justify-center text-base">
-                  {getIcon(key)}
+                <div className="size-8 rounded-md border border-border bg-secondary flex items-center justify-center text-muted-foreground">
+                  <Icon className="size-4" />
                 </div>
                 <div>
-                  <CardTitle className="font-bold font-mono uppercase text-xs tracking-wider text-foreground">{displayLabel}</CardTitle>
-                  <p className="text-[10px] text-muted-foreground font-mono">
+                  <CardTitle className="text-sm font-semibold tracking-tight text-foreground">{displayLabel}</CardTitle>
+                  <p className="text-xs text-muted-foreground">
                     {new Date(t.registeredAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                   </p>
                 </div>
               </div>
-              
-              <Badge variant="outline" className="text-[9px] font-mono font-bold">
-                [ONLINE]
+
+              <Badge variant="default">
+                <span className="size-1.5 rounded-full bg-primary" />
+                Online
               </Badge>
             </div>
 
             {/* Connection link */}
-            <div className="flex gap-2 items-center bg-secondary border border-border px-3 py-2">
+            <div className="flex gap-2 items-center bg-secondary/40 border border-border rounded-md px-3 py-1.5">
               <a
                 href={t.url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="flex-1 text-foreground underline font-mono text-xs truncate font-bold"
+                className="flex-1 text-foreground hover:text-primary font-mono text-xs truncate"
               >
                 {t.url}
               </a>
@@ -82,32 +87,32 @@ export default function URLsPanel({ tools }: { tools: Record<string, ToolUrl> })
                 variant="ghost"
                 size="xs"
                 onClick={() => copyText(t.url, `${key}-url`)}
-                className="font-mono text-xs px-1.5"
                 title="Copy URL"
               >
-                {copiedKey === `${key}-url` ? 'COPIED' : 'COPY'}
+                {copiedKey === `${key}-url` ? <Check /> : <Copy />}
+                {copiedKey === `${key}-url` ? 'Copied' : 'Copy'}
               </Button>
               <a
                 href={t.url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-xs text-muted-foreground hover:text-foreground font-mono px-1"
+                className="text-muted-foreground hover:text-foreground px-1"
                 title="Open URL"
               >
-                ↗
+                <ExternalLink className="size-3.5" />
               </a>
             </div>
 
             {/* Credentials block */}
             {(t.username || t.password) && (
-              <div className="grid grid-cols-2 gap-2 mt-auto pt-2">
+              <div className="grid grid-cols-2 gap-2 mt-auto pt-1">
                 {t.username && (
                   <div
                     onClick={() => copyText(t.username!, `${key}-user`)}
-                    className="bg-secondary border border-border p-2.5 cursor-pointer hover:border-foreground transition-colors font-mono"
+                    className="bg-secondary/40 border border-border rounded-md p-2.5 cursor-pointer hover:bg-secondary/70 transition-colors"
                   >
-                    <p className="text-[9px] text-muted-foreground uppercase font-bold tracking-wider mb-0.5">USER</p>
-                    <p className="text-xs font-mono text-foreground truncate font-bold">
+                    <p className="text-xs font-medium text-muted-foreground mb-0.5">User</p>
+                    <p className="text-xs font-mono text-foreground truncate">
                       {t.username}
                     </p>
                   </div>
@@ -115,10 +120,10 @@ export default function URLsPanel({ tools }: { tools: Record<string, ToolUrl> })
                 {t.password && (
                   <div
                     onClick={() => copyText(t.password!, `${key}-pass`)}
-                    className="bg-secondary border border-border p-2.5 cursor-pointer hover:border-foreground transition-colors font-mono"
+                    className="bg-secondary/40 border border-border rounded-md p-2.5 cursor-pointer hover:bg-secondary/70 transition-colors"
                   >
-                    <p className="text-[9px] text-muted-foreground uppercase font-bold tracking-wider mb-0.5">PASS</p>
-                    <p className="text-xs font-mono text-foreground truncate font-bold">
+                    <p className="text-xs font-medium text-muted-foreground mb-0.5">Password</p>
+                    <p className="text-xs font-mono text-foreground truncate">
                       {t.password}
                     </p>
                   </div>

@@ -4,6 +4,7 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/com
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
+import { X, Inbox, FolderOpen, ScrollText, RefreshCw, TriangleAlert, Box, Layers, HardDrive, History, Loader2, Circle, CircleCheck, CircleX, CircleDot, ChevronDown, ChevronRight, Settings2, Rocket, Search } from 'lucide-react';
 
 interface ServiceSessionMetadata {
   serviceName: string;
@@ -247,9 +248,9 @@ volumes:
           setActiveJobId(null);
           setLoading(false);
           if (status.status === 'done') {
-            setResult(`✅ Deploy completed successfully!`);
+            setResult(`Deploy completed successfully!`);
           } else {
-            setResult(`❌ Deploy failed: ${status.error}`);
+            setResult(`Deploy failed: ${status.error}`);
           }
           loadSessions();
           loadHistory();
@@ -297,7 +298,7 @@ volumes:
     };
 
     es.onerror = () => {
-      setLogsLines(prev => [...prev, '⚠️ [Real-time stream connection ended]']);
+      setLogsLines(prev => [...prev, 'Real-time stream connection ended']);
       es.close();
     };
 
@@ -330,7 +331,7 @@ volumes:
       const data = await res.json();
       setLogsLines(data.lines || []);
     } catch (e: any) {
-      setLogsLines([`❌ Failed to load logs: ${e.message}`]);
+      setLogsLines([`Failed to load logs: ${e.message}`]);
     }
   };
 
@@ -342,9 +343,9 @@ volumes:
 
   const handleDeploy = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!image) return setResult('❌ Please enter a Docker Image URI');
+    if (!image) return setResult('Please enter a Docker Image URI');
     const portNum = parseInt(port, 10);
-    if (isNaN(portNum) || portNum <= 0) return setResult('❌ Invalid container port');
+    if (isNaN(portNum) || portNum <= 0) return setResult('Invalid container port');
     
     setLoading(true);
     setResult('');
@@ -396,13 +397,13 @@ volumes:
 
       if (res.jobId) {
         setActiveJobId(res.jobId);
-        setResult(`⚡ Deployment job created. Polling progress...`);
+        setResult(`Deployment job created. Polling progress...`);
       } else {
-        setResult(`✅ Go Container started!`);
+        setResult(`Go Container started!`);
         loadSessions();
       }
     } catch (err: any) {
-      setResult(`❌ Error: ${err.message}`);
+      setResult(`Error: ${err.message}`);
       setLoading(false);
     }
   };
@@ -413,14 +414,14 @@ volumes:
     try {
       const res = await api.stopGoDocker(sessionId);
       if (res.success) {
-        setResult(`✅ ${res.message}`);
+        setResult(`${res.message}`);
       } else {
-        setResult(`❌ ${res.message}`);
+        setResult(`${res.message}`);
       }
       await loadSessions();
       loadHistory();
     } catch (err: any) {
-      setResult(`❌ Error: ${err.message}`);
+      setResult(`Error: ${err.message}`);
     } finally {
       setLoading(false);
     }
@@ -432,7 +433,7 @@ volumes:
     try {
       const data = await api.parseCompose(yamlInput);
       setParsedCompose(data);
-      setResult('✅ Successfully parsed Compose configuration!');
+      setResult('Successfully parsed Compose configuration!');
 
       const initialSettings: typeof serviceSettings = {};
       Object.entries(data.services).forEach(([sName, svc]: [string, any]) => {
@@ -446,7 +447,7 @@ volumes:
     } catch (e: any) {
       setParseError(e.message);
       setParsedCompose(null);
-      setResult(`❌ Parse error: ${e.message}`);
+      setResult(`Parse error: ${e.message}`);
     } finally {
       setIsParsing(false);
     }
@@ -484,13 +485,13 @@ volumes:
       if (res.error) throw new Error(res.error);
       if (res.jobId) {
         setActiveJobId(res.jobId);
-        setResult(`⚡ Compose Stack Deployment job created. Polling progress...`);
+        setResult(`Compose Stack Deployment job created. Polling progress...`);
       } else {
-        setResult(`✅ Compose stack deployed successfully!`);
+        setResult(`Compose stack deployed successfully!`);
         loadSessions();
       }
     } catch (err: any) {
-      setResult(`❌ Error: ${err.message}`);
+      setResult(`Error: ${err.message}`);
       setLoading(false);
     }
   };
@@ -539,9 +540,9 @@ volumes:
 
   const handleSaveEdit = async () => {
     if (!editingSession) return;
-    if (!image) return setResult('❌ Please enter a Docker Image URI');
+    if (!image) return setResult('Please enter a Docker Image URI');
     const portNum = parseInt(port, 10);
-    if (isNaN(portNum) || portNum <= 0) return setResult('❌ Invalid container port');
+    if (isNaN(portNum) || portNum <= 0) return setResult('Invalid container port');
 
     setLoading(true);
     setResult('');
@@ -593,14 +594,14 @@ volumes:
       
       if (res.jobId) {
         setActiveJobId(res.jobId);
-        setResult(`⚡ Redeployment job created. Polling progress...`);
+        setResult(`Redeployment job created. Polling progress...`);
       } else {
-        setResult(`✅ Go Container redeployed successfully!`);
+        setResult(`Go Container redeployed successfully!`);
         loadSessions();
       }
       setEditingSession(null);
     } catch (err: any) {
-      setResult(`❌ Error: ${err.message}`);
+      setResult(`Error: ${err.message}`);
       setLoading(false);
     }
   };
@@ -622,11 +623,11 @@ volumes:
     setResult('');
     try {
       const res = await api.backupGoVolume(backupVolumeInput);
-      setResult(`✅ ${res.message}`);
+      setResult(`${res.message}`);
       setBackupVolumeInput('');
       loadBackups();
     } catch (err: any) {
-      setResult(`❌ Failed to backup: ${err.message}`);
+      setResult(`Failed to backup: ${err.message}`);
     } finally {
       setBackupLoading(false);
     }
@@ -638,9 +639,9 @@ volumes:
     setResult('');
     try {
       const res = await api.restoreGoVolume(volName);
-      setResult(`✅ ${res.message}`);
+      setResult(`${res.message}`);
     } catch (err: any) {
-      setResult(`❌ Failed to restore: ${err.message}`);
+      setResult(`Failed to restore: ${err.message}`);
     } finally {
       setBackupLoading(false);
     }
@@ -655,20 +656,20 @@ volumes:
       const res = await api.rollbackGoContainer(deploymentId);
       if (res.jobId) {
         setActiveJobId(res.jobId);
-        setResult(`⚡ Rollback job created. Polling progress...`);
+        setResult(`Rollback job created. Polling progress...`);
       } else {
-        setResult(`✅ Rollback completed successfully!`);
+        setResult(`Rollback completed successfully!`);
         loadSessions();
       }
     } catch (err: any) {
-      setResult(`❌ Rollback failed: ${err.message}`);
+      setResult(`Rollback failed: ${err.message}`);
       setLoading(false);
     }
   };
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
-    setResult('✅ Copied to clipboard!');
+    setResult('Copied to clipboard!');
     setTimeout(() => setResult(''), 2000);
   };
 
@@ -682,98 +683,86 @@ volumes:
   }, [activeTab]);
 
   return (
-    <div className="space-y-6 text-sm text-white">
+    <div className="space-y-6 text-[13px] text-foreground">
       {/* Offline Warning Banner */}
       {!daemonOnline && (
-        <div className="glass rounded-xl p-4 border border-red-500/30 bg-red-500/5 flex items-center gap-3 animate-pulse">
-          <span className="text-xl">⚠️</span>
+        <div className="rounded-lg p-4 border border-destructive/30 bg-destructive/10 flex items-center gap-3">
+          <TriangleAlert className="size-4 text-destructive shrink-0" />
           <div>
-            <div className="font-bold text-red-400">Go Container Manager Offline</div>
-            <div className="text-xs text-white/50">The daemon process on port 18080 is unreachable. Ensure the backend Go server is running.</div>
+            <div className="font-semibold text-destructive">Go Container Manager offline</div>
+            <div className="text-xs text-muted-foreground">The daemon process on port 18080 is unreachable. Ensure the backend Go server is running.</div>
           </div>
         </div>
       )}
 
-      <div className="flex flex-col gap-2">
-        <p className="text-white/40">
+      <div className="flex flex-col gap-3">
+        <p className="text-muted-foreground">
           Enterprise Container Panel managed by the Go service daemon on port 18080.
         </p>
 
         {/* Tab switcher */}
-        <div className="flex flex-wrap gap-2 border-b border-white/5 pb-3">
-          <Button
-            onClick={() => setActiveTab('single')}
-            variant="ghost"
-            className={`text-xs font-semibold px-4 py-2 h-auto rounded-lg ${activeTab === 'single' ? 'bg-[#0061FF] text-white' : 'text-white/50 hover:text-white hover:bg-white/[0.04]'}`}
-          >
-            🐋 Single Container
-          </Button>
-          <Button
-            onClick={() => setActiveTab('compose')}
-            variant="ghost"
-            className={`text-xs font-semibold px-4 py-2 h-auto rounded-lg ${activeTab === 'compose' ? 'bg-[#0061FF] text-white' : 'text-white/50 hover:text-white hover:bg-white/[0.04]'}`}
-          >
-            ⚡ Compose Stacks
-          </Button>
-          <Button
-            onClick={() => setActiveTab('backups')}
-            variant="ghost"
-            className={`text-xs font-semibold px-4 py-2 h-auto rounded-lg ${activeTab === 'backups' ? 'bg-[#0061FF] text-white' : 'text-white/50 hover:text-white hover:bg-white/[0.04]'}`}
-          >
-            💾 Volume Backups (R2)
-          </Button>
-          <Button
-            onClick={() => setActiveTab('history')}
-            variant="ghost"
-            className={`text-xs font-semibold px-4 py-2 h-auto rounded-lg ${activeTab === 'history' ? 'bg-[#0061FF] text-white' : 'text-white/50 hover:text-white hover:bg-white/[0.04]'}`}
-          >
-            📜 Deployment History
-          </Button>
+        <div className="flex flex-wrap gap-1 border-b border-border pb-3">
+          {([
+            ['single', Box, 'Single container'],
+            ['compose', Layers, 'Compose stacks'],
+            ['backups', HardDrive, 'Volume backups (R2)'],
+            ['history', History, 'Deployment history'],
+          ] as const).map(([key, Icon, label]) => (
+            <Button
+              key={key}
+              onClick={() => setActiveTab(key)}
+              variant={activeTab === key ? 'secondary' : 'ghost'}
+              size="sm"
+              className={activeTab === key ? 'text-foreground' : ''}
+            >
+              <Icon /> {label}
+            </Button>
+          ))}
         </div>
 
         {/* Status/Result Alert Box */}
         {result && (
-          <div className="glass rounded-xl p-3 border border-[#00E5FF]/30 bg-[#00E5FF]/5 animate-in slide-in-from-top-2 flex justify-between items-center">
-            <pre className="text-xs text-white/80 whitespace-pre-wrap font-mono m-0">{result}</pre>
-            <button onClick={() => setResult('')} className="text-white/40 hover:text-white text-xs px-2">✕</button>
+          <div className="rounded-lg p-3 border border-border bg-secondary/40 animate-in slide-in-from-top-2 flex justify-between items-center gap-2">
+            <pre className="text-xs text-foreground whitespace-pre-wrap font-mono m-0">{result}</pre>
+            <Button onClick={() => setResult('')} variant="ghost" size="icon-xs" aria-label="Dismiss"><X /></Button>
           </div>
         )}
 
         {/* Live Stepper Job Progress */}
         {jobStatus && (
-          <div className="glass rounded-2xl p-5 border border-indigo-500/20 bg-indigo-500/5 space-y-4 animate-in slide-in-from-top-3">
+          <div className="rounded-lg p-4 border border-border bg-card space-y-4 animate-in slide-in-from-top-3">
             <div className="flex justify-between items-center">
-              <span className="font-bold text-indigo-300 text-xs flex items-center gap-1.5">
-                <span className="animate-spin text-sm">🔄</span> Active Deployment Stepper ({jobStatus.id})
+              <span className="font-semibold text-xs flex items-center gap-1.5">
+                <Loader2 className="size-3.5 animate-spin text-primary" /> Active deployment ({jobStatus.id})
               </span>
-              <Badge variant="outline" className={`text-[10px] capitalize ${jobStatus.status === 'error' ? 'bg-red-500/10 text-red-400 border-red-500/20' : 'bg-indigo-500/10 text-indigo-300 border-indigo-500/20'}`}>
+              <Badge variant={jobStatus.status === 'error' ? 'destructive' : 'default'} className="capitalize">
                 {jobStatus.status}
               </Badge>
             </div>
 
             {/* Steps Visualizer */}
-            <div className="grid grid-cols-5 gap-2 text-center text-[10px] uppercase font-bold text-white/40 select-none">
+            <div className="grid grid-cols-5 gap-2 text-center text-[11px] font-medium text-muted-foreground select-none">
               {(['validating', 'pulling', 'starting', 'tunneling', 'completed'] as const).map((step, idx) => {
                 const phases = ['validating', 'pulling', 'starting', 'tunneling', 'completed'];
                 const curIdx = phases.indexOf(jobStatus.phase);
                 const stepIdx = phases.indexOf(step);
 
-                let badgeColor = 'bg-white/5 text-white/30 border-white/5';
-                let stepIndicator = '⚪';
+                let badgeColor = 'bg-secondary text-muted-foreground border-border';
+                let StepIcon = Circle;
                 if (jobStatus.phase === 'failed' && stepIdx === curIdx) {
-                  badgeColor = 'bg-red-500/10 text-red-400 border-red-500/20';
-                  stepIndicator = '❌';
+                  badgeColor = 'bg-destructive/10 text-destructive border-destructive/30';
+                  StepIcon = CircleX;
                 } else if (stepIdx < curIdx || jobStatus.phase === 'completed') {
-                  badgeColor = 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20';
-                  stepIndicator = '✅';
+                  badgeColor = 'bg-primary/10 text-primary border-primary/30';
+                  StepIcon = CircleCheck;
                 } else if (stepIdx === curIdx) {
-                  badgeColor = 'bg-indigo-500/20 text-indigo-300 border-indigo-500/30 animate-pulse';
-                  stepIndicator = '🔵';
+                  badgeColor = 'bg-primary/15 text-primary border-primary/30 animate-pulse';
+                  StepIcon = CircleDot;
                 }
 
                 return (
-                  <div key={step} className={`p-2.5 rounded-xl border flex flex-col items-center gap-1.5 ${badgeColor}`}>
-                    <span>{stepIndicator}</span>
+                  <div key={step} className={`p-2.5 rounded-md border flex flex-col items-center gap-1.5 ${badgeColor}`}>
+                    <StepIcon className="size-4" />
                     <span className="truncate w-full">{step === 'completed' ? 'ready' : step}</span>
                   </div>
                 );
@@ -781,7 +770,7 @@ volumes:
             </div>
 
             {/* Stepper mini-console */}
-            <div className="bg-black/60 border border-white/10 rounded-xl p-3.5 font-mono text-[10.5px] text-emerald-400 h-40 overflow-y-auto space-y-1 scrollbar-thin">
+            <div className="bg-[#0b0c0e] border border-border rounded-md p-3.5 font-mono text-[11px] text-primary h-40 overflow-y-auto space-y-1 scrollbar-thin">
               {jobStatus.logs.map((logLine, idx) => (
                 <div key={idx} className="leading-relaxed">{logLine}</div>
               ))}
@@ -794,95 +783,95 @@ volumes:
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 animate-in fade-in duration-200">
           {/* Left: Deploy Form */}
           <div className="lg:col-span-5 space-y-6">
-            <Card className="glass border border-white/10 rounded-2xl p-5 space-y-4">
+            <Card className="p-5 space-y-4">
               <CardHeader className="p-0">
-                <CardTitle className="text-base font-bold flex items-center gap-2">
-                  <span>🐋</span> Single Container Launch
+                <CardTitle className="text-sm font-semibold tracking-tight flex items-center gap-2">
+                  <Box className="size-4" /> Single container launch
                 </CardTitle>
-                <CardDescription className="text-xs text-white/40">
+                <CardDescription className="text-xs text-muted-foreground">
                   Deploy standalone containers with rich networks, mounts, and limits.
                 </CardDescription>
               </CardHeader>
               <CardContent className="p-0 space-y-3.5">
                 <div>
-                  <label className="text-[10px] text-white/50 font-bold uppercase block mb-1">Docker Image URI</label>
+                  <label className="text-xs font-medium text-muted-foreground block mb-1">Docker image URI</label>
                   <Input
                     type="text"
                     value={image}
                     onChange={(e) => setImage(e.target.value)}
                     placeholder="e.g. nginx:alpine"
-                    className="bg-black/20 border-white/10 focus:border-indigo-500 rounded-lg text-xs"
+                    className="text-xs"
                   />
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="text-[10px] text-white/50 font-bold uppercase block mb-1">Container Port</label>
+                    <label className="text-xs font-medium text-muted-foreground block mb-1">Container port</label>
                     <Input
                       type="number"
                       value={port}
                       onChange={(e) => setPort(e.target.value)}
-                      className="bg-black/20 border-white/10 focus:border-indigo-500 rounded-lg text-xs"
+                      className="text-xs"
                     />
                   </div>
                   <div>
-                    <label className="text-[10px] text-white/50 font-bold uppercase block mb-1">Host Port (Optional)</label>
+                    <label className="text-xs font-medium text-muted-foreground block mb-1">Host port (optional)</label>
                     <Input
                       type="number"
                       value={hostPort}
                       onChange={(e) => setHostPort(e.target.value)}
                       placeholder="Auto-allocated if blank"
-                      className="bg-black/20 border-white/10 focus:border-indigo-500 rounded-lg text-xs"
+                      className="text-xs"
                     />
                   </div>
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="text-[10px] text-white/50 font-bold uppercase block mb-1">Tunnel Mode</label>
+                    <label className="text-xs font-medium text-muted-foreground block mb-1">Tunnel mode</label>
                     <select
                       value={domainMode}
                       onChange={(e) => setDomainMode(e.target.value as 'quick' | 'custom')}
-                      className="w-full h-9 px-3 rounded-lg bg-[#1E2330] border border-white/10 text-[var(--input-text)] text-xs outline-none focus:border-indigo-500"
+                      className="w-full h-8 px-3 rounded-md bg-card border border-input text-xs outline-none focus:border-primary focus:ring-2 focus:ring-primary/25"
                     >
                       <option value="quick">Quick Tunnel</option>
-                      <option value="custom">Custom Subdomain</option>
+                      <option value="custom">Custom subdomain</option>
                     </select>
                   </div>
                   <div>
-                    <label className="text-[10px] text-white/50 font-bold uppercase block mb-1">Instance Name</label>
+                    <label className="text-xs font-medium text-muted-foreground block mb-1">Instance name</label>
                     <Input
                       type="text"
                       value={name}
                       onChange={(e) => setName(e.target.value)}
                       placeholder="custom-app"
-                      className="bg-black/20 border-white/10 focus:border-indigo-500 rounded-lg text-xs"
+                      className="text-xs"
                     />
                   </div>
                 </div>
 
                 {domainMode === 'custom' && (
                   <div className="animate-in fade-in duration-150">
-                    <label className="text-[10px] text-white/50 font-bold uppercase block mb-1">Custom Domain</label>
+                    <label className="text-xs font-medium text-muted-foreground block mb-1">Custom domain</label>
                     <Input
                       type="text"
                       value={customDomain}
                       onChange={(e) => setCustomDomain(e.target.value)}
                       placeholder="sub.domain.com"
-                      className="bg-black/20 border-white/10 focus:border-indigo-500 rounded-lg text-xs"
+                      className="text-xs"
                     />
                   </div>
                 )}
 
                 {/* Advanced Collapsible Section */}
-                <div className="border-t border-white/5 pt-3">
+                <div className="border-t border-border pt-3">
                   <button
                     type="button"
                     onClick={() => setShowAdvanced(!showAdvanced)}
-                    className="flex justify-between items-center w-full text-xs font-bold text-indigo-400 hover:text-indigo-300"
+                    className="flex justify-between items-center w-full text-xs font-medium text-muted-foreground hover:text-foreground"
                   >
-                    <span>⚙️ Advanced Configuration</span>
-                    <span>{showAdvanced ? '▼' : '►'}</span>
+                    <span className="flex items-center gap-1.5"><Settings2 className="size-3.5" /> Advanced configuration</span>
+                    {showAdvanced ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
                   </button>
 
                   {showAdvanced && (
@@ -890,35 +879,35 @@ volumes:
                       {/* Resource limits */}
                       <div className="grid grid-cols-2 gap-3">
                         <div>
-                          <label className="text-[10px] text-white/50 font-bold uppercase block mb-1">Memory Limit (MB)</label>
+                          <label className="text-xs font-medium text-muted-foreground block mb-1">Memory limit (MB)</label>
                           <Input
                             type="number"
                             value={memoryLimit}
                             onChange={(e) => setMemoryLimit(e.target.value)}
                             placeholder="e.g. 512"
-                            className="bg-black/20 border-white/10 focus:border-indigo-500 rounded-lg text-xs"
+                            className="text-xs"
                           />
                         </div>
                         <div>
-                          <label className="text-[10px] text-white/50 font-bold uppercase block mb-1">CPU cores limit</label>
+                          <label className="text-xs font-medium text-muted-foreground block mb-1">CPU cores limit</label>
                           <Input
                             type="number"
                             step="0.1"
                             value={cpuLimit}
                             onChange={(e) => setCpuLimit(e.target.value)}
                             placeholder="e.g. 0.5"
-                            className="bg-black/20 border-white/10 focus:border-indigo-500 rounded-lg text-xs"
+                            className="text-xs"
                           />
                         </div>
                       </div>
 
                       {/* Restart Policy */}
                       <div>
-                        <label className="text-[10px] text-white/50 font-bold uppercase block mb-1">Restart Policy</label>
+                        <label className="text-xs font-medium text-muted-foreground block mb-1">Restart policy</label>
                         <select
                           value={restartPolicy}
                           onChange={(e) => setRestartPolicy(e.target.value)}
-                          className="w-full h-9 px-3 rounded-lg bg-[#1E2330] border border-white/10 text-[var(--input-text)] text-xs outline-none focus:border-indigo-500"
+                          className="w-full h-8 px-3 rounded-md bg-card border border-input text-xs outline-none focus:border-primary focus:ring-2 focus:ring-primary/25"
                         >
                           <option value="no">Do not restart</option>
                           <option value="always">Always restart</option>
@@ -930,30 +919,30 @@ volumes:
                       {/* Command / Args */}
                       <div className="grid grid-cols-2 gap-3">
                         <div>
-                          <label className="text-[10px] text-white/50 font-bold uppercase block mb-1">Command overrides</label>
+                          <label className="text-xs font-medium text-muted-foreground block mb-1">Command overrides</label>
                           <Input
                             type="text"
                             value={commandInput}
                             onChange={(e) => setCommandInput(e.target.value)}
                             placeholder="e.g. sh -c"
-                            className="bg-black/20 border-white/10 focus:border-indigo-500 rounded-lg text-xs"
+                            className="text-xs"
                           />
                         </div>
                         <div>
-                          <label className="text-[10px] text-white/50 font-bold uppercase block mb-1">Args</label>
+                          <label className="text-xs font-medium text-muted-foreground block mb-1">Args</label>
                           <Input
                             type="text"
                             value={argsInput}
                             onChange={(e) => setArgsInput(e.target.value)}
                             placeholder="e.g. run-app"
-                            className="bg-black/20 border-white/10 focus:border-indigo-500 rounded-lg text-xs"
+                            className="text-xs"
                           />
                         </div>
                       </div>
 
                       {/* Multi ports */}
                       <div className="space-y-2">
-                        <label className="text-[10px] text-white/50 font-bold uppercase block">Extra Port Mappings</label>
+                        <label className="text-xs font-medium text-muted-foreground block">Extra port mappings</label>
                         {extraPorts.map((p, idx) => (
                           <div key={idx} className="flex gap-2 items-center">
                             <Input
@@ -965,9 +954,9 @@ volumes:
                                 copy[idx].host = e.target.value;
                                 setExtraPorts(copy);
                               }}
-                              className="bg-black/20 border-white/10 text-xs w-24"
+                              className="text-xs w-24"
                             />
-                            <span>→</span>
+                            <span className="text-muted-foreground">→</span>
                             <Input
                               type="number"
                               placeholder="Container"
@@ -977,7 +966,7 @@ volumes:
                                 copy[idx].container = e.target.value;
                                 setExtraPorts(copy);
                               }}
-                              className="bg-black/20 border-white/10 text-xs w-24"
+                              className="text-xs w-24"
                             />
                             <select
                               value={p.protocol}
@@ -986,7 +975,7 @@ volumes:
                                 copy[idx].protocol = e.target.value as 'tcp' | 'udp';
                                 setExtraPorts(copy);
                               }}
-                              className="bg-[#1E2330] border border-white/10 rounded-lg h-9 px-2 text-xs"
+                              className="bg-card border border-input rounded-md h-8 px-2 text-xs outline-none focus:border-primary"
                             >
                               <option value="tcp">TCP</option>
                               <option value="udp">UDP</option>
@@ -994,9 +983,10 @@ volumes:
                             <Button
                               onClick={() => setExtraPorts(extraPorts.filter((_, i) => i !== idx))}
                               variant="ghost"
-                              className="h-9 px-2 text-red-400 hover:text-red-300"
+                              size="icon-sm"
+                              className="text-destructive hover:text-destructive"
                             >
-                              ✕
+                              <X />
                             </Button>
                           </div>
                         ))}
@@ -1004,15 +994,15 @@ volumes:
                           type="button"
                           onClick={() => setExtraPorts([...extraPorts, { host: '', container: '', protocol: 'tcp' }])}
                           variant="outline"
-                          className="h-8 text-xs border-white/10 text-white/60 hover:text-white bg-white/[0.02] w-full"
+                          size="sm" className="w-full"
                         >
-                          + Add Port Mapping
+                          + Add port mapping
                         </Button>
                       </div>
 
                       {/* Volumes */}
                       <div className="space-y-2">
-                        <label className="text-[10px] text-white/50 font-bold uppercase block">Volume Mounts</label>
+                        <label className="text-xs font-medium text-muted-foreground block">Volume mounts</label>
                         {extraVolumes.map((v, idx) => (
                           <div key={idx} className="flex gap-2 items-center flex-wrap">
                             <Input
@@ -1023,9 +1013,9 @@ volumes:
                                 copy[idx].source = e.target.value;
                                 setExtraVolumes(copy);
                               }}
-                              className="bg-black/20 border-white/10 text-xs flex-1 min-w-[120px]"
+                              className="text-xs flex-1 min-w-[120px]"
                             />
-                            <span>:</span>
+                            <span className="text-muted-foreground">:</span>
                             <Input
                               placeholder="Destination Path"
                               value={v.destination}
@@ -1034,9 +1024,9 @@ volumes:
                                 copy[idx].destination = e.target.value;
                                 setExtraVolumes(copy);
                               }}
-                              className="bg-black/20 border-white/10 text-xs flex-1 min-w-[120px]"
+                              className="text-xs flex-1 min-w-[120px]"
                             />
-                            <label className="flex items-center gap-1.5 text-xs text-white/50">
+                            <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
                               <input
                                 type="checkbox"
                                 checked={v.readOnly}
@@ -1045,16 +1035,17 @@ volumes:
                                   copy[idx].readOnly = e.target.checked;
                                   setExtraVolumes(copy);
                                 }}
-                                className="rounded border-white/15 bg-black/20"
+                                className="rounded border-border accent-primary"
                               />
                               RO
                             </label>
                             <Button
                               onClick={() => setExtraVolumes(extraVolumes.filter((_, i) => i !== idx))}
                               variant="ghost"
-                              className="h-9 px-2 text-red-400 hover:text-red-300"
+                              size="icon-sm"
+                              className="text-destructive hover:text-destructive"
                             >
-                              ✕
+                              <X />
                             </Button>
                           </div>
                         ))}
@@ -1062,34 +1053,34 @@ volumes:
                           type="button"
                           onClick={() => setExtraVolumes([...extraVolumes, { source: '', destination: '', readOnly: false }])}
                           variant="outline"
-                          className="h-8 text-xs border-white/10 text-white/60 hover:text-white bg-white/[0.02] w-full"
+                          size="sm" className="w-full"
                         >
-                          + Add Volume Mount
+                          + Add volume mount
                         </Button>
                       </div>
 
                       {/* Registry login */}
-                      <div className="border-t border-white/5 pt-3 space-y-2">
-                        <label className="text-[10px] text-white/50 font-bold uppercase block">Private Registry Login (Required for private images)</label>
+                      <div className="border-t border-border pt-3 space-y-2">
+                        <label className="text-xs font-medium text-muted-foreground block">Private registry login (required for private images)</label>
                         <div className="grid grid-cols-3 gap-2">
                           <Input
                             placeholder="Server URL"
                             value={registryAuth.server}
                             onChange={(e) => setRegistryAuth({ ...registryAuth, server: e.target.value })}
-                            className="bg-black/20 border-white/10 text-xs col-span-1"
+                            className="text-xs col-span-1"
                           />
                           <Input
                             placeholder="Username"
                             value={registryAuth.username}
                             onChange={(e) => setRegistryAuth({ ...registryAuth, username: e.target.value })}
-                            className="bg-black/20 border-white/10 text-xs col-span-1"
+                            className="text-xs col-span-1"
                           />
                           <Input
                             type="password"
                             placeholder="Password"
                             value={registryAuth.password}
                             onChange={(e) => setRegistryAuth({ ...registryAuth, password: e.target.value })}
-                            className="bg-black/20 border-white/10 text-xs col-span-1"
+                            className="text-xs col-span-1"
                           />
                         </div>
                       </div>
@@ -1099,33 +1090,33 @@ volumes:
 
                 {/* Env block */}
                 <div>
-                  <label className="text-[10px] text-white/50 font-bold uppercase block mb-1">Environment Variables (KEY=VALUE)</label>
+                  <label className="text-xs font-medium text-muted-foreground block mb-1">Environment variables (KEY=VALUE)</label>
                   <textarea
                     value={env}
                     onChange={(e) => setEnv(e.target.value)}
                     placeholder="PORT=80&#10;NODE_ENV=production"
                     rows={3}
-                    className="w-full px-3 py-2 rounded-lg bg-black/20 border border-white/10 text-white text-xs font-mono focus:border-indigo-500 focus:outline-none transition-colors"
+                    className="w-full px-3 py-2 rounded-md bg-card border border-input text-foreground text-xs font-mono outline-none focus:border-primary focus:ring-2 focus:ring-primary/25 transition-colors"
                   />
                 </div>
 
                 <Button
                   onClick={handleDeploy}
                   disabled={loading || !daemonOnline}
-                  className="w-full py-2.5 rounded-lg bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-300 border border-indigo-500/30 font-semibold text-xs transition-all shadow-md"
+                  className="w-full"
                 >
-                  {loading ? '⚡ Deploying...' : 'Deploy Container'}
+                  {loading ? 'Deploying...' : 'Deploy container'}
                 </Button>
               </CardContent>
             </Card>
           </div>
 
           {/* Right: Workload List */}
-          <div className="lg:col-span-7 glass rounded-2xl border border-white/10 overflow-hidden flex flex-col h-full min-h-[500px]">
-            <div className="px-5 py-4 border-b border-white/10 bg-white/5 flex justify-between items-center">
-              <h3 className="font-bold text-white text-sm">Active Single Workloads ({sessions.filter(s => s.type === 'docker-container').length})</h3>
-              <Button onClick={loadSessions} variant="outline" className="h-7 px-2.5 rounded-lg text-xs border-white/10 text-white/60 hover:text-white bg-white/[0.04]">
-                🔄 Reload
+          <div className="lg:col-span-7 rounded-lg border border-border bg-card overflow-hidden flex flex-col h-full min-h-[500px]">
+            <div className="px-4 py-3 border-b border-border bg-secondary/40 flex justify-between items-center">
+              <h3 className="text-sm font-semibold tracking-tight">Active single workloads ({sessions.filter(s => s.type === 'docker-container').length})</h3>
+              <Button onClick={loadSessions} variant="outline" size="sm">
+                <RefreshCw /> Reload
               </Button>
             </div>
 
@@ -1133,42 +1124,42 @@ volumes:
               {sessions.filter(s => s.type === 'docker-container').map((sess) => {
                 const sStats = stats[sess.id]?.[0];
                 return (
-                  <div key={sess.id} className="bg-black/20 rounded-xl p-4 border border-white/5 hover:border-white/10 transition-all group relative">
+                  <div key={sess.id} className="rounded-lg p-4 border border-border bg-card hover:bg-secondary/30 transition-colors group relative">
                     <div className="flex flex-col gap-3">
                       <div className="flex items-start justify-between gap-4">
                         <div className="flex-1 min-w-0 space-y-2">
                           <div className="flex flex-wrap items-center gap-2">
-                            <span className="text-xl">🐋</span>
-                            <span className="text-white font-semibold truncate">
+                            <Box className="size-4 text-muted-foreground shrink-0" />
+                            <span className="font-semibold truncate">
                               {sess.metadata?.containerName || `${sess.id}`}
                             </span>
-                            <Badge className={`text-[10px] capitalize ${sess.metadata?.status === 'running' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-red-500/10 text-red-400 border border-red-500/20'}`}>
+                            <Badge variant={sess.metadata?.status === 'running' ? 'default' : 'destructive'} className="capitalize">
                               {sess.metadata?.status || 'unknown'} {sess.metadata?.exitCode !== undefined && sess.metadata.exitCode !== 0 ? `(Code ${sess.metadata.exitCode})` : ''}
                             </Badge>
                             {sess.metadata?.health && (
-                              <Badge className={`text-[10px] lowercase ${sess.metadata.health === 'healthy' ? 'bg-green-500/10 text-green-400' : 'bg-yellow-500/10 text-yellow-400'}`}>
+                              <Badge variant={sess.metadata.health === 'healthy' ? 'default' : 'secondary'}>
                                 {sess.metadata.health}
                               </Badge>
                             )}
                           </div>
 
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1.5 text-xs text-white/50">
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1.5 text-xs text-muted-foreground">
                             <div>
-                              🖼️ Image: <span className="text-white/80 font-mono text-[11px]">{sess.metadata?.image}</span>
+                              Image: <span className="text-foreground font-mono text-[11px]">{sess.metadata?.image}</span>
                             </div>
                             <div>
-                              ⏱️ Started: <span className="text-white/80">{new Date(sess.startedAt).toLocaleString()}</span>
+                              Started: <span className="text-foreground">{new Date(sess.startedAt).toLocaleString()}</span>
                             </div>
                             <div className="col-span-1 sm:col-span-2">
-                              🔗 Public Tunnel: <a href={sess.metadata?.cloudflaredUrl || sess.url} target="_blank" rel="noopener noreferrer" className="text-[#00E5FF] hover:underline font-mono text-[11px]">
+                              Public tunnel: <a href={sess.metadata?.cloudflaredUrl || sess.url} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline font-mono text-[11px]">
                                 {sess.metadata?.cloudflaredUrl || sess.url}
                               </a>
                             </div>
                             <div>
-                              🔌 Ports: <span className="text-white/80 font-mono">{sess.metadata?.hostPort} → {sess.metadata?.port}</span>
+                              Ports: <span className="text-foreground font-mono">{sess.metadata?.hostPort} → {sess.metadata?.port}</span>
                             </div>
                             <div>
-                              🛡️ Domain Mode: <span className="text-white/80 capitalize">{sess.metadata?.domainMode}</span>
+                              Domain mode: <span className="text-foreground capitalize">{sess.metadata?.domainMode}</span>
                             </div>
                           </div>
                         </div>
@@ -1177,25 +1168,25 @@ volumes:
                         <div className="flex gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
                           <Button
                             onClick={() => { setLogsSession(sess); setLogsService(''); setFollowLogs(true); }}
-                            className="h-7 px-2.5 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/20 text-xs"
+                            variant="outline" size="sm"
                           >
                             Logs
                           </Button>
                           <Button
                             onClick={() => handleInspect(sess.id)}
-                            className="h-7 px-2.5 rounded-lg bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 border border-indigo-500/20 text-xs"
+                            variant="outline" size="sm"
                           >
                             Inspect
                           </Button>
                           <Button
                             onClick={() => startEditing(sess)}
-                            className="h-7 px-2.5 rounded-lg bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border border-blue-500/20 text-xs"
+                            variant="outline" size="sm"
                           >
                             Edit
                           </Button>
                           <Button
                             onClick={() => handleStop(sess.id)}
-                            className="h-7 px-2.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 text-xs"
+                            variant="destructive" size="sm"
                           >
                             Stop
                           </Button>
@@ -1204,12 +1195,12 @@ volumes:
 
                       {/* CPU & Memory Stat bar */}
                       {sStats && (
-                        <div className="grid grid-cols-2 gap-4 border-t border-white/5 pt-2 text-[11px] text-white/40 bg-white/[0.01] p-2 rounded-lg">
+                        <div className="grid grid-cols-2 gap-4 border-t border-border pt-2 text-[11px] text-muted-foreground">
                           <div>
-                            🖥️ CPU: <span className="text-emerald-400 font-bold font-mono">{sStats.CPUPerc}</span>
+                            CPU: <span className="text-foreground font-medium font-mono">{sStats.CPUPerc}</span>
                           </div>
                           <div>
-                            🧠 Memory: <span className="text-indigo-400 font-bold font-mono">{sStats.MemUsage} ({sStats.MemPerc})</span>
+                            Memory: <span className="text-foreground font-medium font-mono">{sStats.MemUsage} ({sStats.MemPerc})</span>
                           </div>
                         </div>
                       )}
@@ -1219,8 +1210,8 @@ volumes:
               })}
 
               {sessions.filter(s => s.type === 'docker-container').length === 0 && (
-                <div className="flex flex-col items-center justify-center h-full text-white/30 space-y-2 py-12">
-                  <span className="text-4xl">📭</span>
+                <div className="flex flex-col items-center justify-center h-full text-muted-foreground space-y-2 py-12">
+                  <Inbox className="size-8" />
                   <p>No active standalone workloads found.</p>
                 </div>
               )}
@@ -1233,32 +1224,32 @@ volumes:
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 animate-in fade-in duration-200">
           {/* YAML Input */}
           <div className="lg:col-span-5 flex flex-col gap-4">
-            <Card className="glass border border-white/10 rounded-2xl p-5 flex flex-col flex-1 min-h-[450px]">
+            <Card className="p-5 flex flex-col flex-1 min-h-[450px]">
               <div className="flex justify-between items-center mb-4">
                 <div className="flex items-center gap-2">
-                  <span className="text-indigo-400">📝</span>
-                  <h3 className="font-bold text-white text-sm m-0">Docker Compose Config</h3>
+                  <ScrollText className="size-4 text-muted-foreground" />
+                  <h3 className="text-sm font-semibold tracking-tight m-0">Docker Compose config</h3>
                 </div>
                 <Button 
                   onClick={handleParseYAML}
                   disabled={isParsing || !daemonOnline}
-                  className="h-8 px-4 rounded-lg bg-[#0061FF] hover:bg-[#004ecb] text-white text-xs font-bold flex items-center gap-1.5"
+                  size="sm"
                 >
-                  {isParsing ? 'Parsing...' : 'Parse Config'}
+                  {isParsing ? 'Parsing...' : 'Parse config'}
                 </Button>
               </div>
 
-              <div className="flex-1 relative rounded-xl border border-white/10 overflow-hidden bg-[#11151F] min-h-[350px]">
+              <div className="flex-1 relative rounded-md border border-border overflow-hidden bg-[#0b0c0e] min-h-[350px]">
                 <textarea
                   value={yamlInput}
                   onChange={(e) => setYamlInput(e.target.value)}
-                  className="w-full h-full p-4 font-mono text-xs bg-transparent border-0 outline-none resize-none text-emerald-400 focus:ring-0"
+                  className="w-full h-full p-4 font-mono text-xs bg-transparent border-0 outline-none resize-none text-primary focus:ring-0"
                 />
               </div>
 
               {parseError && (
-                <div className="mt-3 p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-xs">
-                  ⚠️ {parseError}
+                <div className="mt-3 p-3 rounded-md bg-destructive/10 border border-destructive/30 text-destructive text-xs flex items-start gap-2">
+                  <TriangleAlert className="size-3.5 mt-0.5 shrink-0" /> {parseError}
                 </div>
               )}
             </Card>
@@ -1267,65 +1258,65 @@ volumes:
           {/* Visual Setup & Active compose stacks */}
           <div className="lg:col-span-7 flex flex-col gap-6">
             {parsedCompose ? (
-              <Card className="glass border border-white/10 rounded-2xl p-5 space-y-4 animate-in slide-in-from-right-3">
+              <Card className="p-5 space-y-4 animate-in slide-in-from-right-3">
                 <div className="flex justify-between items-center">
-                  <h3 className="font-bold text-white text-sm m-0 flex items-center gap-2">
-                    <span>⚡</span> Configured Stack Services
+                  <h3 className="text-sm font-semibold tracking-tight m-0 flex items-center gap-2">
+                    <Layers className="size-4" /> Configured stack services
                   </h3>
-                  <Badge variant="outline" className="text-[10px] bg-indigo-500/10 text-indigo-300">
+                  <Badge variant="secondary">
                     YAML Version: {parsedCompose.version}
                   </Badge>
                 </div>
 
                 <div className="space-y-3.5 max-h-[350px] overflow-y-auto pr-1 scrollbar-thin">
                   {Object.entries(parsedCompose.services).map(([sName, svc]) => (
-                    <div key={sName} className="p-3.5 rounded-xl border border-white/5 bg-black/20 space-y-3">
+                    <div key={sName} className="p-3.5 rounded-lg border border-border bg-secondary/30 space-y-3">
                       <div className="flex justify-between items-start">
                         <div>
-                          <h4 className="text-xs font-bold text-indigo-300 m-0">{sName}</h4>
-                          <span className="text-[10px] text-white/40 block mt-0.5">{svc.image}</span>
+                          <h4 className="text-xs font-semibold m-0">{sName}</h4>
+                          <span className="text-[11px] text-muted-foreground font-mono block mt-0.5">{svc.image}</span>
                         </div>
                       </div>
 
                       <div className="grid grid-cols-2 gap-3">
                         <div>
-                          <label className="text-[10px] text-white/50 font-bold uppercase block mb-1">Tunnel Routing</label>
+                          <label className="text-xs font-medium text-muted-foreground block mb-1">Tunnel routing</label>
                           <select
                             value={serviceSettings[sName]?.domainMode || 'none'}
                             onChange={(e) => handleServiceSettingChange(sName, 'domainMode', e.target.value)}
-                            className="w-full h-9 px-2.5 rounded-lg bg-[#1E2330] border border-white/10 text-[var(--input-text)] text-xs outline-none"
+                            className="w-full h-8 px-3 rounded-md bg-card border border-input text-xs outline-none focus:border-primary focus:ring-2 focus:ring-primary/25"
                           >
-                            <option value="none">No External Tunnel</option>
+                            <option value="none">No external tunnel</option>
                             <option value="quick">Quick Tunnel</option>
-                            <option value="custom">Custom Subdomain</option>
+                            <option value="custom">Custom subdomain</option>
                           </select>
                         </div>
                         {serviceSettings[sName]?.domainMode === 'custom' && (
                           <div className="animate-in fade-in">
-                            <label className="text-[10px] text-white/50 font-bold uppercase block mb-1">Custom Domain</label>
+                            <label className="text-xs font-medium text-muted-foreground block mb-1">Custom domain</label>
                             <Input
                               type="text"
                               placeholder="app.mydomain.com"
                               value={serviceSettings[sName]?.customDomain || ''}
                               onChange={(e) => handleServiceSettingChange(sName, 'customDomain', e.target.value)}
-                              className="bg-black/20 border-white/10 text-xs"
+                              className="text-xs"
                             />
                           </div>
                         )}
                       </div>
 
                       {Object.keys(svc.environment).length > 0 && (
-                        <div className="space-y-1.5 border-t border-white/5 pt-2">
-                          <label className="text-[10px] text-white/50 font-bold uppercase block">Environment Overrides</label>
+                        <div className="space-y-1.5 border-t border-border pt-2">
+                          <label className="text-xs font-medium text-muted-foreground block">Environment overrides</label>
                           <div className="grid grid-cols-1 gap-1.5">
                             {Object.entries(svc.environment).map(([k]) => (
                               <div key={k} className="flex gap-2 items-center text-xs">
-                                <span className="text-[10px] font-mono text-white/40 truncate w-24 shrink-0">{k}</span>
+                                <span className="text-[11px] font-mono text-muted-foreground truncate w-24 shrink-0">{k}</span>
                                 <input
                                   type="text"
                                   value={serviceSettings[sName]?.env[k] || ''}
                                   onChange={(e) => handleServiceEnvChange(sName, k, e.target.value)}
-                                  className="flex-1 bg-black/20 border border-white/10 rounded-lg py-1 px-2 text-xs focus:outline-none focus:border-indigo-500 text-white"
+                                  className="flex-1 bg-card border border-input rounded-md h-7 px-2 text-xs font-mono text-foreground outline-none focus:border-primary"
                                 />
                               </div>
                             ))}
@@ -1340,35 +1331,35 @@ volumes:
                   <Button
                     onClick={() => setParsedCompose(null)}
                     variant="outline"
-                    className="flex-1 py-2 text-xs border-white/10 text-white/60 hover:text-white"
+                    className="flex-1"
                   >
-                    Clear Setup
+                    Clear setup
                   </Button>
                   <Button
                     onClick={handleDeployCompose}
                     disabled={loading || !daemonOnline}
-                    className="flex-[2] py-2 rounded-xl bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-300 border border-indigo-500/30 font-bold text-xs"
+                    className="flex-[2]"
                   >
-                    🚀 Deploy Stack Setup
+                    <Rocket /> Deploy stack setup
                   </Button>
                 </div>
               </Card>
             ) : null}
 
             {/* Active Compose Stacks */}
-            <div className="glass rounded-2xl border border-white/10 overflow-hidden flex flex-col flex-1">
-              <div className="px-5 py-4 border-b border-white/10 bg-white/5">
-                <h3 className="font-bold text-white text-sm m-0">Active Compose Systems ({sessions.filter(s => s.type === 'docker-compose').length})</h3>
+            <div className="rounded-lg border border-border bg-card overflow-hidden flex flex-col flex-1">
+              <div className="px-4 py-3 border-b border-border bg-secondary/40">
+                <h3 className="text-sm font-semibold tracking-tight m-0">Active compose systems ({sessions.filter(s => s.type === 'docker-compose').length})</h3>
               </div>
 
               <div className="p-5 space-y-4 max-h-[50vh] overflow-y-auto scrollbar-thin">
                 {sessions.filter(s => s.type === 'docker-compose').map((stack) => (
-                  <div key={stack.id} className="bg-black/20 rounded-xl p-4 border border-white/5 hover:border-white/10 transition-all space-y-3">
+                  <div key={stack.id} className="rounded-lg p-4 border border-border bg-card space-y-3">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
-                        <span className="text-xl">⚡</span>
-                        <span className="font-bold text-white">{stack.id}</span>
-                        <Badge className="bg-blue-500/10 text-blue-400 border border-blue-500/20 text-[10px]">STACK</Badge>
+                        <Layers className="size-4 text-muted-foreground" />
+                        <span className="font-semibold">{stack.id}</span>
+                        <Badge variant="secondary">Stack</Badge>
                       </div>
                       <div className="flex gap-2">
                         <Button
@@ -1381,15 +1372,15 @@ volumes:
                             setActiveTab('compose');
                             setResult(`Loaded Compose config for redeployment: ${stack.id}`);
                           }}
-                          className="h-7 px-2.5 rounded-lg bg-blue-500/15 hover:bg-blue-500/25 text-blue-400 border border-blue-500/20 text-xs"
+                          variant="outline" size="sm"
                         >
-                          Redeploy Stack
+                          Redeploy stack
                         </Button>
                         <Button
                           onClick={() => handleStop(stack.id)}
-                          className="h-7 px-2.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 text-xs"
+                          variant="destructive" size="sm"
                         >
-                          Down Stack
+                          Down stack
                         </Button>
                       </div>
                     </div>
@@ -1399,24 +1390,24 @@ volumes:
                       {stack.metadata?.services && Object.entries(stack.metadata.services).map(([svcName, svc]) => {
                         const sStats = stats[stack.id]?.find((st: any) => st.Name?.includes(`-${svcName}-`));
                         return (
-                          <div key={svcName} className="bg-black/40 border border-white/5 p-3 rounded-lg flex flex-col gap-2 relative group/item">
+                          <div key={svcName} className="bg-secondary/30 border border-border p-3 rounded-md flex flex-col gap-2 relative group/item">
                             <div className="flex justify-between items-start gap-1">
                               <div>
-                                <h4 className="text-xs font-semibold text-white">{svcName}</h4>
-                                <Badge className={`text-[9px] uppercase mt-1 ${svc.status === 'running' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'}`}>
+                                <h4 className="text-xs font-semibold">{svcName}</h4>
+                                <Badge variant={svc.status === 'running' ? 'default' : 'destructive'} className="mt-1 capitalize">
                                   {svc.status || 'unknown'}
                                 </Badge>
                               </div>
                               <div className="flex gap-1 opacity-0 group-hover/item:opacity-100 transition-opacity">
                                 <Button
                                   onClick={() => { setLogsSession(stack); setLogsService(svcName); setFollowLogs(true); }}
-                                  className="h-6 px-1.5 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/20 text-[9px]"
+                                  variant="outline" size="xs"
                                 >
                                   Logs
                                 </Button>
                                 <Button
                                   onClick={() => handleInspect(stack.id, svcName)}
-                                  className="h-6 px-1.5 rounded-lg bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 border border-indigo-500/20 text-[9px]"
+                                  variant="outline" size="xs"
                                 >
                                   Inspect
                                 </Button>
@@ -1424,15 +1415,15 @@ volumes:
                             </div>
 
                             {svc.cloudflaredUrl && (
-                              <a href={svc.cloudflaredUrl} target="_blank" rel="noopener noreferrer" className="text-[10px] text-[#00E5FF] hover:underline truncate font-mono">
-                                🔗 {svc.cloudflaredUrl}
+                              <a href={svc.cloudflaredUrl} target="_blank" rel="noopener noreferrer" className="text-[10px] text-primary hover:underline truncate font-mono">
+                                {svc.cloudflaredUrl}
                               </a>
                             )}
 
                             {sStats && (
-                              <div className="grid grid-cols-2 gap-2 text-[9.5px] text-white/30 border-t border-white/5 pt-1.5 font-mono">
-                                <div>🖥️ CPU: <span className="text-emerald-400">{sStats.CPUPerc}</span></div>
-                                <div>🧠 MEM: <span className="text-indigo-400">{sStats.MemUsage}</span></div>
+                              <div className="grid grid-cols-2 gap-2 text-[11px] text-muted-foreground border-t border-border pt-1.5 font-mono">
+                                <div>CPU: <span className="text-foreground">{sStats.CPUPerc}</span></div>
+                                <div>Memory: <span className="text-foreground">{sStats.MemUsage}</span></div>
                               </div>
                             )}
                           </div>
@@ -1443,8 +1434,8 @@ volumes:
                 ))}
 
                 {sessions.filter(s => s.type === 'docker-compose').length === 0 && (
-                  <div className="flex flex-col items-center justify-center h-full text-white/30 space-y-2 py-12">
-                    <span className="text-4xl">📭</span>
+                  <div className="flex flex-col items-center justify-center h-full text-muted-foreground space-y-2 py-12">
+                    <Inbox className="size-8" />
                     <p>No active Compose configurations deployed.</p>
                   </div>
                 )}
@@ -1458,61 +1449,61 @@ volumes:
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 animate-in fade-in duration-200">
           {/* Perform Backup Form */}
           <div className="lg:col-span-5 space-y-6">
-            <Card className="glass border border-white/10 rounded-2xl p-5 space-y-4">
+            <Card className="p-5 space-y-4">
               <CardHeader className="p-0">
-                <CardTitle className="text-base font-bold flex items-center gap-2">
-                  <span>💾</span> Trigger Docker Volume Backup
+                <CardTitle className="text-sm font-semibold tracking-tight flex items-center gap-2">
+                  <HardDrive className="size-4" /> Trigger Docker volume backup
                 </CardTitle>
-                <CardDescription className="text-xs text-white/40">
+                <CardDescription className="text-xs text-muted-foreground">
                   Runs a lightweight Alpine helper container to tar and stream your target volume contents directly to Cloudflare R2 storage.
                 </CardDescription>
               </CardHeader>
               <CardContent className="p-0 space-y-4">
                 <div>
-                  <label className="text-[10px] text-white/50 font-bold uppercase block mb-1">Volume Name / Mount Source</label>
+                  <label className="text-xs font-medium text-muted-foreground block mb-1">Volume name / mount source</label>
                   <Input
                     type="text"
                     value={backupVolumeInput}
                     onChange={(e) => setBackupVolumeInput(e.target.value)}
                     placeholder="e.g. redis_data, web_html"
-                    className="bg-black/20 border-white/10 focus:border-indigo-500 rounded-lg text-xs"
+                    className="text-xs"
                   />
                 </div>
                 <Button
                   onClick={handleBackupVolume}
                   disabled={backupLoading || !backupVolumeInput || !daemonOnline}
-                  className="w-full py-2.5 rounded-lg bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-300 border border-indigo-500/30 font-semibold text-xs tracking-wider"
+                  className="w-full"
                 >
-                  {backupLoading ? '💾 Archiving & Uploading...' : 'Backup Volume to R2'}
+                  {backupLoading ? 'Archiving and uploading...' : 'Backup volume to R2'}
                 </Button>
               </CardContent>
             </Card>
           </div>
 
           {/* List of backups on R2 */}
-          <div className="lg:col-span-7 glass rounded-2xl border border-white/10 overflow-hidden flex flex-col h-full min-h-[400px]">
-            <div className="px-5 py-4 border-b border-white/10 bg-white/5 flex justify-between items-center">
-              <h3 className="font-bold text-white text-sm">Stored Cloudflare R2 Backups ({volumeBackups.length})</h3>
-              <Button onClick={loadBackups} variant="outline" className="h-7 px-2.5 rounded-lg text-xs border-white/10 text-white/60 hover:text-white bg-white/[0.04]">
-                🔄 Refresh R2
+          <div className="lg:col-span-7 rounded-lg border border-border bg-card overflow-hidden flex flex-col h-full min-h-[400px]">
+            <div className="px-4 py-3 border-b border-border bg-secondary/40 flex justify-between items-center">
+              <h3 className="text-sm font-semibold tracking-tight">Stored Cloudflare R2 backups ({volumeBackups.length})</h3>
+              <Button onClick={loadBackups} variant="outline" size="sm">
+                <RefreshCw /> Refresh
               </Button>
             </div>
 
             <div className="p-5 flex-1 overflow-y-auto space-y-3.5 scrollbar-thin">
               {volumeBackups.map((vol) => (
-                <div key={vol} className="bg-black/20 rounded-xl p-3.5 border border-white/5 flex items-center justify-between gap-4">
+                <div key={vol} className="rounded-lg p-3.5 border border-border bg-card flex items-center justify-between gap-4">
                   <div className="flex items-center gap-2.5">
-                    <span className="text-xl">📦</span>
+                    <HardDrive className="size-4 text-muted-foreground" />
                     <div>
-                      <div className="font-bold text-white text-xs font-mono">{vol}</div>
-                      <div className="text-[10px] text-white/40 mt-0.5">CF-R2 Cloud Backup File: volumes/{vol}.tar.gz</div>
+                      <div className="font-medium text-xs font-mono">{vol}</div>
+                      <div className="text-[11px] text-muted-foreground mt-0.5">R2 backup file: volumes/{vol}.tar.gz</div>
                     </div>
                   </div>
 
                   <Button
                     onClick={() => handleRestoreVolume(vol)}
                     disabled={backupLoading || !daemonOnline}
-                    className="h-7 px-3.5 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/20 text-xs transition-colors"
+                    variant="outline" size="sm"
                   >
                     Restore
                   </Button>
@@ -1520,8 +1511,8 @@ volumes:
               ))}
 
               {volumeBackups.length === 0 && (
-                <div className="flex flex-col items-center justify-center h-full text-white/30 space-y-2 py-12">
-                  <span className="text-4xl">📂</span>
+                <div className="flex flex-col items-center justify-center h-full text-muted-foreground space-y-2 py-12">
+                  <FolderOpen className="size-8" />
                   <p>No volume backup archives found in Cloudflare R2.</p>
                 </div>
               )}
@@ -1531,11 +1522,11 @@ volumes:
       )}
 
       {activeTab === 'history' && (
-        <div className="glass rounded-2xl border border-white/10 overflow-hidden flex flex-col h-full min-h-[500px] animate-in fade-in duration-200">
-          <div className="px-5 py-4 border-b border-white/10 bg-white/5 flex justify-between items-center">
-            <h3 className="font-bold text-white text-sm">Deployment rollback history</h3>
-            <Button onClick={loadHistory} variant="outline" className="h-7 px-2.5 rounded-lg text-xs border-white/10 text-white/60 hover:text-white bg-white/[0.04]">
-              🔄 Refresh
+        <div className="rounded-lg border border-border bg-card overflow-hidden flex flex-col h-full min-h-[500px] animate-in fade-in duration-200">
+          <div className="px-4 py-3 border-b border-border bg-secondary/40 flex justify-between items-center">
+            <h3 className="text-sm font-semibold tracking-tight">Deployment rollback history</h3>
+            <Button onClick={loadHistory} variant="outline" size="sm">
+              <RefreshCw /> Refresh
             </Button>
           </div>
 
@@ -1545,8 +1536,8 @@ volumes:
             ))}
 
             {deployments.length === 0 && (
-              <div className="flex flex-col items-center justify-center h-full text-white/30 space-y-2 py-12">
-                <span className="text-4xl">📜</span>
+              <div className="flex flex-col items-center justify-center h-full text-muted-foreground space-y-2 py-12">
+                <ScrollText className="size-8" />
                 <p>No deployment logs or history recorded yet.</p>
               </div>
             )}
@@ -1556,42 +1547,42 @@ volumes:
 
       {/* MODAL: Realtime log stream */}
       {logsSession && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-150">
-          <div className="w-full max-w-3xl glass rounded-2xl border border-white/10 bg-[#0d1117] shadow-2xl flex flex-col h-[75vh]">
-            <div className="p-4 border-b border-white/10 flex justify-between items-center bg-white/5">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 animate-in fade-in duration-150">
+          <div className="w-full max-w-3xl rounded-lg border border-border bg-card shadow-xl flex flex-col h-[75vh]">
+            <div className="px-4 py-3 border-b border-border flex justify-between items-center bg-secondary/40">
               <div>
-                <h3 className="font-bold text-white text-sm flex items-center gap-2">
-                  <span>📜</span> Log Streaming: {logsSession.id}
+                <h3 className="text-sm font-semibold tracking-tight flex items-center gap-2">
+                  <ScrollText className="size-4" /> Log streaming: <span className="font-mono">{logsSession.id}</span>
                 </h3>
-                {logsService && <span className="text-[10px] text-indigo-400 font-bold block mt-0.5">Service: {logsService}</span>}
+                {logsService && <span className="text-xs text-muted-foreground block mt-0.5">Service: {logsService}</span>}
               </div>
               <div className="flex items-center gap-3">
-                <label className="flex items-center gap-1.5 text-xs text-white/60 cursor-pointer select-none">
+                <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer select-none">
                   <input
                     type="checkbox"
                     checked={followLogs}
                     onChange={(e) => setFollowLogs(e.target.checked)}
-                    className="rounded border-white/10 text-indigo-500 bg-black/20 focus:ring-0"
+                    className="rounded border-border accent-primary"
                   />
-                  Follow Logs
+                  Follow logs
                 </label>
-                <button onClick={() => setLogsSession(null)} className="text-white/40 hover:text-white p-1">✕</button>
+                <Button onClick={() => setLogsSession(null)} variant="ghost" size="icon-xs" aria-label="Close"><X /></Button>
               </div>
             </div>
             
-            <div className="flex-1 bg-black/50 p-4 font-mono text-[11px] text-emerald-400 overflow-y-auto space-y-1.5 scrollbar-thin">
+            <div className="flex-1 bg-[#0b0c0e] p-4 font-mono text-[11px] text-primary overflow-y-auto space-y-1.5 scrollbar-thin">
               {logsLines.map((line, idx) => (
-                <div key={idx} className="whitespace-pre-wrap leading-relaxed border-l-2 border-emerald-500/20 pl-2 hover:bg-white/[0.02]">
+                <div key={idx} className="whitespace-pre-wrap leading-relaxed border-l-2 border-primary/30 pl-2 hover:bg-secondary/20">
                   {line}
                 </div>
               ))}
               <div ref={logEndRef} />
             </div>
 
-            <div className="p-3.5 border-t border-white/10 flex justify-between items-center bg-white/5 text-xs text-white/40">
+            <div className="px-4 py-3 border-t border-border flex justify-between items-center bg-secondary/40 text-xs text-muted-foreground">
               <span>Showing up to last 500 lines of output.</span>
-              <Button onClick={() => setLogsLines([])} variant="outline" className="h-7 text-xs border-white/10 hover:text-white bg-white/[0.02]">
-                Clear View
+              <Button onClick={() => setLogsLines([])} variant="outline" size="sm">
+                Clear view
               </Button>
             </div>
           </div>
@@ -1600,23 +1591,23 @@ volumes:
 
       {/* MODAL: Inspect details */}
       {inspectData && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-150">
-          <div className="w-full max-w-2xl glass rounded-2xl border border-white/10 bg-[#0d1117] shadow-2xl flex flex-col h-[70vh]">
-            <div className="p-4 border-b border-white/10 flex justify-between items-center bg-white/5">
-              <h3 className="font-bold text-white text-sm flex items-center gap-2">
-                <span>🔍</span> {inspectTitle}
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 animate-in fade-in duration-150">
+          <div className="w-full max-w-2xl rounded-lg border border-border bg-card shadow-xl flex flex-col h-[70vh]">
+            <div className="px-4 py-3 border-b border-border flex justify-between items-center bg-secondary/40">
+              <h3 className="text-sm font-semibold tracking-tight flex items-center gap-2">
+                <Search className="size-4" /> {inspectTitle}
               </h3>
-              <button onClick={() => setInspectData(null)} className="text-white/40 hover:text-white p-1">✕</button>
+              <Button onClick={() => setInspectData(null)} variant="ghost" size="icon-xs" aria-label="Close"><X /></Button>
             </div>
 
-            <div className="flex-1 bg-black/40 p-4 overflow-y-auto scrollbar-thin">
-              <pre className="font-mono text-emerald-400 text-xs whitespace-pre-wrap m-0 leading-relaxed">
+            <div className="flex-1 bg-[#0b0c0e] p-4 overflow-y-auto scrollbar-thin">
+              <pre className="font-mono text-primary text-xs whitespace-pre-wrap m-0 leading-relaxed">
                 {JSON.stringify(inspectData, null, 2)}
               </pre>
             </div>
 
-            <div className="p-3.5 border-t border-white/10 flex justify-end bg-white/5">
-              <Button onClick={() => setInspectData(null)} className="h-8 rounded-lg text-xs bg-indigo-500/20 text-indigo-400 hover:bg-indigo-500/30 border border-indigo-500/30 font-medium">
+            <div className="px-4 py-3 border-t border-border flex justify-end bg-secondary/40">
+              <Button onClick={() => setInspectData(null)} size="sm">
                 Close
               </Button>
             </div>
@@ -1632,19 +1623,19 @@ function DeploymentRow({ dep, onRollback, daemonOnline }: { dep: DeploymentRecor
   const [logsExpanded, setLogsExpanded] = useState(false);
 
   return (
-    <div className="bg-black/25 rounded-xl border border-white/5 p-4 space-y-3.5 hover:border-white/10 transition-all">
+    <div className="rounded-lg border border-border bg-card p-4 space-y-3.5">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-center gap-3">
-          <span className="text-lg">{dep.type === 'docker-compose' ? '⚡' : '🐋'}</span>
+          {dep.type === 'docker-compose' ? <Layers className="size-4 text-muted-foreground" /> : <Box className="size-4 text-muted-foreground" />}
           <div>
             <div className="flex items-center gap-2">
-              <span className="font-bold text-white text-xs font-mono truncate max-w-[150px] sm:max-w-xs">{dep.sessionId}</span>
-              <Badge className={`text-[9px] uppercase ${dep.status === 'success' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'}`}>
+              <span className="font-medium text-xs font-mono truncate max-w-[150px] sm:max-w-xs">{dep.sessionId}</span>
+              <Badge variant={dep.status === 'success' ? 'default' : 'destructive'} className="capitalize">
                 {dep.status}
               </Badge>
             </div>
-            <div className="text-[10px] text-white/40 mt-1">
-              📅 {new Date(dep.timestamp).toLocaleString()} | ID: <span className="font-mono">{dep.id}</span>
+            <div className="text-[11px] text-muted-foreground mt-1">
+              {new Date(dep.timestamp).toLocaleString()} | ID: <span className="font-mono">{dep.id}</span>
             </div>
           </div>
         </div>
@@ -1653,24 +1644,24 @@ function DeploymentRow({ dep, onRollback, daemonOnline }: { dep: DeploymentRecor
           <Button
             onClick={() => setExpanded(!expanded)}
             variant="outline"
-            className="h-7 text-xs border-white/10 hover:text-white bg-white/[0.02]"
+            size="sm"
           >
-            {expanded ? 'Hide Config' : 'View Config'}
+            {expanded ? 'Hide config' : 'View config'}
           </Button>
           {dep.logs && dep.logs.length > 0 && (
             <Button
               onClick={() => setLogsExpanded(!logsExpanded)}
               variant="outline"
-              className="h-7 text-xs border-white/10 hover:text-white bg-white/[0.02]"
+              size="sm"
             >
-              {logsExpanded ? 'Hide Logs' : 'View Logs'}
+              {logsExpanded ? 'Hide logs' : 'View logs'}
             </Button>
           )}
           {dep.status === 'success' && (
             <Button
               onClick={() => onRollback(dep.id)}
               disabled={!daemonOnline}
-              className="h-7 bg-indigo-500/15 hover:bg-indigo-500/25 text-indigo-400 border border-indigo-500/20 text-xs"
+              variant="outline" size="sm"
             >
               Rollback
             </Button>
@@ -1679,9 +1670,9 @@ function DeploymentRow({ dep, onRollback, daemonOnline }: { dep: DeploymentRecor
       </div>
 
       {expanded && (
-        <div className="p-3.5 rounded-lg bg-black/40 border border-white/5 animate-in slide-in-from-top-1">
-          <div className="text-[10px] text-white/40 font-bold uppercase mb-2">Deploy Configuration Options</div>
-          <pre className="font-mono text-[10.5px] text-indigo-300 whitespace-pre-wrap m-0 leading-relaxed overflow-x-auto max-h-60 scrollbar-thin">
+        <div className="p-3.5 rounded-md bg-[#0b0c0e] border border-border animate-in slide-in-from-top-1">
+          <div className="text-xs font-medium text-muted-foreground mb-2">Deploy configuration options</div>
+          <pre className="font-mono text-[11px] text-foreground whitespace-pre-wrap m-0 leading-relaxed overflow-x-auto max-h-60 scrollbar-thin">
             {dep.type === 'docker-compose'
               ? `YAML:\n${dep.config?.yaml || 'None'}\n\nService Settings:\n${JSON.stringify(dep.config?.serviceSettings || {}, null, 2)}`
               : JSON.stringify(dep.config || {}, null, 2)}
@@ -1690,9 +1681,9 @@ function DeploymentRow({ dep, onRollback, daemonOnline }: { dep: DeploymentRecor
       )}
 
       {logsExpanded && dep.logs && (
-        <div className="p-3.5 rounded-lg bg-black/40 border border-white/5 animate-in slide-in-from-top-1">
-          <div className="text-[10px] text-white/40 font-bold uppercase mb-2">Job Deployment Terminal Logs</div>
-          <div className="font-mono text-[10.5px] text-emerald-400 space-y-1 max-h-48 overflow-y-auto pr-1 scrollbar-thin">
+        <div className="p-3.5 rounded-md bg-[#0b0c0e] border border-border animate-in slide-in-from-top-1">
+          <div className="text-xs font-medium text-muted-foreground mb-2">Job deployment terminal logs</div>
+          <div className="font-mono text-[11px] text-primary space-y-1 max-h-48 overflow-y-auto pr-1 scrollbar-thin">
             {dep.logs.map((logLine, idx) => (
               <div key={idx} className="leading-relaxed">{logLine}</div>
             ))}

@@ -3,6 +3,7 @@ import { api, BrowserPoolPayload, WorkerExecResponse } from '../api';
 import { Button } from '@/components/ui/button';
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { Terminal, Play, Copy, AlertCircle, Plus } from 'lucide-react';
 
 const PRESETS = {
   node: [
@@ -117,41 +118,41 @@ export default function CodeExecPanel() {
   const activeWorkers = (pool?.browsers ?? []).filter(b => b.status === 'active');
 
   return (
-    <div className="space-y-4 text-sm font-mono">
+    <div className="space-y-4 text-sm">
       {/* Header Banner */}
-      <Card className="border border-border bg-card p-4">
+      <Card className="p-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 border border-border bg-secondary flex items-center justify-center text-lg">
-              💻
+            <div className="size-8 rounded-md border border-border bg-secondary flex items-center justify-center text-muted-foreground">
+              <Terminal className="size-4" />
             </div>
             <div>
-              <CardTitle className="text-xs uppercase tracking-wider text-foreground">Worker Code Execution Runner</CardTitle>
+              <CardTitle className="text-sm font-semibold tracking-tight text-foreground">Code execution</CardTitle>
               <CardDescription className="text-xs text-muted-foreground mt-0.5">
                 Run Node.js, Python, or Shell snippets on remote worker containers.
               </CardDescription>
             </div>
           </div>
-          <Badge variant="outline" className="self-start sm:self-center text-[10px]">
-            [RUNNERS: {activeWorkers.length}]
+          <Badge variant="outline" className="self-start sm:self-center">
+            {activeWorkers.length} runners
           </Badge>
         </div>
       </Card>
 
       {/* Control Panel Settings */}
-      <Card className="border border-border bg-card p-4 space-y-4">
+      <Card className="p-4 gap-4">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           {/* Target Worker Selector */}
           <div>
-            <label className="block text-[10px] uppercase font-bold tracking-wider text-muted-foreground mb-1">
-              Target Instance
+            <label className="block text-xs font-medium text-muted-foreground mb-1.5">
+              Target instance
             </label>
             <select
               value={selectedWorker}
               onChange={(e) => setSelectedWorker(e.target.value)}
-              className="w-full border border-border bg-secondary px-2.5 py-1.5 text-xs text-foreground outline-none"
+              className="h-8 w-full rounded-md border border-input bg-card px-2.5 text-sm text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/25"
             >
-              <option value="">⚡ Auto (Round-Robin Worker)</option>
+              <option value="">Auto (round-robin worker)</option>
               {activeWorkers.map((w) => (
                 <option key={w.workerId} value={w.workerId}>
                   {w.workerId} ({w.secondsSinceHeartbeat}s ago)
@@ -162,21 +163,21 @@ export default function CodeExecPanel() {
 
           {/* Language Selector */}
           <div>
-            <label className="block text-[10px] uppercase font-bold tracking-wider text-muted-foreground mb-1">
-              Runtime Language
+            <label className="block text-xs font-medium text-muted-foreground mb-1.5">
+              Runtime language
             </label>
-            <div className="grid grid-cols-3 gap-1 bg-secondary p-0.5 border border-border">
+            <div className="grid grid-cols-3 gap-0.5 rounded-md border border-border bg-secondary/40 p-0.5 h-8">
               {(['node', 'python', 'shell'] as const).map((l) => (
                 <button
                   key={l}
                   onClick={() => handleLangChange(l)}
-                  className={`py-1 text-xs font-mono font-bold uppercase transition-all ${
+                  className={`rounded text-xs font-medium transition-colors ${
                     lang === l
-                      ? 'bg-foreground text-background'
+                      ? 'bg-primary/10 text-primary'
                       : 'text-muted-foreground hover:text-foreground'
                   }`}
                 >
-                  {l}
+                  {l === 'node' ? 'Node' : l === 'python' ? 'Python' : 'Shell'}
                 </button>
               ))}
             </div>
@@ -184,51 +185,51 @@ export default function CodeExecPanel() {
 
           {/* Execution Timeout */}
           <div>
-            <label className="block text-[10px] uppercase font-bold tracking-wider text-muted-foreground mb-1">
+            <label className="block text-xs font-medium text-muted-foreground mb-1.5">
               Timeout
             </label>
             <select
               value={timeout}
               onChange={(e) => setTimeoutSec(Number(e.target.value))}
-              className="w-full border border-border bg-secondary px-2.5 py-1.5 text-xs text-foreground outline-none"
+              className="h-8 w-full rounded-md border border-input bg-card px-2.5 text-sm text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/25"
             >
-              <option value={10}>10 Seconds</option>
-              <option value={30}>30 Seconds (Default)</option>
-              <option value={60}>60 Seconds</option>
-              <option value={120}>120 Seconds</option>
+              <option value={10}>10 seconds</option>
+              <option value={30}>30 seconds (default)</option>
+              <option value={60}>60 seconds</option>
+              <option value={120}>120 seconds</option>
             </select>
           </div>
         </div>
 
         {/* Preset Snippets */}
         <div>
-          <span className="text-[10px] uppercase font-bold tracking-wider text-muted-foreground mr-2">
-            Presets:
+          <span className="text-xs font-medium text-muted-foreground mr-2">
+            Presets
           </span>
-          <div className="inline-flex flex-wrap gap-1 mt-1">
+          <div className="inline-flex flex-wrap gap-1.5 mt-1">
             {PRESETS[lang].map((p) => (
               <button
                 key={p.name}
                 onClick={() => setCode(p.code)}
-                className="px-2 py-0.5 border border-border bg-secondary text-xs text-muted-foreground hover:text-foreground"
+                className="inline-flex items-center gap-1 h-6 px-2 rounded-md border border-border bg-transparent text-xs text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
               >
-                + {p.name}
+                <Plus className="size-3" />{p.name}
               </button>
             ))}
           </div>
         </div>
 
         {/* Code Editor */}
-        <div className="border border-border bg-background">
-          <div className="bg-secondary px-3 py-1.5 flex items-center justify-between border-b border-border">
+        <div className="rounded-md border border-border bg-background overflow-hidden">
+          <div className="bg-secondary/40 px-3 py-1.5 flex items-center justify-between border-b border-border">
             <span className="text-xs font-mono text-muted-foreground">
               {lang === 'node' ? 'main.js' : lang === 'python' ? 'main.py' : 'main.sh'}
             </span>
             <button
               onClick={() => setCode('')}
-              className="text-[10px] text-muted-foreground hover:text-foreground"
+              className="text-xs text-muted-foreground hover:text-foreground"
             >
-              CLEAR
+              Clear
             </button>
           </div>
           <textarea
@@ -244,36 +245,33 @@ export default function CodeExecPanel() {
         {/* Action Controls */}
         <div className="flex items-center justify-between pt-1">
           <span className="text-xs text-muted-foreground">
-            {selectedWorker ? `Target: ${selectedWorker}` : 'Target: Round-robin worker pool'}
+            {selectedWorker ? `Target: ${selectedWorker}` : 'Target: round-robin worker pool'}
           </span>
           <Button
             onClick={handleRun}
             disabled={executing || !code.trim()}
-            className="font-mono text-xs uppercase"
           >
-            {executing ? 'EXECUTING CODE...' : '🚀 EXECUTE ON RUNNER'}
+            <Play />
+            {executing ? 'Executing...' : 'Execute on runner'}
           </Button>
         </div>
       </Card>
 
       {/* Execution Results Output Console */}
       {(result || error) && (
-        <Card className="border border-border bg-card">
-          <div className="bg-secondary border-b border-border px-4 py-2 flex items-center justify-between">
+        <Card className="gap-0 py-0">
+          <div className="bg-secondary/40 border-b border-border px-4 py-2 flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <span className="text-xs font-bold uppercase text-foreground">Console Stream</span>
+              <span className="text-sm font-semibold tracking-tight text-foreground">Output</span>
               {result && (
                 <>
-                  <Badge
-                    variant="outline"
-                    className="text-[10px]"
-                  >
-                    EXIT: {result.exit_code}
+                  <Badge variant={result.exit_code === 0 ? 'default' : 'destructive'}>
+                    Exit {result.exit_code}
                   </Badge>
-                  <Badge variant="outline" className="text-[10px]">
+                  <Badge variant="outline">
                     {result.execution_time_ms} ms
                   </Badge>
-                  <Badge variant="outline" className="text-[10px]">
+                  <Badge variant="outline">
                     {result.workerId}
                   </Badge>
                 </>
@@ -282,19 +280,19 @@ export default function CodeExecPanel() {
 
             <div className="flex items-center gap-2">
               {result && (
-                <div className="flex border border-border bg-background p-0.5">
+                <div className="flex rounded-md border border-border bg-background p-0.5">
                   <button
                     onClick={() => setActiveTab('stdout')}
-                    className={`px-2 py-0.5 text-xs font-mono uppercase ${
-                      activeTab === 'stdout' ? 'bg-foreground text-background font-bold' : 'text-muted-foreground'
+                    className={`px-2 py-0.5 rounded text-xs font-medium ${
+                      activeTab === 'stdout' ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:text-foreground'
                     }`}
                   >
                     stdout ({result.stdout.length})
                   </button>
                   <button
                     onClick={() => setActiveTab('stderr')}
-                    className={`px-2 py-0.5 text-xs font-mono uppercase ${
-                      activeTab === 'stderr' ? 'bg-foreground text-background font-bold' : 'text-muted-foreground'
+                    className={`px-2 py-0.5 rounded text-xs font-medium ${
+                      activeTab === 'stderr' ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:text-foreground'
                     }`}
                   >
                     stderr ({result.stderr.length})
@@ -308,14 +306,15 @@ export default function CodeExecPanel() {
                 onClick={() => copyText(result ? (activeTab === 'stdout' ? result.stdout : result.stderr) : error || '')}
                 className="text-xs"
               >
-                COPY
+                <Copy />
+                Copy
               </Button>
             </div>
           </div>
 
           <div className="p-4 bg-background font-mono text-xs overflow-x-auto min-h-[140px] max-h-[360px]">
             {error ? (
-              <div className="text-foreground">[ERROR] {error}</div>
+              <div className="flex items-start gap-2 text-destructive font-sans text-sm"><AlertCircle className="size-4 mt-0.5 shrink-0" /><span>{error}</span></div>
             ) : result ? (
               <pre className="text-foreground">
                 {activeTab === 'stdout'

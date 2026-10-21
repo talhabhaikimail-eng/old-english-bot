@@ -11,6 +11,11 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardTitle, CardDescription } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import {
+  Library, Zap, Play, Link2, RefreshCw, Search, X, Package, Folder, Star, Clapperboard,
+  FolderOpen, Radio, Loader2, Check, ChevronLeft, ChevronRight, Square, AlertTriangle,
+  CheckCircle2, Terminal, ExternalLink, Circle,
+} from 'lucide-react';
 
 type TabMode = 'catalog' | 'active' | 'player' | 'custom';
 
@@ -196,20 +201,20 @@ export default function CourseWorkerPanel() {
           setLiveEvent(data);
 
           if (data.type === 'progress') {
-            const phaseStr = (data.phase || '').toUpperCase();
+            const phaseStr = (data.phase || '');
             const pct = data.progressPercent ? `${data.progressPercent.toFixed(1)}%` : '';
             const spd = data.speedMBps ? `(${data.speedMBps.toFixed(2)} MB/s)` : '';
-            addLog(`[${phaseStr}] ${pct} ${spd} ${data.message || ''}`, 'info');
+            addLog(`${phaseStr} ${pct} ${spd} ${data.message || ''}`, 'info');
           } else if (data.type === 'result') {
             if (data.success && data.uploaded) {
-              addLog(`🎉 Job completed successfully! Uploaded to Drive: ${data.driveFolderUrl || ''}`, 'success');
+              addLog(`Job completed successfully! Uploaded to Drive: ${data.driveFolderUrl || ''}`, 'success');
               setIsJobActive(false);
               // Refresh catalog and stats
               fetchCourses();
               api.getCourseStats().then(s => s.success && setStats(s.stats)).catch(() => {});
             } else {
               const errTxt = data.error || 'Job failed';
-              addLog(`❌ Job failed: ${errTxt}`, 'err');
+              addLog(`Job failed: ${errTxt}`, 'err');
               setIsJobActive(false);
               fetchCourses();
             }
@@ -415,115 +420,117 @@ export default function CourseWorkerPanel() {
     };
   };
 
+  const selectCls = 'h-8 bg-secondary border border-border rounded-md px-2 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring';
+  const fieldLabel = 'text-xs font-medium text-muted-foreground';
+  const statusChip = (kind: 'ok' | 'run' | 'err' | 'idle') =>
+    kind === 'ok' || kind === 'run'
+      ? 'bg-primary/10 text-primary border-primary/30'
+      : kind === 'err'
+      ? 'bg-destructive/10 text-destructive border-destructive/30'
+      : 'bg-secondary text-muted-foreground border-border';
+
   return (
-    <div className="space-y-4 font-mono text-xs">
-      {/* ── TOP METRICS & WORKER HEALTH BAR ───────────────────────────────── */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
-        <Card className="p-3 bg-card border-border">
-          <p className="text-[10px] uppercase text-muted-foreground font-bold">Total Catalog</p>
-          <p className="text-lg sm:text-xl font-bold text-foreground">
+    <div className="space-y-4 text-[13px]">
+      {/* Top metrics & worker health */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+        <Card className="p-4 gap-1">
+          <p className="text-xs font-medium text-muted-foreground">Total catalog</p>
+          <p className="text-xl font-semibold tracking-tight text-foreground">
             {stats ? stats.total.toLocaleString() : '14,593'}
           </p>
-          <span className="text-[9px] text-muted-foreground">in Neon DB</span>
+          <span className="text-xs text-muted-foreground">in Neon DB</span>
         </Card>
 
-        <Card className="p-3 bg-card border-border border-emerald-500/30">
-          <p className="text-[10px] uppercase text-emerald-500 font-bold flex items-center gap-1">
-            <span>▶️</span> Ready to Watch
+        <Card className="p-4 gap-1">
+          <p className="text-xs font-medium text-muted-foreground flex items-center gap-1.5">
+            <Play className="size-3.5 text-primary" /> Ready to watch
           </p>
-          <p className="text-lg sm:text-xl font-bold text-emerald-400">
+          <p className="text-xl font-semibold tracking-tight text-primary">
             {stats ? stats.completed.toLocaleString() : '915'}
           </p>
-          <span className="text-[9px] text-muted-foreground">Uploaded to Drive</span>
+          <span className="text-xs text-muted-foreground">Uploaded to Drive</span>
         </Card>
 
-        <Card className="p-3 bg-card border-border border-blue-500/30">
-          <p className="text-[10px] uppercase text-blue-400 font-bold flex items-center gap-1">
-            <span>⚡</span> Active / Uploading
+        <Card className="p-4 gap-1">
+          <p className="text-xs font-medium text-muted-foreground flex items-center gap-1.5">
+            <Zap className="size-3.5" /> Active / uploading
           </p>
-          <p className="text-lg sm:text-xl font-bold text-blue-300">
+          <p className="text-xl font-semibold tracking-tight text-foreground">
             {stats ? stats.uploading.toLocaleString() : '0'}
           </p>
-          <span className="text-[9px] text-muted-foreground">Processing now</span>
+          <span className="text-xs text-muted-foreground">Processing now</span>
         </Card>
 
-        <Card className="p-3 bg-card border-border">
-          <p className="text-[10px] uppercase text-amber-500 font-bold">Pending Upload</p>
-          <p className="text-lg sm:text-xl font-bold text-amber-400">
+        <Card className="p-4 gap-1">
+          <p className="text-xs font-medium text-muted-foreground">Pending upload</p>
+          <p className="text-xl font-semibold tracking-tight text-amber-500">
             {stats ? stats.pending.toLocaleString() : '13,678'}
           </p>
-          <span className="text-[9px] text-muted-foreground">Ready to queue</span>
+          <span className="text-xs text-muted-foreground">Ready to queue</span>
         </Card>
 
-        <Card className="p-3 bg-card border-border">
-          <p className="text-[10px] uppercase text-muted-foreground font-bold">Stored Volume</p>
-          <p className="text-lg sm:text-xl font-bold text-foreground">
+        <Card className="p-4 gap-1">
+          <p className="text-xs font-medium text-muted-foreground">Stored volume</p>
+          <p className="text-xl font-semibold tracking-tight text-foreground">
             {stats && stats.totalSizeBytes ? `${(stats.totalSizeBytes / (1024 ** 4)).toFixed(1)} TB` : '24.2 TB'}
           </p>
-          <span className="text-[9px] text-muted-foreground">Archive content</span>
+          <span className="text-xs text-muted-foreground">Archive content</span>
         </Card>
 
-        {/* Worker Selector & Probe */}
-        <Card className="p-3 bg-card border-border flex flex-col justify-between">
+        {/* Worker selector & probe */}
+        <Card className="p-4 gap-2 flex flex-col justify-between">
           <div className="flex items-center justify-between">
-            <span className="text-[10px] uppercase font-bold text-muted-foreground">Engine</span>
-            <Badge variant="outline" className={`text-[9px] px-1.5 py-0 ${
-              workerHealth.online ? 'border-emerald-500 text-emerald-400 font-bold' : 'border-destructive text-destructive'
-            }`}>
-              {workerHealth.online ? '● ONLINE' : '○ OFFLINE'}
+            <span className="text-xs font-medium text-muted-foreground">Engine</span>
+            <Badge variant={workerHealth.online ? 'default' : 'destructive'}>
+              <span className={`size-1.5 rounded-full ${workerHealth.online ? 'bg-primary' : 'bg-destructive'}`} />
+              {workerHealth.online ? 'Online' : 'Offline'}
             </Badge>
           </div>
-          <div className="mt-1">
-            <select
-              value={selectedWorkerUrl}
-              onChange={(e) => {
-                setSelectedWorkerUrl(e.target.value);
-                probeWorker(e.target.value);
-              }}
-              className="w-full bg-secondary border border-border rounded px-1.5 py-0.5 text-[10px] font-mono text-foreground focus:outline-none"
-            >
-              <option value="http://localhost:8085">Local Worker (:8085)</option>
-              {workers.map(w => (
-                <option key={w.url} value={w.url}>
-                  {w.source === 'pool' ? `Worker ${w.workerId}` : w.url} {w.status === 'busy' ? '(busy)' : ''}
-                </option>
-              ))}
-            </select>
-          </div>
+          <select
+            value={selectedWorkerUrl}
+            onChange={(e) => {
+              setSelectedWorkerUrl(e.target.value);
+              probeWorker(e.target.value);
+            }}
+            className={`w-full ${selectCls}`}
+          >
+            <option value="http://localhost:8085">Local Worker (:8085)</option>
+            {workers.map(w => (
+              <option key={w.url} value={w.url}>
+                {w.source === 'pool' ? `Worker ${w.workerId}` : w.url} {w.status === 'busy' ? '(busy)' : ''}
+              </option>
+            ))}
+          </select>
           {workerHealth.disk && (
-            <span className="text-[9px] text-muted-foreground mt-1 truncate">
+            <span className="text-xs text-muted-foreground truncate">
               Disk: {workerHealth.disk.freeGB}GB free / {workerHealth.disk.totalGB}GB
             </span>
           )}
         </Card>
       </div>
 
-      {/* ── NAVIGATION TABS ──────────────────────────────────────────────── */}
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border pb-2">
-        <div className="flex items-center gap-1.5">
+      {/* Navigation tabs */}
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border pb-3">
+        <div className="flex flex-wrap items-center gap-1.5">
           <Button
             variant={tab === 'catalog' ? 'default' : 'outline'}
             size="xs"
             onClick={() => setTab('catalog')}
-            className="text-[11px] uppercase font-bold tracking-wider"
           >
-            <span>📚</span>
-            <span>Course Catalog</span>
-            <Badge variant="secondary" className="ml-1 text-[9px] px-1 py-0">{totalCourses}</Badge>
+            <Library />
+            <span>Course catalog</span>
+            <Badge variant="secondary" className="ml-1 px-1.5">{totalCourses}</Badge>
           </Button>
 
           <Button
             variant={tab === 'active' ? 'default' : 'outline'}
             size="xs"
             onClick={() => setTab('active')}
-            className={`text-[11px] uppercase font-bold tracking-wider relative ${
-              isJobActive ? 'border-blue-500 text-blue-400 animate-pulse' : ''
-            }`}
           >
-            <span>⚡</span>
-            <span>Live Stream & Diagnostics</span>
+            <Zap />
+            <span>Live stream & diagnostics</span>
             {isJobActive && (
-              <span className="w-2 h-2 rounded-full bg-blue-500 inline-block ml-1"></span>
+              <span className="size-1.5 rounded-full bg-primary animate-pulse ml-1" />
             )}
           </Button>
 
@@ -531,14 +538,11 @@ export default function CourseWorkerPanel() {
             variant={tab === 'player' ? 'default' : 'outline'}
             size="xs"
             onClick={() => setTab('player')}
-            className={`text-[11px] uppercase font-bold tracking-wider ${
-              watchingCourse ? 'border-emerald-500/60' : ''
-            }`}
           >
-            <span>▶️</span>
-            <span>Watch & Lessons</span>
+            <Play />
+            <span>Watch & lessons</span>
             {watchingCourse && (
-              <Badge variant="secondary" className="ml-1 text-[9px] px-1 py-0 truncate max-w-[90px]">
+              <Badge variant="secondary" className="ml-1 truncate max-w-[90px]">
                 {watchingCourse.title}
               </Badge>
             )}
@@ -548,10 +552,9 @@ export default function CourseWorkerPanel() {
             variant={tab === 'custom' ? 'default' : 'outline'}
             size="xs"
             onClick={() => setTab('custom')}
-            className="text-[11px] uppercase font-bold tracking-wider"
           >
-            <span>🔗</span>
-            <span>Custom URL Importer</span>
+            <Link2 />
+            <span>Custom URL importer</span>
           </Button>
         </div>
 
@@ -565,36 +568,33 @@ export default function CourseWorkerPanel() {
               setRefreshingWorkers(false);
             }}
             disabled={refreshingWorkers}
-            className="text-[10px] font-mono"
           >
-            <span>🔄</span>
+            <RefreshCw className={refreshingWorkers ? 'animate-spin' : ''} />
             <span>{refreshingWorkers ? 'Refreshing...' : 'Refresh'}</span>
           </Button>
         </div>
       </div>
 
-      {/* ══════════════════════════════════════════════════════════════════════
-          TAB 1: CATALOG & SELECTOR
-      ══════════════════════════════════════════════════════════════════════ */}
+      {/* Tab 1: catalog */}
       {tab === 'catalog' && (
         <div className="space-y-3">
-          {/* Filters Bar */}
-          <div className="flex flex-col sm:flex-row gap-2 items-center justify-between bg-card p-2.5 border border-border">
+          {/* Filters bar */}
+          <div className="flex flex-col sm:flex-row gap-2 items-center justify-between rounded-lg border border-border bg-card p-3">
             <div className="flex-1 w-full sm:w-auto relative">
-              <span className="absolute inset-y-0 left-2.5 flex items-center text-muted-foreground text-xs">🔍</span>
+              <Search className="absolute inset-y-0 left-2.5 my-auto size-3.5 text-muted-foreground" />
               <Input
                 type="text"
                 placeholder="Search courses by title, slug, or topic (e.g. Python, Docker, React, Machine Learning)..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full pl-8 pr-6 text-xs h-8 bg-secondary"
+                className="w-full pl-8 pr-8 text-xs h-8 bg-secondary"
               />
               {searchQuery && (
                 <button
                   onClick={() => setSearchQuery('')}
-                  className="absolute inset-y-0 right-2.5 flex items-center text-muted-foreground hover:text-foreground text-xs"
+                  className="absolute inset-y-0 right-2.5 flex items-center text-muted-foreground hover:text-foreground"
                 >
-                  ✕
+                  <X className="size-3.5" />
                 </button>
               )}
             </div>
@@ -606,7 +606,7 @@ export default function CourseWorkerPanel() {
                   setSelectedTopic(e.target.value);
                   setCurrentPage(1);
                 }}
-                className="bg-secondary border border-border rounded px-2 py-1 text-xs font-mono text-foreground focus:outline-none"
+                className={selectCls}
               >
                 <option value="all">All Topics ({totalCourses})</option>
                 {topics.map(t => (
@@ -620,7 +620,7 @@ export default function CourseWorkerPanel() {
                   setStatusFilter(e.target.value);
                   setCurrentPage(1);
                 }}
-                className="bg-secondary border border-border rounded px-2 py-1 text-xs font-mono text-foreground focus:outline-none"
+                className={selectCls}
               >
                 <option value="all">Status: All</option>
                 <option value="completed">Status: Ready to Watch</option>
@@ -632,7 +632,7 @@ export default function CourseWorkerPanel() {
               <select
                 value={sortOrder}
                 onChange={(e) => setSortOrder(e.target.value)}
-                className="bg-secondary border border-border rounded px-2 py-1 text-xs font-mono text-foreground focus:outline-none"
+                className={selectCls}
               >
                 <option value="size">Sort: Size (Largest)</option>
                 <option value="newest">Sort: Newest</option>
@@ -642,15 +642,15 @@ export default function CourseWorkerPanel() {
             </div>
           </div>
 
-          {/* Quick Filter Status Pills */}
-          <div className="flex flex-wrap items-center gap-1 text-[10px]">
-            <span className="text-muted-foreground uppercase font-bold mr-1">Filter:</span>
+          {/* Quick filter status pills */}
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className={`${fieldLabel} mr-1`}>Filter:</span>
             {[
-              { id: 'all', label: 'All Courses' },
-              { id: 'completed', label: '▶️ Completed (Watch)' },
-              { id: 'uploading', label: '⚡ Active' },
-              { id: 'pending', label: '⏳ Pending' },
-              { id: 'failed', label: '⚠️ Failed' },
+              { id: 'all', label: 'All courses' },
+              { id: 'completed', label: 'Completed (watch)' },
+              { id: 'uploading', label: 'Active' },
+              { id: 'pending', label: 'Pending' },
+              { id: 'failed', label: 'Failed' },
             ].map(pill => (
               <button
                 key={pill.id}
@@ -658,9 +658,9 @@ export default function CourseWorkerPanel() {
                   setStatusFilter(pill.id);
                   setCurrentPage(1);
                 }}
-                className={`px-2 py-0.5 rounded border transition-colors ${
+                className={`h-6 px-2.5 text-xs rounded-full border transition-colors ${
                   statusFilter === pill.id
-                    ? 'bg-foreground text-background border-foreground font-bold'
+                    ? 'bg-primary/15 text-primary border-primary/30 font-medium'
                     : 'bg-secondary text-muted-foreground border-border hover:text-foreground'
                 }`}
               >
@@ -669,15 +669,16 @@ export default function CourseWorkerPanel() {
             ))}
           </div>
 
-          {/* Courses Grid */}
+          {/* Courses grid */}
           {catalogLoading ? (
             <div className="flex items-center justify-center p-16 text-muted-foreground">
               <span>Loading course catalog from Neon DB...</span>
             </div>
           ) : courses.length === 0 ? (
-            <div className="p-12 text-center text-muted-foreground bg-card border border-border">
-              <p className="text-sm font-bold">No courses match your search criteria.</p>
-              <p className="text-xs mt-1">Try broadening your search term or selecting "All Topics".</p>
+            <div className="p-12 text-center text-muted-foreground rounded-lg border border-border bg-card flex flex-col items-center gap-2">
+              <Library className="size-6" />
+              <p className="text-sm font-medium text-foreground">No courses match your search criteria.</p>
+              <p className="text-xs">Try broadening your search term or selecting "All Topics".</p>
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
@@ -692,86 +693,75 @@ export default function CourseWorkerPanel() {
                 return (
                   <Card
                     key={course.id}
-                    className={`p-3.5 bg-card border transition-all flex flex-col justify-between ${
+                    className={`p-4 transition-colors flex flex-col justify-between ${
                       isCompleted
-                        ? 'border-emerald-500/40 hover:border-emerald-500/70'
+                        ? 'hover:border-primary/50'
                         : isUploading
-                        ? 'border-blue-500/50 bg-blue-950/10'
+                        ? 'border-primary/30'
                         : isFailed
-                        ? 'border-destructive/40'
-                        : 'border-border hover:border-foreground/30'
+                        ? 'border-destructive/30'
+                        : 'hover:border-foreground/30'
                     }`}
                   >
                     <div className="space-y-2">
-                      {/* Status + Topic Badge */}
+                      {/* Status + topic badge */}
                       <div className="flex items-center justify-between gap-1">
-                        <Badge variant="outline" className="text-[9px] px-1.5 py-0 truncate max-w-[160px]">
+                        <Badge variant="outline" className="truncate max-w-[160px]">
                           {course.primaryCategory || course.topic || 'General'}
                         </Badge>
 
                         <Badge
                           variant="outline"
-                          className={`text-[9px] px-1.5 py-0 font-bold uppercase ${
-                            isCompleted
-                              ? 'border-emerald-500 text-emerald-400 bg-emerald-950/20'
-                              : isUploading
-                              ? 'border-blue-400 text-blue-300 animate-pulse bg-blue-950/20'
-                              : isFailed
-                              ? 'border-destructive text-destructive bg-destructive/10'
-                              : 'border-border text-muted-foreground'
-                          }`}
+                          className={`${statusChip(isCompleted ? 'ok' : isUploading ? 'run' : isFailed ? 'err' : 'idle')} ${isUploading ? 'animate-pulse' : ''}`}
                         >
-                          {isCompleted ? '✓ Completed' : isUploading ? '⚡ In Progress' : isFailed ? '✕ Failed' : 'Pending'}
+                          {isCompleted ? <><Check /> Completed</> : isUploading ? <><Zap /> In progress</> : isFailed ? <><X /> Failed</> : 'Pending'}
                         </Badge>
                       </div>
 
-                      {/* Course Title */}
+                      {/* Course title */}
                       <h4
-                        className="font-bold text-foreground text-xs leading-snug line-clamp-2"
+                        className="font-semibold tracking-tight text-foreground text-sm leading-snug line-clamp-2"
                         title={course.title}
                       >
                         {course.title}
                       </h4>
 
-                      {/* Specs / Meta */}
-                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-muted-foreground">
-                        <span>📦 {sizeText}</span>
-                        <span>•</span>
-                        <span>📁 {course.downloadLinksCount} Parts</span>
+                      {/* Specs / meta */}
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                        <span className="inline-flex items-center gap-1"><Package className="size-3.5" /> {sizeText}</span>
+                        <span className="inline-flex items-center gap-1"><Folder className="size-3.5" /> {course.downloadLinksCount} parts</span>
                         {course.rating?.score && (
-                          <>
-                            <span>•</span>
-                            <span className="text-amber-400 font-bold">★ {course.rating.score.toFixed(1)}</span>
-                          </>
+                          <span className="inline-flex items-center gap-1 text-amber-500">
+                            <Star className="size-3.5" /> {course.rating.score.toFixed(1)}
+                          </span>
                         )}
                         {course.driveVideosCount > 0 && (
-                          <>
-                            <span>•</span>
-                            <span className="text-emerald-400">🎬 {course.driveVideosCount} Videos</span>
-                          </>
+                          <span className="inline-flex items-center gap-1 text-primary">
+                            <Clapperboard className="size-3.5" /> {course.driveVideosCount} videos
+                          </span>
                         )}
                       </div>
 
                       {/* Error excerpt if failed */}
                       {isFailed && course.driveError && (
-                        <div className="p-1.5 bg-destructive/10 border border-destructive/30 rounded text-[9px] text-destructive line-clamp-2">
-                          [Error]: {course.driveError}
+                        <div className="p-2 bg-destructive/10 border border-destructive/30 rounded-md text-xs text-destructive line-clamp-2">
+                          {course.driveError}
                         </div>
                       )}
                     </div>
 
-                    {/* Action Buttons */}
-                    <div className="pt-3 mt-2 border-t border-border flex items-center justify-between gap-1.5">
+                    {/* Action buttons */}
+                    <div className="pt-3 mt-3 border-t border-border flex items-center justify-between gap-1.5">
                       {isCompleted ? (
                         <>
                           <Button
                             size="xs"
                             variant="default"
                             onClick={() => handleWatchCourse(course)}
-                            className="w-full bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold uppercase"
+                            className="w-full"
                           >
-                            <span>▶️</span>
-                            <span>Watch Lessons</span>
+                            <Play />
+                            <span>Watch lessons</span>
                           </Button>
 
                           {course.driveFolderId && (
@@ -779,10 +769,10 @@ export default function CourseWorkerPanel() {
                               href={`https://drive.google.com/drive/folders/${course.driveFolderId}`}
                               target="_blank"
                               rel="noreferrer"
-                              className="px-2 py-1 bg-secondary border border-border rounded text-[10px] hover:text-foreground text-muted-foreground flex items-center gap-1"
+                              className="inline-flex h-7 items-center px-2 bg-secondary border border-border rounded-md text-muted-foreground hover:text-foreground"
                               title="Open in Google Drive"
                             >
-                              <span>📂</span>
+                              <FolderOpen className="size-3.5" />
                             </a>
                           )}
                         </>
@@ -800,10 +790,10 @@ export default function CourseWorkerPanel() {
                                 connectLiveUpdates(course.driveCourseId, selectedWorkerUrl);
                               }
                             }}
-                            className="w-full bg-blue-600 hover:bg-blue-500 text-white text-[10px] font-bold uppercase animate-pulse"
+                            className="w-full"
                           >
-                            <span>📡</span>
-                            <span>View Live Stream</span>
+                            <Radio />
+                            <span>View live stream</span>
                           </Button>
                         </>
                       ) : (
@@ -813,10 +803,10 @@ export default function CourseWorkerPanel() {
                             variant="default"
                             disabled={startingJob === course.id}
                             onClick={() => handleStartCatalogCourse(course)}
-                            className="w-full text-[10px] font-bold uppercase tracking-wider"
+                            className="w-full"
                           >
-                            <span>{startingJob === course.id ? '⏳' : '⚡'}</span>
-                            <span>{startingJob === course.id ? 'Starting...' : 'Download & Upload'}</span>
+                            {startingJob === course.id ? <Loader2 className="animate-spin" /> : <Zap />}
+                            <span>{startingJob === course.id ? 'Starting...' : 'Download & upload'}</span>
                           </Button>
                         </>
                       )}
@@ -829,8 +819,8 @@ export default function CourseWorkerPanel() {
 
           {/* Pagination */}
           {totalPages > 1 && (
-            <div className="flex items-center justify-between bg-card p-2 border border-border text-xs">
-              <div className="text-muted-foreground text-[10px]">
+            <div className="flex items-center justify-between rounded-lg border border-border bg-card px-3 py-2 text-xs">
+              <div className="text-muted-foreground">
                 Page {currentPage} of {totalPages} ({totalCourses.toLocaleString()} courses)
               </div>
               <div className="flex items-center gap-1">
@@ -839,18 +829,16 @@ export default function CourseWorkerPanel() {
                   size="xs"
                   disabled={currentPage <= 1}
                   onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                  className="font-mono text-[10px]"
                 >
-                  ◀ Prev
+                  <ChevronLeft /> Prev
                 </Button>
                 <Button
                   variant="outline"
                   size="xs"
                   disabled={currentPage >= totalPages}
                   onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-                  className="font-mono text-[10px]"
                 >
-                  Next ▶
+                  Next <ChevronRight />
                 </Button>
               </div>
             </div>
@@ -858,36 +846,34 @@ export default function CourseWorkerPanel() {
         </div>
       )}
 
-      {/* ══════════════════════════════════════════════════════════════════════
-          TAB 2: LIVE STREAM & DIAGNOSTICS
-      ══════════════════════════════════════════════════════════════════════ */}
+      {/* Tab 2: live stream & diagnostics */}
       {tab === 'active' && (
         <div className="space-y-4">
-          {/* Active Job Header Card */}
-          <Card className="p-4 bg-card border-border space-y-4">
+          {/* Active job header card */}
+          <Card className="p-4 space-y-4">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-border">
               <div>
-                <div className="flex items-center gap-2">
-                  <Badge variant="outline" className="text-[10px] font-bold">
-                    JOB ID: {activeJobId || 'None Selected'}
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge variant="outline" className="font-mono">
+                    Job ID: {activeJobId || 'None selected'}
                   </Badge>
                   {isJobActive && (
-                    <Badge variant="default" className="bg-blue-600 text-white text-[9px] animate-pulse">
-                      ● RUNNING
+                    <Badge variant="default" className="animate-pulse">
+                      <span className="size-1.5 rounded-full bg-primary" /> Running
                     </Badge>
                   )}
                   {liveEvent?.phase === 'completed' && (
-                    <Badge variant="default" className="bg-emerald-600 text-white text-[9px]">
-                      ✓ COMPLETED
+                    <Badge variant="default">
+                      <Check /> Completed
                     </Badge>
                   )}
                   {liveEvent?.phase === 'failed' && (
-                    <Badge variant="destructive" className="text-[9px]">
-                      ✕ FAILED
+                    <Badge variant="destructive">
+                      <X /> Failed
                     </Badge>
                   )}
                 </div>
-                <h3 className="text-sm sm:text-base font-bold text-foreground mt-1">
+                <h3 className="text-sm font-semibold tracking-tight text-foreground mt-2">
                   {activeJobTitle || (activeJobCourse ? activeJobCourse.title : 'No active course running')}
                 </h3>
               </div>
@@ -898,10 +884,9 @@ export default function CourseWorkerPanel() {
                     variant="destructive"
                     size="xs"
                     onClick={handleCancelJob}
-                    className="text-[10px] font-bold uppercase"
                   >
-                    <span>🛑</span>
-                    <span>Abort Job</span>
+                    <Square />
+                    <span>Abort job</span>
                   </Button>
                 )}
                 {liveEvent?.phase === 'completed' && activeJobCourse && (
@@ -909,20 +894,19 @@ export default function CourseWorkerPanel() {
                     variant="default"
                     size="xs"
                     onClick={() => handleWatchCourse(activeJobCourse)}
-                    className="bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold uppercase"
                   >
-                    <span>▶️</span>
-                    <span>Watch Now</span>
+                    <Play />
+                    <span>Watch now</span>
                   </Button>
                 )}
               </div>
             </div>
 
-            {/* 6-Stage Progress Stepper */}
+            {/* 6-stage progress stepper */}
             <div className="space-y-2">
-              <div className="flex items-center justify-between text-[11px] font-bold text-muted-foreground">
-                <span className="uppercase text-foreground">
-                  Current Phase: <span className="text-blue-400 font-mono">{liveEvent?.phase?.toUpperCase() || (isJobActive ? 'INITIALIZING' : 'IDLE')}</span>
+              <div className="flex items-center justify-between text-xs text-muted-foreground">
+                <span className="font-medium text-foreground">
+                  Current phase: <span className="text-primary">{liveEvent?.phase ? liveEvent.phase.charAt(0).toUpperCase() + liveEvent.phase.slice(1) : (isJobActive ? 'Initializing' : 'Idle')}</span>
                 </span>
                 <span>
                   {liveEvent?.progressPercent !== undefined ? `${liveEvent.progressPercent.toFixed(1)}%` : (isJobActive ? '0%' : '')}
@@ -930,30 +914,26 @@ export default function CourseWorkerPanel() {
                 </span>
               </div>
 
-              {/* Progress Bar */}
-              <div className="h-2.5 bg-secondary rounded overflow-hidden">
+              {/* Progress bar */}
+              <div className="h-2 bg-secondary rounded-full overflow-hidden">
                 <div
                   className={`h-full transition-all duration-500 ${
-                    liveEvent?.phase === 'completed'
-                      ? 'bg-emerald-500'
-                      : liveEvent?.phase === 'failed'
-                      ? 'bg-destructive'
-                      : 'bg-blue-500'
+                    liveEvent?.phase === 'failed' ? 'bg-destructive' : 'bg-primary'
                   }`}
                   style={{ width: `${Math.min(100, liveEvent?.progressPercent || (isJobActive ? 5 : 0))}%` }}
                 />
               </div>
 
-              {/* 6 Stage Stepper Pills */}
-              <div className="grid grid-cols-3 sm:grid-cols-6 gap-1 pt-2 text-[10px] text-center">
+              {/* 6 stage stepper pills */}
+              <div className="grid grid-cols-3 sm:grid-cols-6 gap-1.5 pt-2 text-xs text-center">
                 {[
-                  { key: 'downloading', label: '1. Download Parts' },
-                  { key: 'extracting', label: '2. Extract Archive' },
-                  { key: 'reclaiming', label: '3. Reclaim Disk' },
-                  { key: 'separating', label: '4. Split Zips' },
-                  { key: 'uploading', label: '5. Drive Upload' },
+                  { key: 'downloading', label: '1. Download parts' },
+                  { key: 'extracting', label: '2. Extract archive' },
+                  { key: 'reclaiming', label: '3. Reclaim disk' },
+                  { key: 'separating', label: '4. Split zips' },
+                  { key: 'uploading', label: '5. Drive upload' },
                   { key: 'completed', label: '6. Ready' },
-                ].map((st, i) => {
+                ].map((st) => {
                   const currentPhase = liveEvent?.phase || '';
                   const phaseOrder = ['pending', 'downloading', 'extracting', 'reclaiming', 'separating', 'zipping', 'uploading', 'completed'];
                   const currIdx = phaseOrder.indexOf(currentPhase);
@@ -964,11 +944,11 @@ export default function CourseWorkerPanel() {
                   return (
                     <div
                       key={st.key}
-                      className={`p-1.5 rounded border ${
+                      className={`px-2 py-1.5 rounded-md border ${
                         isDone
-                          ? 'bg-emerald-950/20 border-emerald-500/50 text-emerald-400 font-bold'
+                          ? 'bg-primary/10 border-primary/30 text-primary'
                           : isCurrent
-                          ? 'bg-blue-950/30 border-blue-500 text-blue-300 font-bold animate-pulse'
+                          ? 'bg-primary/15 border-primary/40 text-primary font-medium animate-pulse'
                           : 'bg-secondary/40 border-border text-muted-foreground'
                       }`}
                     >
@@ -979,21 +959,21 @@ export default function CourseWorkerPanel() {
               </div>
             </div>
 
-            {/* Diagnostics Error Alert (Why Something Went Wrong) */}
+            {/* Diagnostics error alert */}
             {liveEvent?.phase === 'failed' && (
               (() => {
                 const diag = deduceFailureDiagnosis(liveEvent.error || 'Unknown failure');
                 return (
-                  <div className="p-3 bg-destructive/15 border border-destructive rounded space-y-2">
+                  <div className="p-3 bg-destructive/10 border border-destructive/30 rounded-lg space-y-2">
                     <div className="flex items-center gap-2">
-                      <span className="text-base">⚠️</span>
-                      <h4 className="font-bold text-destructive text-xs uppercase tracking-wide">
-                        [Root Cause Diagnostic]: {diag.title}
+                      <AlertTriangle className="size-4 text-destructive" />
+                      <h4 className="font-semibold text-destructive text-sm">
+                        Root cause: {diag.title}
                       </h4>
                     </div>
-                    <p className="text-[11px] text-foreground font-sans">{diag.advice}</p>
+                    <p className="text-xs text-foreground">{diag.advice}</p>
                     {liveEvent.error && (
-                      <pre className="p-2 bg-black/40 rounded text-[10px] text-destructive-foreground font-mono overflow-x-auto whitespace-pre-wrap">
+                      <pre className="p-2 bg-[#0b0c0e] rounded-md text-xs text-destructive font-mono overflow-x-auto whitespace-pre-wrap">
                         {liveEvent.error}
                       </pre>
                     )}
@@ -1003,19 +983,17 @@ export default function CourseWorkerPanel() {
                           size="xs"
                           variant="outline"
                           onClick={() => handleStartCatalogCourse(activeJobCourse)}
-                          className="text-[10px] font-bold uppercase"
                         >
-                          <span>🔄</span>
-                          <span>Retry Course Job</span>
+                          <RefreshCw />
+                          <span>Retry course job</span>
                         </Button>
                       )}
                       <Button
                         size="xs"
                         variant="ghost"
                         onClick={() => setTab('catalog')}
-                        className="text-[10px]"
                       >
-                        Return to Catalog
+                        Return to catalog
                       </Button>
                     </div>
                   </div>
@@ -1023,26 +1001,26 @@ export default function CourseWorkerPanel() {
               })()
             )}
 
-            {/* Google Drive Links upon completion */}
+            {/* Google Drive links upon completion */}
             {liveEvent?.phase === 'completed' && (
-              <div className="p-3 bg-emerald-950/20 border border-emerald-500/40 rounded space-y-2">
+              <div className="p-3 bg-primary/10 border border-primary/30 rounded-lg space-y-2">
                 <div className="flex items-center justify-between">
-                  <span className="font-bold text-emerald-400 text-xs flex items-center gap-1.5">
-                    <span>🎉</span> Course Uploaded & Ready!
+                  <span className="font-semibold text-primary text-sm flex items-center gap-1.5">
+                    <CheckCircle2 className="size-4" /> Course uploaded & ready
                   </span>
                   {liveEvent.driveFolderUrl && (
                     <a
                       href={liveEvent.driveFolderUrl}
                       target="_blank"
                       rel="noreferrer"
-                      className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-[10px] font-bold uppercase flex items-center gap-1"
+                      className="inline-flex h-7 items-center gap-1.5 px-2.5 bg-primary text-primary-foreground hover:bg-primary/90 rounded-md text-xs font-medium"
                     >
-                      <span>📂</span> Open Drive Folder
+                      <FolderOpen className="size-3.5" /> Open Drive folder
                     </a>
                   )}
                 </div>
                 {liveEvent.driveFiles && liveEvent.driveFiles.length > 0 && (
-                  <p className="text-[11px] text-muted-foreground">
+                  <p className="text-xs text-muted-foreground">
                     Uploaded {liveEvent.driveFiles.length} files to Google Drive. Click below to stream in player.
                   </p>
                 )}
@@ -1050,38 +1028,38 @@ export default function CourseWorkerPanel() {
             )}
           </Card>
 
-          {/* Parts & Uploaded Files Live Breakdown */}
+          {/* Parts & uploaded files live breakdown */}
           {liveEvent?.parts && liveEvent.parts.length > 0 && (
-            <Card className="p-3 bg-card border-border space-y-2">
-              <h4 className="font-bold text-foreground text-xs uppercase flex items-center justify-between">
-                <span>Archive Parts Breakdown ({liveEvent.completedParts || 0} / {liveEvent.totalParts || liveEvent.parts.length} completed)</span>
+            <Card className="p-4 space-y-3">
+              <h4 className="font-semibold tracking-tight text-foreground text-sm flex items-center justify-between">
+                <span>Archive parts breakdown ({liveEvent.completedParts || 0} / {liveEvent.totalParts || liveEvent.parts.length} completed)</span>
               </h4>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
                 {liveEvent.parts.map(p => (
                   <div
                     key={p.partIndex}
-                    className="p-2 bg-secondary border border-border rounded text-[10px] space-y-1"
+                    className="p-2.5 bg-secondary/40 border border-border rounded-md text-xs space-y-1.5"
                   >
-                    <div className="flex items-center justify-between">
-                      <span className="font-bold truncate max-w-[160px]">{p.fileName}</span>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-medium truncate max-w-[160px]">{p.fileName}</span>
                       <Badge
                         variant="outline"
-                        className={`text-[8px] px-1 py-0 ${
-                          p.status === 'completed' ? 'border-emerald-500 text-emerald-400 font-bold' :
-                          p.status === 'downloading' ? 'border-blue-500 text-blue-300 animate-pulse' :
-                          p.status === 'failed' ? 'border-destructive text-destructive' : 'text-muted-foreground'
-                        }`}
+                        className={`${statusChip(
+                          p.status === 'completed' ? 'ok' :
+                          p.status === 'downloading' ? 'run' :
+                          p.status === 'failed' ? 'err' : 'idle'
+                        )} ${p.status === 'downloading' ? 'animate-pulse' : ''}`}
                       >
                         {p.status}
                       </Badge>
                     </div>
-                    <div className="h-1 bg-background rounded overflow-hidden">
+                    <div className="h-1 bg-secondary rounded-full overflow-hidden">
                       <div
-                        className="h-full bg-blue-500 transition-all duration-300"
+                        className="h-full bg-primary transition-all duration-300"
                         style={{ width: `${p.percent}%` }}
                       />
                     </div>
-                    <div className="flex justify-between text-[9px] text-muted-foreground">
+                    <div className="flex justify-between text-xs text-muted-foreground">
                       <span>{p.percent.toFixed(1)}%</span>
                       {p.speedBytesSec > 0 && <span>{(p.speedBytesSec / (1024 * 1024)).toFixed(1)} MB/s</span>}
                     </div>
@@ -1091,25 +1069,24 @@ export default function CourseWorkerPanel() {
             </Card>
           )}
 
-          {/* Real-time Event Log Terminal */}
-          <Card className="p-3 bg-card border-border space-y-2">
+          {/* Real-time event log terminal */}
+          <Card className="p-4 space-y-3">
             <div className="flex items-center justify-between">
-              <h4 className="font-bold text-foreground text-xs uppercase flex items-center gap-1.5">
-                <span>💻</span> Pipeline Event Stream
+              <h4 className="font-semibold tracking-tight text-foreground text-sm flex items-center gap-1.5">
+                <Terminal className="size-4 text-muted-foreground" /> Pipeline event stream
               </h4>
               <Button
                 variant="ghost"
                 size="xs"
                 onClick={() => setLiveLogs([])}
-                className="text-[9px] h-6 px-2 text-muted-foreground hover:text-foreground"
               >
-                Clear Log
+                Clear log
               </Button>
             </div>
 
             <div
               ref={logContainerRef}
-              className="h-44 bg-black/70 border border-border rounded p-2.5 overflow-y-auto space-y-1 text-[10px] font-mono"
+              className="h-44 bg-[#0b0c0e] border border-border rounded-md p-3 overflow-y-auto space-y-1 text-xs font-mono"
             >
               {liveLogs.length === 0 ? (
                 <div className="text-muted-foreground italic">Waiting for events...</div>
@@ -1118,10 +1095,10 @@ export default function CourseWorkerPanel() {
                   <div key={i} className="leading-tight flex items-start gap-1.5">
                     <span className="text-muted-foreground select-none">[{l.time}]</span>
                     <span className={
-                      l.type === 'err' ? 'text-destructive font-bold' :
+                      l.type === 'err' ? 'text-destructive' :
                       l.type === 'warn' ? 'text-amber-400' :
-                      l.type === 'success' ? 'text-emerald-400 font-bold' :
-                      'text-foreground'
+                      l.type === 'success' ? 'text-primary' :
+                      'text-zinc-200'
                     }>
                       {l.msg}
                     </span>
@@ -1133,15 +1110,13 @@ export default function CourseWorkerPanel() {
         </div>
       )}
 
-      {/* ══════════════════════════════════════════════════════════════════════
-          TAB 3: VIDEO PLAYER & LESSON WATCHER
-      ══════════════════════════════════════════════════════════════════════ */}
+      {/* Tab 3: video player & lesson watcher */}
       {tab === 'player' && (
         <div className="space-y-4">
           {!watchingCourse ? (
-            <Card className="p-12 text-center text-muted-foreground bg-card border-border space-y-3">
-              <span className="text-3xl">🎬</span>
-              <p className="font-bold text-sm text-foreground">No completed course selected to watch.</p>
+            <Card className="p-12 text-center text-muted-foreground flex flex-col items-center gap-3">
+              <Clapperboard className="size-6" />
+              <p className="font-semibold text-sm text-foreground">No completed course selected to watch.</p>
               <p className="text-xs">Select any course with "Ready to Watch" status in the Catalog to view lessons.</p>
               <Button
                 variant="default"
@@ -1150,22 +1125,21 @@ export default function CourseWorkerPanel() {
                   setStatusFilter('completed');
                   setTab('catalog');
                 }}
-                className="text-xs uppercase font-bold"
               >
-                Browse Completed Courses
+                Browse completed courses
               </Button>
             </Card>
           ) : (
             <div className="space-y-3">
-              {/* Course Header Banner */}
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-3 bg-card border border-border rounded">
-                <div>
-                  <Badge variant="outline" className="text-[9px] border-emerald-500 text-emerald-400 font-bold mb-1">
-                    ✓ COMPLETED • READY TO STREAM
+              {/* Course header banner */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-4 bg-card border border-border rounded-lg">
+                <div className="space-y-1">
+                  <Badge variant="default">
+                    <Check /> Completed, ready to stream
                   </Badge>
-                  <h3 className="text-base font-bold text-foreground line-clamp-1">{watchingCourse.title}</h3>
-                  <p className="text-[10px] text-muted-foreground">
-                    {videoLessons.length} Video Lessons • {materialZips.length} Material Packages
+                  <h3 className="text-sm font-semibold tracking-tight text-foreground line-clamp-1">{watchingCourse.title}</h3>
+                  <p className="text-xs text-muted-foreground">
+                    {videoLessons.length} video lessons • {materialZips.length} material packages
                   </p>
                 </div>
 
@@ -1175,29 +1149,28 @@ export default function CourseWorkerPanel() {
                       href={`https://drive.google.com/drive/folders/${watchingCourse.driveFolderId}`}
                       target="_blank"
                       rel="noreferrer"
-                      className="px-2.5 py-1.5 bg-secondary border border-border rounded text-[10px] font-bold text-foreground hover:bg-foreground hover:text-background flex items-center gap-1.5 transition-colors"
+                      className="inline-flex h-7 items-center gap-1.5 px-2.5 bg-secondary border border-border rounded-md text-xs font-medium text-foreground hover:bg-accent transition-colors"
                     >
-                      <span>📂</span> Open Drive Folder
+                      <FolderOpen className="size-3.5" /> Open Drive folder
                     </a>
                   )}
                   <Button
                     variant="outline"
                     size="xs"
                     onClick={() => setTab('catalog')}
-                    className="text-[10px]"
                   >
-                    Back to Catalog
+                    Back to catalog
                   </Button>
                 </div>
               </div>
 
-              {/* Main Player & Curriculum Split */}
+              {/* Main player & curriculum split */}
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-                {/* Left (2 Cols): Embedded Video Player */}
+                {/* Left (2 cols): embedded video player */}
                 <div className="lg:col-span-2 space-y-2">
-                  <Card className="p-2 bg-black border-border overflow-hidden">
+                  <Card className="p-2 bg-[#0b0c0e] overflow-hidden">
                     {currentVideoLesson ? (
-                      <div className="relative aspect-video bg-black flex items-center justify-center">
+                      <div className="relative aspect-video bg-[#0b0c0e] flex items-center justify-center">
                         <video
                           ref={videoRef}
                           key={currentVideoLesson.driveFileId || currentVideoLesson.index}
@@ -1221,16 +1194,16 @@ export default function CourseWorkerPanel() {
                     )}
 
                     <div className="p-2 flex items-center justify-between text-xs">
-                      <div className="truncate font-bold text-foreground max-w-[320px]">
+                      <div className="truncate font-medium text-zinc-200 max-w-[320px]">
                         Lesson {currentVideoLesson?.index}: {currentVideoLesson?.fileName || 'Video'}
                       </div>
-                      <div className="flex items-center gap-2">
-                        <label className="flex items-center gap-1 text-[10px] text-muted-foreground cursor-pointer select-none">
+                      <div className="flex items-center gap-3">
+                        <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer select-none">
                           <input
                             type="checkbox"
                             checked={autoplayNext}
                             onChange={(e) => setAutoplayNext(e.target.checked)}
-                            className="rounded border-border"
+                            className="rounded border-border accent-primary"
                           />
                           <span>Auto-play next</span>
                         </label>
@@ -1239,9 +1212,9 @@ export default function CourseWorkerPanel() {
                             href={currentVideoLesson.driveViewLink}
                             target="_blank"
                             rel="noreferrer"
-                            className="text-[10px] text-blue-400 hover:underline"
+                            className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
                           >
-                            [Direct Drive Link]
+                            <ExternalLink className="size-3" /> Direct Drive link
                           </a>
                         )}
                       </div>
@@ -1249,12 +1222,12 @@ export default function CourseWorkerPanel() {
                   </Card>
                 </div>
 
-                {/* Right (1 Col): Lessons Playlist & Materials */}
+                {/* Right (1 col): lessons playlist & materials */}
                 <div className="space-y-3">
-                  <Card className="p-3 bg-card border-border flex flex-col h-[460px]">
-                    <h4 className="font-bold text-foreground text-xs uppercase pb-2 border-b border-border flex items-center justify-between">
-                      <span>Curriculum Playlist</span>
-                      <span className="text-muted-foreground text-[10px]">{videoLessons.length} lessons</span>
+                  <Card className="p-4 flex flex-col h-[460px]">
+                    <h4 className="font-semibold tracking-tight text-foreground text-sm pb-2 border-b border-border flex items-center justify-between">
+                      <span>Curriculum playlist</span>
+                      <span className="text-muted-foreground text-xs font-normal">{videoLessons.length} lessons</span>
                     </h4>
 
                     {/* Scrollable lessons list */}
@@ -1265,33 +1238,33 @@ export default function CourseWorkerPanel() {
                           <button
                             key={lesson.index}
                             onClick={() => setActiveVideoIndex(lesson.index)}
-                            className={`w-full text-left p-2 rounded text-[11px] transition-colors flex items-start gap-2 ${
+                            className={`w-full text-left px-2.5 py-2 rounded-md text-xs transition-colors flex items-start gap-2 ${
                               isSelected
-                                ? 'bg-emerald-600 text-white font-bold'
-                                : 'bg-secondary/60 text-muted-foreground hover:text-foreground hover:bg-secondary'
+                                ? 'bg-primary/15 text-primary border border-primary/30 font-medium'
+                                : 'border border-transparent text-muted-foreground hover:text-foreground hover:bg-secondary/50'
                             }`}
                           >
-                            <span className="text-xs">{isSelected ? '▶' : '○'}</span>
+                            <span className="mt-0.5">{isSelected ? <Play className="size-3" /> : <Circle className="size-3" />}</span>
                             <div className="flex-1 truncate">
                               <p className="truncate">{lesson.fileName}</p>
-                              <span className="text-[9px] opacity-80">{lesson.sizeMB} MB</span>
+                              <span className="text-xs opacity-80">{lesson.sizeMB} MB</span>
                             </div>
                           </button>
                         );
                       })}
                     </div>
 
-                    {/* Downloadable Materials Sub-section */}
+                    {/* Downloadable materials sub-section */}
                     {materialZips.length > 0 && (
                       <div className="pt-2 border-t border-border mt-auto">
-                        <p className="text-[10px] font-bold uppercase text-muted-foreground mb-1">
-                          📦 Downloadable Materials:
+                        <p className={`${fieldLabel} mb-1.5 flex items-center gap-1.5`}>
+                          <Package className="size-3.5" /> Downloadable materials
                         </p>
                         <div className="space-y-1 max-h-24 overflow-y-auto">
                           {materialZips.map(m => (
                             <div
                               key={m.index}
-                              className="flex items-center justify-between p-1 bg-secondary rounded text-[10px]"
+                              className="flex items-center justify-between px-2 py-1.5 bg-secondary/40 border border-border rounded-md text-xs"
                             >
                               <span className="truncate max-w-[140px]">{m.fileName}</span>
                               {m.driveViewLink ? (
@@ -1299,7 +1272,7 @@ export default function CourseWorkerPanel() {
                                   href={m.driveViewLink}
                                   target="_blank"
                                   rel="noreferrer"
-                                  className="text-blue-400 hover:underline"
+                                  className="text-primary hover:underline"
                                 >
                                   Download
                                 </a>
@@ -1319,14 +1292,12 @@ export default function CourseWorkerPanel() {
         </div>
       )}
 
-      {/* ══════════════════════════════════════════════════════════════════════
-          TAB 4: CUSTOM URL IMPORTER
-      ══════════════════════════════════════════════════════════════════════ */}
+      {/* Tab 4: custom URL importer */}
       {tab === 'custom' && (
-        <Card className="p-4 bg-card border-border max-w-2xl mx-auto space-y-4">
+        <Card className="p-4 max-w-2xl mx-auto space-y-4">
           <div>
-            <CardTitle className="text-sm font-bold uppercase text-foreground">
-              Manual Course Downloader & Uploader
+            <CardTitle className="text-sm font-semibold tracking-tight text-foreground">
+              Manual course downloader & uploader
             </CardTitle>
             <CardDescription className="text-xs text-muted-foreground">
               Paste archive URLs (RAR, ZIP, 7Z parts) from Downloadly or any direct CDN to execute the complete pipeline.
@@ -1334,9 +1305,9 @@ export default function CourseWorkerPanel() {
           </div>
 
           <form onSubmit={handleCustomSubmit} className="space-y-3">
-            <div className="space-y-1">
-              <label className="text-[10px] uppercase font-bold text-muted-foreground">
-                Archive Part URLs (One URL per line) *
+            <div className="space-y-1.5">
+              <label className={fieldLabel}>
+                Archive part URLs (one URL per line) *
               </label>
               <textarea
                 rows={5}
@@ -1344,14 +1315,14 @@ export default function CourseWorkerPanel() {
                 value={customUrlsText}
                 onChange={(e) => setCustomUrlsText(e.target.value)}
                 placeholder="https://example.com/Course_Title.part1.rar&#10;https://example.com/Course_Title.part2.rar"
-                className="w-full bg-secondary border border-border rounded p-2 text-xs font-mono text-foreground focus:outline-none"
+                className="w-full bg-secondary border border-border rounded-md p-2 text-xs font-mono text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
               />
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              <div className="space-y-1">
-                <label className="text-[10px] uppercase font-bold text-muted-foreground">
-                  Course Title (Optional, auto-deduced if empty)
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <label className={fieldLabel}>
+                  Course title (optional, auto-deduced if empty)
                 </label>
                 <Input
                   type="text"
@@ -1362,16 +1333,16 @@ export default function CourseWorkerPanel() {
                 />
               </div>
 
-              <div className="space-y-1">
-                <label className="text-[10px] uppercase font-bold text-muted-foreground">
-                  Extraction Password
+              <div className="space-y-1.5">
+                <label className={fieldLabel}>
+                  Extraction password
                 </label>
                 <Input
                   type="text"
                   value={customPassword}
                   onChange={(e) => setCustomPassword(e.target.value)}
                   placeholder="www.downloadly.ir"
-                  className="text-xs h-8 bg-secondary"
+                  className="text-xs h-8 bg-secondary font-mono"
                 />
               </div>
             </div>
@@ -1382,7 +1353,7 @@ export default function CourseWorkerPanel() {
                   type="checkbox"
                   checked={customUploadDrive}
                   onChange={(e) => setCustomUploadDrive(e.target.checked)}
-                  className="rounded border-border"
+                  className="rounded border-border accent-primary"
                 />
                 <span>Auto-upload to Google Drive</span>
               </label>
@@ -1391,9 +1362,9 @@ export default function CourseWorkerPanel() {
             <Button
               type="submit"
               disabled={customSubmitting}
-              className="w-full py-2.5 text-xs font-bold uppercase tracking-wider"
+              className="w-full"
             >
-              {customSubmitting ? 'Starting...' : '⚡ Process Course & Stream Live'}
+              {customSubmitting ? 'Starting...' : <><Zap /> Process course & stream live</>}
             </Button>
           </form>
         </Card>

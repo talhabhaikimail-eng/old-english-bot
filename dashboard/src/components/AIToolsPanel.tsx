@@ -5,13 +5,14 @@ import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
+import { Wand2, ScanText, Mic, Camera, Eraser, Download, type LucideIcon } from 'lucide-react';
 
 function blobUrl(blob: Blob) { return URL.createObjectURL(blob); }
 
 function FileUploadCard({
-  icon, title, accept, onProcess, resultType,
+  icon: Icon, title, accept, onProcess, resultType,
 }: {
-  icon: string; title: string; accept: string;
+  icon: LucideIcon; title: string; accept: string;
   onProcess: (file: File) => Promise<Blob | { text: string }>;
   resultType: 'image' | 'text';
 }) {
@@ -34,28 +35,28 @@ function FileUploadCard({
   };
 
   return (
-    <Card className="flex flex-col justify-between border border-border bg-card p-4 sm:p-5">
+    <Card className="flex flex-col justify-between p-4">
       <div className="space-y-3">
         <div className="flex items-center gap-3">
-          <span className="text-xl">{icon}</span>
-          <h3 className="font-bold font-mono uppercase tracking-wider text-foreground text-xs sm:text-sm">{title}</h3>
+          <Icon className="size-4 text-muted-foreground" />
+          <h3 className="text-sm font-semibold tracking-tight text-foreground">{title}</h3>
         </div>
         <input ref={inputRef} type="file" accept={accept} className="hidden"
           onChange={e => e.target.files?.[0] && handle(e.target.files[0])} />
 
-        {error && <p className="text-xs text-foreground bg-secondary border border-border px-3 py-2 font-mono">[ERROR] {error}</p>}
+        {error && <p className="text-xs text-destructive bg-destructive/10 border border-destructive/30 rounded-md px-3 py-2">{error}</p>}
         {result && resultType === 'image' && (
           <div className="space-y-2">
-            <img src={result} alt="result" className="max-h-48 w-full object-contain bg-secondary border border-border" />
+            <img src={result} alt="result" className="max-h-48 w-full rounded-md object-contain bg-secondary border border-border" />
             <a href={result} download={`result_${Date.now()}.png`}
-              className="block text-center text-xs font-mono underline hover:text-foreground text-muted-foreground">
-              [ DOWNLOAD PROCESSED FILE ]
+              className="flex items-center justify-center gap-1.5 text-xs text-primary hover:underline">
+              <Download className="size-3.5" />Download processed file
             </a>
           </div>
         )}
         {result && resultType === 'text' && (
           <Textarea readOnly value={result} rows={5}
-            className="w-full text-xs font-mono bg-secondary border border-border p-3 text-foreground resize-none" />
+            className="w-full text-xs font-mono bg-secondary p-3 text-foreground resize-none" />
         )}
       </div>
 
@@ -63,9 +64,9 @@ function FileUploadCard({
         onClick={() => inputRef.current?.click()} disabled={loading}
         variant="outline"
         size="sm"
-        className="w-full mt-4 font-mono text-xs font-bold uppercase tracking-wider"
+        className="w-full mt-4"
       >
-        {loading ? 'PROCESSING...' : 'UPLOAD & PROCESS'}
+        {loading ? 'Processing...' : 'Upload & process'}
       </Button>
     </Card>
   );
@@ -87,25 +88,25 @@ function ScreenshotCard() {
   };
 
   return (
-    <Card className="flex flex-col justify-between border border-border bg-card p-4 sm:p-5">
+    <Card className="flex flex-col justify-between p-4">
       <div className="space-y-3">
         <div className="flex items-center gap-3">
-          <span className="text-xl">📸</span>
-          <h3 className="font-bold font-mono uppercase tracking-wider text-foreground text-xs sm:text-sm">Screenshot URL</h3>
+          <Camera className="size-4 text-muted-foreground" />
+          <h3 className="text-sm font-semibold tracking-tight text-foreground">Screenshot URL</h3>
         </div>
         <Input value={url} onChange={e => setUrl(e.target.value)} placeholder="https://example.com"
           className="w-full" />
-        <Label className="flex items-center gap-2 text-xs font-mono text-muted-foreground cursor-pointer">
-          <input type="checkbox" checked={fullPage} onChange={e => setFullPage(e.target.checked)} className="accent-foreground" />
-          FULL PAGE CAPTURE
+        <Label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
+          <input type="checkbox" checked={fullPage} onChange={e => setFullPage(e.target.checked)} className="accent-primary" />
+          Full page capture
         </Label>
-        {error && <p className="text-xs text-foreground bg-secondary border border-border px-3 py-2 font-mono">[ERROR] {error}</p>}
+        {error && <p className="text-xs text-destructive bg-destructive/10 border border-destructive/30 rounded-md px-3 py-2">{error}</p>}
         {imgUrl && (
           <div className="space-y-2">
-            <img src={imgUrl} alt="screenshot" className="max-h-64 w-full object-contain bg-secondary border border-border" />
+            <img src={imgUrl} alt="screenshot" className="max-h-64 w-full rounded-md object-contain bg-secondary border border-border" />
             <a href={imgUrl} download={`screenshot_${Date.now()}.png`}
-              className="block text-center text-xs font-mono underline hover:text-foreground text-muted-foreground">
-              [ DOWNLOAD SCREENSHOT ]
+              className="flex items-center justify-center gap-1.5 text-xs text-primary hover:underline">
+              <Download className="size-3.5" />Download screenshot
             </a>
           </div>
         )}
@@ -114,8 +115,8 @@ function ScreenshotCard() {
       <Button onClick={shoot} disabled={loading || !url}
         variant="outline"
         size="sm"
-        className="w-full mt-4 font-mono text-xs font-bold uppercase tracking-wider">
-        {loading ? 'CAPTURING...' : 'TAKE SCREENSHOT'}
+        className="w-full mt-4">
+        {loading ? 'Capturing...' : 'Take screenshot'}
       </Button>
     </Card>
   );
@@ -138,26 +139,26 @@ function HtmlCleanerCard() {
   };
 
   return (
-    <Card className="flex flex-col justify-between border border-border bg-card p-4 sm:p-5">
+    <Card className="flex flex-col justify-between p-4">
       <div className="space-y-3">
         <div className="flex items-center gap-3">
-          <span className="text-xl">🧹</span>
-          <h3 className="font-bold font-mono uppercase tracking-wider text-foreground text-xs sm:text-sm">HTML Cleaner</h3>
+          <Eraser className="size-4 text-muted-foreground" />
+          <h3 className="text-sm font-semibold tracking-tight text-foreground">HTML cleaner</h3>
         </div>
         <Textarea value={html} onChange={e => setHtml(e.target.value)} placeholder="Paste raw HTML here..." rows={4}
           className="w-full text-xs font-mono resize-none" />
-        {error && <p className="text-xs text-foreground bg-secondary border border-border px-3 py-2 font-mono">[ERROR] {error}</p>}
+        {error && <p className="text-xs text-destructive bg-destructive/10 border border-destructive/30 rounded-md px-3 py-2">{error}</p>}
         {result && (
           <Textarea readOnly value={result} rows={5}
-            className="w-full text-xs font-mono bg-secondary border border-border p-3 text-foreground resize-none mt-2" />
+            className="w-full text-xs font-mono bg-secondary p-3 text-foreground resize-none mt-2" />
         )}
       </div>
 
       <Button onClick={clean} disabled={loading || !html.trim()}
         variant="outline"
         size="sm"
-        className="w-full mt-4 font-mono text-xs font-bold uppercase tracking-wider">
-        {loading ? 'CLEANING...' : 'CLEAN HTML'}
+        className="w-full mt-4">
+        {loading ? 'Cleaning...' : 'Clean HTML'}
       </Button>
     </Card>
   );
@@ -166,17 +167,18 @@ function HtmlCleanerCard() {
 export default function AIToolsPanel() {
   return (
     <div className="space-y-4 text-sm">
-      <div className="border-b border-border pb-2">
-        <p className="text-muted-foreground text-xs font-mono">
+      <div>
+        <h2 className="text-sm font-semibold tracking-tight text-foreground">AI tools</h2>
+        <p className="text-xs text-muted-foreground">
           AI-powered tools processed by local backend workers in the active session.
         </p>
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-        <FileUploadCard icon="🎨" title="Remove Background" accept="image/*" resultType="image"
+        <FileUploadCard icon={Wand2} title="Remove Background" accept="image/*" resultType="image"
           onProcess={api.removeBg} />
-        <FileUploadCard icon="🔍" title="OCR Text Extract" accept="image/*" resultType="text"
+        <FileUploadCard icon={ScanText} title="OCR Text Extract" accept="image/*" resultType="text"
           onProcess={api.ocr} />
-        <FileUploadCard icon="🎙️" title="Whisper Audio" accept="audio/*" resultType="text"
+        <FileUploadCard icon={Mic} title="Whisper Audio" accept="audio/*" resultType="text"
           onProcess={api.transcribe} />
         <ScreenshotCard />
         <HtmlCleanerCard />

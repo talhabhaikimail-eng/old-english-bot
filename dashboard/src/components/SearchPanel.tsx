@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
+import { RefreshCw, Zap, Bot, Plug, Terminal, Cookie, Globe, Search, Sparkles } from 'lucide-react';
 
 type SearchEngine = 'auto' | 'worker' | 'cdp' | 'selenium' | 'cookie' | 'duckduckgo';
 
@@ -43,7 +44,7 @@ export default function SearchPanel() {
   };
 
   return (
-    <div className="space-y-4 text-sm max-w-5xl mx-auto font-mono">
+    <div className="space-y-4 text-[13px] max-w-5xl mx-auto">
       <Card className="border border-border bg-card">
         <CardHeader className="flex flex-row justify-between items-start">
           <div>
@@ -64,29 +65,29 @@ export default function SearchPanel() {
               }
             }}
             variant="outline"
-            size="xs"
-            className="font-mono text-xs uppercase"
+            size="sm"
           >
-            🔄 RESTART WORKERS
+            <RefreshCw /> Restart workers
           </Button>
         </CardHeader>
         <CardContent className="space-y-4">
           {/* Engine selector */}
           <div className="flex flex-wrap items-center gap-1.5">
-            <span className="text-xs text-muted-foreground uppercase font-bold">Engine:</span>
+            <span className="text-xs font-medium text-muted-foreground">Engine</span>
             {(['auto', 'worker', 'cdp', 'selenium', 'cookie', 'duckduckgo'] as SearchEngine[]).map(eng => (
               <Button
                 key={eng}
                 onClick={() => setEngine(eng)}
                 variant="outline"
-                size="xs"
-                className={`font-mono text-xs uppercase ${
+                size="sm"
+                className={
                   engine === eng
-                    ? 'bg-foreground text-background border-foreground font-bold'
-                    : 'bg-secondary text-muted-foreground'
-                }`}
+                    ? 'bg-primary/10 text-primary border-primary/40 hover:bg-primary/15'
+                    : 'text-muted-foreground'
+                }
               >
-                {eng === 'auto' ? '⚡ Auto' : eng === 'worker' ? '🤖 Worker API' : eng === 'cdp' ? '🔌 CDP' : eng === 'selenium' ? '🐍 Selenium' : eng === 'cookie' ? '🍪 Cookie' : '🦆 DuckDuckGo'}
+                {eng === 'auto' ? <Zap /> : eng === 'worker' ? <Bot /> : eng === 'cdp' ? <Plug /> : eng === 'selenium' ? <Terminal /> : eng === 'cookie' ? <Cookie /> : <Globe />}
+                {eng === 'auto' ? 'Auto' : eng === 'worker' ? 'Worker API' : eng === 'cdp' ? 'CDP' : eng === 'selenium' ? 'Selenium' : eng === 'cookie' ? 'Cookie' : 'DuckDuckGo'}
               </Button>
             ))}
           </div>
@@ -96,15 +97,15 @@ export default function SearchPanel() {
             <Button
               onClick={() => setIncludeAI(v => !v)}
               variant="outline"
-              size="xs"
-              className={`font-mono text-xs uppercase ${
+              size="sm"
+              className={
                 includeAI
-                  ? 'bg-foreground text-background border-foreground font-bold'
-                  : 'bg-secondary text-muted-foreground'
-              }`}
+                  ? 'bg-primary/10 text-primary border-primary/40 hover:bg-primary/15'
+                  : 'text-muted-foreground'
+              }
             >
-              <span>{includeAI ? '[X]' : '[ ]'}</span>
-              <span>AI Overview Stream</span>
+              <Sparkles />
+              <span>AI overview stream</span>
             </Button>
           </div>
 
@@ -119,17 +120,17 @@ export default function SearchPanel() {
             <Button
               type="submit"
               disabled={loading || !query.trim()}
-              className="font-mono text-xs uppercase"
-            >
-              {loading ? 'SEARCHING...' : 'SEARCH GOOGLE'}
+              >
+              <Search />
+              {loading ? 'Searching...' : 'Search Google'}
             </Button>
           </form>
-          {error && <div className="p-3 bg-secondary border border-border text-foreground text-xs font-mono">[ERROR] {error}</div>}
+          {error && <div className="rounded-md p-3 bg-destructive/10 border border-destructive/30 text-destructive text-xs">{error}</div>}
         </CardContent>
       </Card>
 
       {loading && (
-        <div className="flex justify-center p-8 text-xs font-mono text-muted-foreground">
+        <div className="flex justify-center p-8 text-xs text-muted-foreground">
           Fetching search results...
         </div>
       )}
@@ -138,8 +139,8 @@ export default function SearchPanel() {
         <div className="space-y-4">
           {usedEngine && (
             <div className="flex items-center gap-2">
-              <Badge variant="outline" className="text-[10px] font-mono">
-                ENGINE: {usedEngine.toUpperCase()}
+              <Badge variant="secondary">
+                Engine: {usedEngine}
               </Badge>
             </div>
           )}
@@ -147,7 +148,8 @@ export default function SearchPanel() {
           {result.aiResponse && (
             <Card className="border border-border bg-secondary p-4 space-y-2">
               <div className="flex items-center gap-2">
-                <span className="font-bold text-xs uppercase text-foreground">[AI OVERVIEW]</span>
+                <Sparkles className="size-4 text-primary" />
+                <span className="text-sm font-semibold tracking-tight text-foreground">AI overview</span>
               </div>
               <div
                 ref={aiRef}
@@ -158,14 +160,14 @@ export default function SearchPanel() {
           )}
 
           <div className="space-y-3">
-            <h4 className="font-bold font-mono text-xs uppercase tracking-wider text-muted-foreground">Organic Search Results ({result.organic.length})</h4>
+            <h4 className="text-xs font-medium text-muted-foreground">Organic search results ({result.organic.length})</h4>
             {result.organic.length === 0 ? (
-              <p className="text-muted-foreground text-xs font-mono">No organic results found.</p>
+              <p className="text-muted-foreground text-xs">No organic results found.</p>
             ) : (
               result.organic.map((item, idx) => (
-                <Card key={idx} className="border border-border bg-card p-4 space-y-1.5 hover:bg-secondary transition-colors">
+                <Card key={idx} className="border border-border bg-card p-4 space-y-1.5 hover:bg-secondary/50 transition-colors">
                   <a href={item.link} target="_blank" rel="noreferrer" className="block space-y-1">
-                    <h4 className="text-foreground hover:underline font-bold text-sm">{item.title}</h4>
+                    <h4 className="text-foreground hover:underline font-semibold text-sm">{item.title}</h4>
                     <div className="text-xs text-muted-foreground font-mono truncate">{item.link}</div>
                     <p className="text-xs text-muted-foreground leading-relaxed">{item.snippet}</p>
                   </a>
@@ -179,21 +181,19 @@ export default function SearchPanel() {
               disabled={page <= 1}
               onClick={() => handleSearch(undefined, Math.max(1, page - 1))}
               variant="outline"
-              size="xs"
-              className="font-mono text-xs uppercase"
+              size="sm"
             >
-              PREVIOUS
+              Previous
             </Button>
-            <div className="px-3 py-1 flex items-center justify-center text-muted-foreground text-xs font-mono border border-border bg-secondary">
-              PAGE {page}
+            <div className="px-3 h-7 flex items-center justify-center text-muted-foreground text-xs rounded-md border border-border bg-secondary">
+              Page {page}
             </div>
             <Button
               onClick={() => handleSearch(undefined, page + 1)}
               variant="outline"
-              size="xs"
-              className="font-mono text-xs uppercase"
+              size="sm"
             >
-              NEXT
+              Next
             </Button>
           </div>
         </div>

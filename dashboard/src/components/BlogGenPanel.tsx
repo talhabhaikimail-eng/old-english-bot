@@ -3,13 +3,14 @@ import { api } from '../api';
 import { Button } from '@/components/ui/button';
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { Loader2, Check, Circle, PenLine, Wand2, Globe, Rocket, ExternalLink } from 'lucide-react';
 
 const STEPS = [
-  '🔍 Querying Google Search for latest news and trends...',
-  '🧠 Having Gemini identify the hottest developer sub-trends...',
-  '📖 Researching chosen sub-trend in-depth on the web...',
-  '✍️ Drafting human-like, citation-free technical blog post...',
-  '🎨 Selecting matched cover image & publishing to site...'
+  'Querying Google Search for latest news and trends...',
+  'Having Gemini identify the hottest developer sub-trends...',
+  'Researching chosen sub-trend in-depth on the web...',
+  'Drafting human-like, citation-free technical blog post...',
+  'Selecting matched cover image & publishing to site...'
 ];
 
 export default function BlogGenPanel() {
@@ -55,25 +56,25 @@ export default function BlogGenPanel() {
   };
 
   return (
-    <div className="space-y-4 max-w-4xl mx-auto text-sm font-mono">
-      <Card className="border border-border bg-card">
+    <div className="space-y-4 max-w-4xl mx-auto text-sm">
+      <Card>
         <CardHeader>
-          <CardTitle>✍️ Automated Technical Blog Generator</CardTitle>
+          <CardTitle className="flex items-center gap-2 text-sm font-semibold tracking-tight"><PenLine className="size-4 text-muted-foreground" />Automated technical blog generator</CardTitle>
           <CardDescription>
             Autonomous trend discovery, Gemini synthesis, and live publication.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="space-y-1.5">
-            <label className="text-[10px] uppercase font-bold tracking-wider text-muted-foreground block">
-              Topic or Technology Keyword
+            <label className="text-xs font-medium text-muted-foreground block">
+              Topic or technology keyword
             </label>
             <Input
               value={topic}
               onChange={e => setTopic(e.target.value)}
               placeholder="e.g. Next.js 15, Rust Async, SQLite in Go..."
               disabled={loading}
-              className="w-full text-xs"
+              className="w-full"
             />
           </div>
 
@@ -81,52 +82,49 @@ export default function BlogGenPanel() {
             <Button
               onClick={() => handleGenerate('custom')}
               disabled={loading || !topic.trim()}
-              className="font-mono text-xs uppercase"
             >
-              🪄 CUSTOM TOPIC
+              <Wand2 /> Custom topic
             </Button>
             <Button
               onClick={() => handleGenerate('discover')}
               disabled={loading}
               variant="outline"
-              className="font-mono text-xs uppercase"
             >
-              🌐 AUTODISCOVER TRENDS
+              <Globe /> Autodiscover trends
             </Button>
             <Button
               onClick={() => handleGenerate('community')}
               disabled={loading}
               variant="outline"
-              className="font-mono text-xs uppercase"
             >
-              🚀 COMMUNITY DIGEST
+              <Rocket /> Community digest
             </Button>
           </div>
 
           {loading && (
-            <div className="bg-secondary border border-border p-4 space-y-3 font-mono">
+            <div className="bg-secondary/40 rounded-lg border border-border p-4 space-y-3">
               <div className="flex items-center gap-2">
-                <span className="text-xs font-bold text-foreground">[GENERATOR ACTIVE]</span>
+                <Loader2 className="size-3.5 animate-spin text-primary" /><span className="text-xs font-medium text-foreground">Generating</span>
               </div>
               <div className="space-y-1.5 text-xs">
                 {STEPS.map((s, idx) => (
                   <div
                     key={idx}
                     className={`flex items-center gap-2 ${idx === stepIndex
-                        ? 'text-foreground font-bold'
+                        ? 'text-foreground font-medium'
                         : idx < stepIndex
                           ? 'text-muted-foreground line-through'
                           : 'text-muted-foreground opacity-40'
                       }`}
                   >
-                    <span>{idx < stepIndex ? '✓' : idx === stepIndex ? '▶' : '○'}</span>
+                    {idx < stepIndex ? <Check className="size-3.5 text-primary" /> : idx === stepIndex ? <Loader2 className="size-3.5 animate-spin" /> : <Circle className="size-3.5" />}
                     <span>{s}</span>
                   </div>
                 ))}
               </div>
-              <div className="w-full bg-background h-1.5 border border-border">
+              <div className="w-full bg-background h-1.5 rounded-full border border-border overflow-hidden">
                 <div
-                  className="bg-foreground h-full transition-all duration-500"
+                  className="bg-primary h-full transition-all duration-500"
                   style={{ width: `${((stepIndex + 1) / STEPS.length) * 100}%` }}
                 />
               </div>
@@ -134,20 +132,20 @@ export default function BlogGenPanel() {
           )}
 
           {error && (
-            <div className="text-xs text-foreground bg-secondary border border-border p-3 font-mono">
-              [ERROR] {error}
+            <div className="text-xs text-destructive bg-destructive/10 border border-destructive/30 rounded-md p-3">
+              {error}
             </div>
           )}
 
           {result && (
-            <div className="bg-secondary border border-border p-4 space-y-3 font-mono">
+            <div className="bg-secondary/40 rounded-lg border border-border p-4 space-y-3">
               <div className="flex items-center gap-2">
-                <span className="text-xs font-bold text-foreground">[SUCCESS: PUBLISHED]</span>
-                <p className="text-[10px] text-muted-foreground">ID: {result.id || 'N/A'}</p>
+                <span className="inline-flex items-center rounded-full border border-primary/30 bg-primary/15 px-2 py-0.5 text-[11px] font-medium text-primary">Published</span>
+                <p className="text-xs text-muted-foreground font-mono">ID: {result.id || 'N/A'}</p>
               </div>
 
               {result.imageUrl && (
-                <div className="border border-border bg-background">
+                <div className="rounded-md overflow-hidden border border-border bg-background">
                   <img
                     src={result.imageUrl}
                     alt={result.title || 'Cover'}
@@ -157,7 +155,7 @@ export default function BlogGenPanel() {
               )}
 
               <div className="space-y-1">
-                <h4 className="text-xs font-bold text-foreground">{result.title}</h4>
+                <h4 className="text-sm font-semibold text-foreground">{result.title}</h4>
                 <p className="text-xs text-muted-foreground">{result.description}</p>
               </div>
 
@@ -165,10 +163,10 @@ export default function BlogGenPanel() {
                 href={result.url || `https://talhacodes.site/blog/${result.slug}`}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="w-full flex items-center justify-center gap-2 py-2 border border-border bg-foreground text-background font-bold text-xs uppercase"
+                className="w-full flex items-center justify-center gap-2 h-8 rounded-md border border-primary bg-primary text-primary-foreground hover:bg-primary/85 font-medium text-xs"
               >
-                <span>🌍</span>
-                <span>OPEN PUBLISHED POST</span>
+                <ExternalLink className="size-3.5" />
+                <span>Open published post</span>
               </a>
             </div>
           )}

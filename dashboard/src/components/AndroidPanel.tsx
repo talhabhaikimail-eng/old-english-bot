@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { api } from '../api';
 import { Button } from '@/components/ui/button';
 import { Card, CardTitle, CardDescription } from '@/components/ui/card';
+import { Smartphone, Play, Activity, Square } from 'lucide-react';
 
 export default function AndroidPanel() {
   const [loading, setLoading] = useState(false);
@@ -19,13 +20,13 @@ export default function AndroidPanel() {
     try {
       const res = await api.androidStart();
       if (res.success) {
-        setResult(`[SUCCESS] ${res.message}\n\nWEB URL: ${res.webUrl || 'Starting container...'}`);
+        setResult(`Success: ${res.message}\n\nWeb URL: ${res.webUrl || 'Starting container...'}`);
         setTimeout(checkStatus, 2000);
       } else {
-        setResult(`[ERROR] ${res.message}\n${res.error || ''}`);
+        setResult(`Error: ${res.message}\n${res.error || ''}`);
       }
     } catch (err: any) {
-      setResult(`[ERROR] ${err.message || String(err)}`);
+      setResult(`Error: ${err.message || String(err)}`);
     } finally {
       setLoading(false);
     }
@@ -39,17 +40,17 @@ export default function AndroidPanel() {
       setStatus(res);
       if (res.running) {
         setResult(
-          `[STATUS: RUNNING]\n\n` +
-          `UPTIME: ${res.uptime || 'Unknown'}\n` +
-          `DEVICE: ${res.deviceInfo || 'Android 13'}\n` +
-          `WEB URL: ${res.webUrl || 'N/A'}`
+          `Status: running\n\n` +
+          `Uptime: ${res.uptime || 'Unknown'}\n` +
+          `Device: ${res.deviceInfo || 'Android 13'}\n` +
+          `Web URL: ${res.webUrl || 'N/A'}`
         );
       } else {
-        setResult('[STATUS: STOPPED] No active Android emulator instance detected.');
+        setResult('Status: stopped. No active Android emulator instance detected.');
         setStatus(null);
       }
     } catch (err: any) {
-      setResult(`[ERROR] ${err.message || String(err)}`);
+      setResult(`Error: ${err.message || String(err)}`);
     } finally {
       setLoading(false);
     }
@@ -61,28 +62,28 @@ export default function AndroidPanel() {
     try {
       const res = await api.androidStop();
       if (res.success) {
-        setResult(`[SUCCESS] ${res.message}`);
+        setResult(`Success: ${res.message}`);
         setStatus(null);
       } else {
-        setResult(`[WARN] ${res.message}`);
+        setResult(`Warning: ${res.message}`);
       }
     } catch (err: any) {
-      setResult(`[ERROR] ${err.message || String(err)}`);
+      setResult(`Error: ${err.message || String(err)}`);
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="space-y-4 text-sm font-mono">
+    <div className="space-y-4 text-sm">
       {/* Info card */}
-      <Card className="border border-border bg-card p-4 sm:p-5">
+      <Card className="p-4">
         <div className="flex items-start gap-3 mb-4">
-          <div className="w-8 h-8 border border-border bg-secondary flex items-center justify-center text-base flex-shrink-0">
-            📱
+          <div className="size-8 rounded-md border border-border bg-secondary flex items-center justify-center flex-shrink-0 text-muted-foreground">
+            <Smartphone className="size-4" />
           </div>
           <div className="flex-1">
-            <CardTitle className="text-xs uppercase tracking-wider text-foreground mb-1">Android 13 Virtual Device</CardTitle>
+            <CardTitle className="text-sm font-semibold tracking-tight text-foreground mb-1">Android 13 Virtual Device</CardTitle>
             <CardDescription className="text-xs text-muted-foreground leading-relaxed">
               Cloud-hosted Android system container with full browser Web UI stream.
             </CardDescription>
@@ -90,33 +91,32 @@ export default function AndroidPanel() {
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
-          <div className="bg-secondary border border-border p-2.5">
-            <div className="text-[10px] text-muted-foreground uppercase font-bold mb-0.5">Version</div>
-            <div className="text-foreground font-bold">Android 13 (Tiramisu)</div>
+          <div className="bg-secondary/40 rounded-md border border-border p-2.5">
+            <div className="text-xs font-medium text-muted-foreground mb-0.5">Version</div>
+            <div className="text-foreground font-medium">Android 13 (Tiramisu)</div>
           </div>
-          <div className="bg-secondary border border-border p-2.5">
-            <div className="text-[10px] text-muted-foreground uppercase font-bold mb-0.5">Profile</div>
-            <div className="text-foreground font-bold">Samsung Galaxy S10</div>
+          <div className="bg-secondary/40 rounded-md border border-border p-2.5">
+            <div className="text-xs font-medium text-muted-foreground mb-0.5">Profile</div>
+            <div className="text-foreground font-medium">Samsung Galaxy S10</div>
           </div>
-          <div className="bg-secondary border border-border p-2.5">
-            <div className="text-[10px] text-muted-foreground uppercase font-bold mb-0.5">Stream Protocol</div>
-            <div className="text-foreground font-bold">WebRTC / noVNC Stream</div>
+          <div className="bg-secondary/40 rounded-md border border-border p-2.5">
+            <div className="text-xs font-medium text-muted-foreground mb-0.5">Stream Protocol</div>
+            <div className="text-foreground font-medium">WebRTC / noVNC Stream</div>
           </div>
         </div>
       </Card>
 
       {/* Control buttons */}
-      <Card className="border border-border bg-card p-4 sm:p-5">
-        <CardTitle className="text-xs uppercase tracking-wider text-foreground mb-3">Instance Controls</CardTitle>
+      <Card className="p-4">
+        <CardTitle className="text-sm font-semibold tracking-tight text-foreground mb-3">Instance Controls</CardTitle>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
           <Button
             onClick={startEmulator}
             disabled={loading}
-            variant="outline"
+            variant="default"
             size="sm"
-            className="text-xs uppercase"
           >
-            {loading ? 'PROCESSING...' : '▶ START EMULATOR'}
+            {loading ? 'Processing...' : <><Play /> Start emulator</>}
           </Button>
 
           <Button
@@ -124,28 +124,26 @@ export default function AndroidPanel() {
             disabled={loading}
             variant="outline"
             size="sm"
-            className="text-xs uppercase"
           >
-            {loading ? 'PROCESSING...' : '📊 CHECK STATUS'}
+            {loading ? 'Processing...' : <><Activity /> Check status</>}
           </Button>
 
           <Button
             onClick={stopEmulator}
             disabled={loading}
-            variant="outline"
+            variant="destructive"
             size="sm"
-            className="text-xs uppercase"
           >
-            {loading ? 'PROCESSING...' : '⏹ STOP EMULATOR'}
+            {loading ? 'Processing...' : <><Square /> Stop emulator</>}
           </Button>
         </div>
       </Card>
 
       {/* Result display */}
       {result && (
-        <Card className="border border-border bg-card p-4">
-          <CardTitle className="text-xs uppercase tracking-wider text-foreground mb-2">Diagnostic Output</CardTitle>
-          <pre className="text-xs text-foreground whitespace-pre-wrap bg-secondary border border-border p-3">
+        <Card className="p-4">
+          <CardTitle className="text-sm font-semibold tracking-tight text-foreground mb-2">Diagnostic output</CardTitle>
+          <pre className="text-xs text-foreground whitespace-pre-wrap font-mono bg-secondary/40 rounded-md border border-border p-3">
             {result}
           </pre>
         </Card>

@@ -4,10 +4,11 @@ import { Button } from '@/components/ui/button';
 import { Card, CardTitle, CardDescription } from '@/components/ui/card';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
+import { Brain, Download, Play, Square, Trash2, RefreshCw, Package, HardDrive, Zap, Send, MessageSquare } from 'lucide-react';
 
 function CustomBadge({ text }: { text: string }) {
   return (
-    <Badge variant="outline" className="text-[10px] font-mono border-border bg-secondary">
+    <Badge variant="secondary">
       {text}
     </Badge>
   );
@@ -16,13 +17,14 @@ function CustomBadge({ text }: { text: string }) {
 function StatusBar({ status }: { status: LLMStatus | null }) {
   if (!status) return null;
   return (
-    <div className="flex items-center gap-2 px-3 py-1.5 border border-border bg-secondary text-xs font-mono">
-      <span className="font-bold">
+    <div className="flex items-center gap-2 px-2.5 h-7 rounded-md border border-border bg-secondary text-xs">
+      <span className={`size-1.5 rounded-full ${!status.server_running ? 'bg-destructive' : status.loaded ? 'bg-primary' : 'bg-muted-foreground'}`} />
+      <span className="font-medium">
         {!status.server_running
-          ? '[SERVER STOPPED]'
+          ? 'Server stopped'
           : status.loaded
-            ? `[MODEL: ${status.label?.toUpperCase()}] (${status.ctx?.toLocaleString()} CTX)`
-            : '[NO MODEL LOADED]'}
+            ? `Model: ${status.label} (${status.ctx?.toLocaleString()} ctx)`
+            : 'No model loaded'}
       </span>
     </div>
   );
@@ -48,32 +50,32 @@ function ModelCard({
   return (
     <Card className="relative border border-border bg-card p-4 flex flex-col justify-between gap-3">
       {model.loaded && (
-        <Badge variant="outline" className="absolute top-3 right-3 text-[9px] bg-foreground text-background font-bold">
-          [ACTIVE]
+        <Badge className="absolute top-3 right-3">
+          Active
         </Badge>
       )}
 
       <div>
         <div className="flex items-start gap-2 pr-16">
-          <div className="w-7 h-7 border border-border bg-secondary flex items-center justify-center text-sm flex-shrink-0 font-mono">
-            🧠
+          <div className="size-7 rounded-md border border-border bg-secondary flex items-center justify-center text-muted-foreground flex-shrink-0">
+            <Brain className="size-4" />
           </div>
           <div className="min-w-0">
-            <CardTitle className="font-bold font-mono text-xs uppercase tracking-wider text-foreground truncate">{model.label}</CardTitle>
+            <CardTitle className="truncate">{model.label}</CardTitle>
             <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{model.description}</p>
           </div>
         </div>
 
         <div className="flex items-center gap-1.5 mt-2.5 flex-wrap">
-          {model.tags.map(t => <CustomBadge key={t} text={t.toUpperCase()} />)}
+          {model.tags.map(t => <CustomBadge key={t} text={t} />)}
           <CustomBadge text={`${model.size_gb}GB`} />
-          <CustomBadge text={`${(model.ctx / 1024).toFixed(model.ctx >= 4096 ? 0 : 1)}K CTX`} />
+          <CustomBadge text={`${(model.ctx / 1024).toFixed(model.ctx >= 4096 ? 0 : 1)}K ctx`} />
         </div>
       </div>
 
       {model.download_status === 'error' && model.download_error && (
-        <p className="text-[11px] text-foreground bg-secondary border border-border px-2 py-1 font-mono">
-          [ERROR] {model.download_error}
+        <p className="text-[11px] text-destructive bg-destructive/10 border border-destructive/30 rounded-md px-2 py-1">
+          {model.download_error}
         </p>
       )}
 
@@ -82,15 +84,15 @@ function ModelCard({
           <Button
             onClick={() => onDownload(model.id)}
             variant="outline"
-            size="xs"
-            className="flex-1 font-mono text-[10px] uppercase"
+            size="sm"
+            className="flex-1"
           >
-            ⬇ DOWNLOAD GGUF
+            <Download /> Download GGUF
           </Button>
         )}
         {isDownloading && (
-          <div className="flex-1 py-1 bg-secondary border border-border text-muted-foreground text-[10px] font-mono text-center font-bold">
-            DOWNLOADING...
+          <div className="flex-1 h-7 flex items-center justify-center rounded-md bg-secondary border border-border text-muted-foreground text-xs font-medium">
+            Downloading...
           </div>
         )}
         {model.downloaded && !model.loaded && !isDownloading && (
@@ -98,19 +100,18 @@ function ModelCard({
             <Button
               onClick={() => onLoad(model.id)}
               variant="outline"
-              size="xs"
-              className="flex-1 font-mono text-[10px] uppercase font-bold"
+              size="sm"
+              className="flex-1"
             >
-              ▶ LOAD MODEL
+              <Play /> Load model
             </Button>
             <Button
               onClick={() => onDelete(model.id)}
               variant="outline"
-              size="xs"
-              className="px-2 font-mono text-[10px]"
+              size="icon-sm"
               title="Delete model file"
             >
-              🗑
+              <Trash2 />
             </Button>
           </>
         )}
@@ -118,10 +119,10 @@ function ModelCard({
           <Button
             onClick={onUnload}
             variant="outline"
-            size="xs"
-            className="flex-1 font-mono text-[10px] uppercase"
+            size="sm"
+            className="flex-1"
           >
-            ⏹ UNLOAD MODEL
+            <Square /> Unload model
           </Button>
         )}
       </div>
@@ -252,25 +253,25 @@ function ChatPanel({ modelLabel }: { modelLabel: string }) {
   };
 
   return (
-    <div className="flex flex-col gap-3 font-mono">
+    <div className="flex flex-col gap-3">
       {/* Settings row */}
       <div className="flex flex-wrap gap-2 items-center text-xs">
         <div className="flex items-center gap-1.5">
-          <label className="text-[10px] text-muted-foreground uppercase font-bold">Max tokens</label>
+          <label className="text-xs font-medium text-muted-foreground">Max tokens</label>
           <select
             value={maxTokens}
             onChange={e => setMaxTokens(Number(e.target.value))}
-            className="border border-border bg-secondary px-2 py-0.5 text-xs text-foreground outline-none"
+            className="w-auto h-8 rounded-md border border-input bg-transparent px-2.5 text-xs text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/25"
           >
             {[128, 256, 512, 1024, 2048].map(v => <option key={v} value={v}>{v}</option>)}
           </select>
         </div>
         <div className="flex items-center gap-1.5">
-          <label className="text-[10px] text-muted-foreground uppercase font-bold">Temperature</label>
+          <label className="text-xs font-medium text-muted-foreground">Temperature</label>
           <select
             value={temperature}
             onChange={e => setTemperature(Number(e.target.value))}
-            className="border border-border bg-secondary px-2 py-0.5 text-xs text-foreground outline-none"
+            className="w-auto h-8 rounded-md border border-input bg-transparent px-2.5 text-xs text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/25"
           >
             {[0.1, 0.3, 0.5, 0.7, 0.9, 1.0].map(v => <option key={v} value={v}>{v}</option>)}
           </select>
@@ -279,16 +280,16 @@ function ChatPanel({ modelLabel }: { modelLabel: string }) {
           onClick={() => setHistory([])}
           disabled={streaming}
           variant="outline"
-          size="xs"
-          className="ml-auto text-[10px] uppercase font-mono"
+          size="sm"
+          className="ml-auto"
         >
-          CLEAR CHAT
+          Clear chat
         </Button>
       </div>
 
       {/* System prompt */}
       <div>
-        <label className="text-[10px] text-muted-foreground uppercase font-bold block mb-1">System instructions</label>
+        <label className="text-xs font-medium text-muted-foreground block mb-1">System instructions</label>
         <Textarea
           value={systemPrompt}
           onChange={e => setSystemPrompt(e.target.value)}
@@ -298,7 +299,7 @@ function ChatPanel({ modelLabel }: { modelLabel: string }) {
       </div>
 
       {/* Chat history */}
-      <div className="bg-secondary border border-border p-3 sm:p-4 min-h-[260px] max-h-[420px] overflow-y-auto space-y-3">
+      <div className="bg-secondary/40 rounded-lg border border-border p-3 sm:p-4 min-h-[260px] max-h-[420px] overflow-y-auto space-y-3">
         {history.length === 0 && (
           <p className="text-muted-foreground text-xs text-center mt-8">
             Session ready with {modelLabel}. Type a prompt to begin.
@@ -306,20 +307,20 @@ function ChatPanel({ modelLabel }: { modelLabel: string }) {
         )}
         {history.map((msg, i) => (
           <div key={i} className={`flex gap-2 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-            <div className={`max-w-[85%] p-3 text-xs border ${
+            <div className={`max-w-[85%] p-3 text-xs rounded-lg border ${
               msg.role === 'user'
-                ? 'bg-foreground text-background border-foreground font-medium'
+                ? 'bg-primary/10 text-foreground border-primary/30'
                 : 'bg-background text-foreground border-border'
             }`}>
-              <div className="text-[9px] uppercase font-bold tracking-wider opacity-60 mb-1">
-                {msg.role === 'user' ? 'USER' : modelLabel}
+              <div className="text-[11px] font-medium text-muted-foreground mb-1">
+                {msg.role === 'user' ? 'You' : modelLabel}
               </div>
               <pre className="whitespace-pre-wrap font-mono text-xs">{msg.content}</pre>
             </div>
           </div>
         ))}
         {error && (
-          <p className="text-xs text-foreground bg-secondary border border-border p-2">[ERROR] {error}</p>
+          <p className="text-xs text-destructive bg-destructive/10 border border-destructive/30 rounded-md p-2">{error}</p>
         )}
         <div ref={bottomRef} />
       </div>
@@ -339,17 +340,15 @@ function ChatPanel({ modelLabel }: { modelLabel: string }) {
           <Button
             onClick={stop}
             variant="outline"
-            className="font-mono text-xs uppercase"
           >
-            ⏹ STOP
+            <Square /> Stop
           </Button>
         ) : (
           <Button
             onClick={send}
             disabled={!input.trim()}
-            className="font-mono text-xs uppercase"
           >
-            SEND ▶
+            Send <Send />
           </Button>
         )}
       </div>
@@ -400,7 +399,7 @@ export default function LLMPanel() {
       const r = await api.llmDownload(id);
       flash(r.message);
     } catch (e) {
-      flash(`[ERROR] ${(e as Error).message}`);
+      flash(`Error: ${(e as Error).message}`);
       setDownloading(prev => { const s = new Set(prev); s.delete(id); return s; });
     }
   };
@@ -409,11 +408,11 @@ export default function LLMPanel() {
     setLoadingModel(id);
     try {
       const r = await api.llmLoad(id);
-      flash(`[SUCCESS] ${r.label} loaded!`);
+      flash(`${r.label} loaded.`);
       setTab('chat');
       await refresh();
     } catch (e) {
-      flash(`[ERROR] ${(e as Error).message}`);
+      flash(`Error: ${(e as Error).message}`);
     } finally {
       setLoadingModel(null);
     }
@@ -425,7 +424,7 @@ export default function LLMPanel() {
       flash('Model unloaded.');
       await refresh();
     } catch (e) {
-      flash(`[ERROR] ${(e as Error).message}`);
+      flash(`Error: ${(e as Error).message}`);
     }
   };
 
@@ -436,7 +435,7 @@ export default function LLMPanel() {
       flash('Model file deleted.');
       await refresh();
     } catch (e) {
-      flash(`[ERROR] ${(e as Error).message}`);
+      flash(`Error: ${(e as Error).message}`);
     }
   };
 
@@ -444,7 +443,7 @@ export default function LLMPanel() {
   const downloadedCount = models.filter(m => m.downloaded).length;
 
   return (
-    <div className="space-y-4 text-sm font-mono">
+    <div className="space-y-4 text-[13px]">
       {/* Header row */}
       <div className="flex flex-wrap items-center gap-3">
         <div className="flex-1">
@@ -453,56 +452,57 @@ export default function LLMPanel() {
           </p>
         </div>
         <StatusBar status={status} />
-        <Button onClick={refresh} variant="outline" size="xs" className="font-mono text-xs uppercase">
-          REFRESH
+        <Button onClick={refresh} variant="outline" size="sm">
+          <RefreshCw /> Refresh
         </Button>
       </div>
 
       {/* Stats row */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         {[
-          { label: 'Available Models', value: models.length.toString(), icon: '📦' },
-          { label: 'Downloaded', value: downloadedCount.toString(), icon: '💾' },
-          { label: 'Active Model', value: status?.label ?? 'None', icon: '⚡' },
+          { label: 'Available models', value: models.length.toString(), icon: Package },
+          { label: 'Downloaded', value: downloadedCount.toString(), icon: HardDrive },
+          { label: 'Active model', value: status?.label ?? 'None', icon: Zap },
         ].map(stat => (
           <Card key={stat.label} className="border border-border bg-card p-3 flex items-center gap-3">
-            <div className="text-lg">{stat.icon}</div>
-            <div className="flex-1">
-              <CardTitle className="text-foreground font-bold text-base">{stat.value}</CardTitle>
-              <CardDescription className="text-muted-foreground text-[10px] uppercase font-bold">{stat.label}</CardDescription>
+            <div className="size-8 rounded-md bg-secondary border border-border flex items-center justify-center text-muted-foreground"><stat.icon className="size-4" /></div>
+            <div className="flex-1 min-w-0">
+              <CardTitle className="truncate">{stat.value}</CardTitle>
+              <CardDescription>{stat.label}</CardDescription>
             </div>
           </Card>
         ))}
       </div>
 
       {/* Tabs */}
-      <div className="flex border border-border bg-secondary p-0.5">
+      <div className="flex rounded-md border border-border bg-secondary p-0.5">
         {(['models', 'chat'] as const).map(t => (
           <Button
             key={t}
             onClick={() => setTab(t)}
             variant="ghost"
             size="sm"
-            className={`flex-1 font-mono text-xs uppercase ${
+            className={`flex-1 ${
               tab === t
-                ? 'bg-foreground text-background font-bold'
+                ? 'bg-card text-foreground border-border hover:bg-card'
                 : 'text-muted-foreground hover:text-foreground'
             }`}
           >
-            {t === 'models' ? '📦 Models Catalogue' : '💬 Interactive Chat'}
+            {t === 'models' ? <Package /> : <MessageSquare />}
+            {t === 'models' ? 'Models catalogue' : 'Interactive chat'}
           </Button>
         ))}
       </div>
 
       {actionMsg && (
-        <div className="p-2 bg-secondary border border-border text-xs text-foreground font-mono">
+        <div className="rounded-md p-2.5 bg-secondary border border-border text-xs text-foreground">
           {actionMsg}
         </div>
       )}
 
       {error && (
-        <div className="p-2 bg-secondary border border-border text-xs text-foreground font-mono">
-          [ERROR] {error}
+        <div className="rounded-md p-2.5 bg-destructive/10 border border-destructive/30 text-xs text-destructive">
+          {error}
         </div>
       )}
 
@@ -538,15 +538,14 @@ export default function LLMPanel() {
         <Card className="border border-border bg-card p-4">
           {!status?.loaded ? (
             <div className="text-center py-10 space-y-3">
-              <div className="text-3xl">🧠</div>
+              <Brain className="size-8 mx-auto text-muted-foreground" />
               <p className="text-muted-foreground text-xs">Load a model from the Models tab to start chatting.</p>
               <Button
                 onClick={() => setTab('models')}
                 variant="outline"
                 size="sm"
-                className="font-mono text-xs uppercase"
               >
-                GO TO MODELS
+                Go to models
               </Button>
             </div>
           ) : (

@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { Clapperboard, Play, Search, Star, AlertCircle, Loader2 } from 'lucide-react';
 import { api, MovieResult } from '../api';
 import { Button } from '@/components/ui/button';
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from '@/components/ui/card';
@@ -27,11 +28,11 @@ export default function MoviesPanel() {
   };
 
   return (
-    <div className="space-y-6 max-w-5xl mx-auto text-sm">
-      <Card className="border border-border bg-card">
+    <div className="space-y-4 max-w-5xl mx-auto text-[13px]">
+      <Card>
         <CardHeader>
-          <CardTitle>Discover Movies & Series</CardTitle>
-          <CardDescription>Search TMDB catalogue for titles, overviews, and streams.</CardDescription>
+          <CardTitle className="text-sm font-semibold tracking-tight">Discover movies & series</CardTitle>
+          <CardDescription className="text-xs">Search TMDB catalogue for titles, overviews, and streams.</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="flex flex-col sm:flex-row gap-2">
@@ -45,28 +46,29 @@ export default function MoviesPanel() {
             <Button
               onClick={search}
               disabled={searching || !query.trim()}
-              className="font-mono text-xs uppercase"
             >
-              {searching ? 'SEARCHING...' : 'SEARCH TMDB'}
+              {searching ? <Loader2 className="animate-spin" /> : <Search />}
+              {searching ? 'Searching...' : 'Search TMDB'}
             </Button>
           </div>
         </CardContent>
       </Card>
 
       {error && (
-        <div className="text-xs text-foreground bg-secondary border border-border px-4 py-3 font-mono">
-          [ERROR] {error}
+        <div className="flex items-start gap-2 text-xs text-destructive bg-destructive/10 border border-destructive/30 rounded-md px-3 py-2.5">
+          <AlertCircle className="size-4 shrink-0" />
+          <span>{error}</span>
         </div>
       )}
 
       {results.length > 0 && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
           {results.map(m => (
             <Card
               key={m.tmdbId}
-              className="flex flex-col justify-between border border-border bg-card"
+              className="flex flex-col justify-between overflow-hidden p-0 gap-0 hover:border-foreground/30 transition-colors"
             >
-              <div className="space-y-3">
+              <div>
                 <div className="relative aspect-[16/10] bg-secondary border-b border-border overflow-hidden flex items-center justify-center">
                   {m.posterUrl ? (
                     <img
@@ -75,15 +77,15 @@ export default function MoviesPanel() {
                       className="w-full h-full object-cover"
                     />
                   ) : (
-                    <div className="text-3xl">🎬</div>
+                    <Clapperboard className="size-8 text-muted-foreground" />
                   )}
-                  
-                  <Badge variant="outline" className="absolute top-2 left-2 text-[9px] bg-background">
-                    {m.mediaType === 'tv' ? 'TV SHOW' : 'MOVIE'}
+
+                  <Badge variant="secondary" className="absolute top-2 left-2 bg-background/90">
+                    {m.mediaType === 'tv' ? 'TV show' : 'Movie'}
                   </Badge>
-                  
+
                   {m.releaseDate && (
-                    <Badge variant="outline" className="absolute top-2 right-2 text-[9px] bg-background">
+                    <Badge variant="secondary" className="absolute top-2 right-2 bg-background/90">
                       {m.releaseDate.slice(0, 4)}
                     </Badge>
                   )}
@@ -91,10 +93,10 @@ export default function MoviesPanel() {
 
                 <div className="p-4 space-y-2">
                   <div className="flex items-center justify-between gap-2">
-                    <h3 className="font-bold font-mono text-xs uppercase tracking-wider text-foreground truncate">{m.title}</h3>
+                    <h3 className="font-semibold tracking-tight text-sm text-foreground truncate">{m.title}</h3>
                     {m.voteAverage > 0 && (
-                      <Badge variant="outline" className="text-[10px] font-mono shrink-0">
-                        ⭐ {m.voteAverage.toFixed(1)}
+                      <Badge variant="outline" className="shrink-0">
+                        <Star className="text-amber-500" /> {m.voteAverage.toFixed(1)}
                       </Badge>
                     )}
                   </div>
@@ -111,10 +113,10 @@ export default function MoviesPanel() {
                   href={m.watchUrl}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="w-full flex items-center justify-center gap-1.5 py-2 border border-border bg-secondary hover:bg-foreground hover:text-background text-foreground text-xs font-mono font-bold uppercase transition-colors"
+                  className="w-full inline-flex h-8 items-center justify-center gap-1.5 rounded-md border border-border bg-secondary hover:bg-accent text-foreground text-xs font-medium transition-colors"
                 >
-                  <span>▶</span>
-                  <span>WATCH CONTENT</span>
+                  <Play className="size-3.5" />
+                  <span>Watch content</span>
                 </a>
               </div>
             </Card>
