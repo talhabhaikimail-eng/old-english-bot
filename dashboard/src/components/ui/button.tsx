@@ -5,24 +5,24 @@ import { Slot } from "radix-ui"
 import { cn } from "@/lib/utils"
 
 const buttonVariants = cva(
-  "group/button inline-flex shrink-0 items-center justify-center rounded-none border border-transparent bg-clip-padding text-sm font-semibold uppercase tracking-wider whitespace-nowrap transition-all outline-none select-none focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary active:translate-y-px disabled:pointer-events-none disabled:opacity-40 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 cursor-pointer",
+  "group/button inline-flex shrink-0 items-center justify-center rounded-md border border-transparent bg-clip-padding text-sm font-medium whitespace-nowrap transition-all outline-none select-none focus-visible:ring-2 focus-visible:ring-primary/40 active:translate-y-px disabled:pointer-events-none disabled:opacity-40 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 cursor-pointer",
   {
     variants: {
       variant: {
-        default: "bg-primary text-primary-foreground hover:opacity-90 border-primary",
+        default: "bg-primary text-primary-foreground hover:bg-primary/85 border-primary",
         outline:
-          "border-border bg-background text-foreground hover:bg-foreground hover:text-background border-border",
+          "border-border bg-transparent text-foreground hover:bg-secondary hover:border-primary/50",
         secondary:
-          "bg-secondary text-secondary-foreground hover:bg-muted border-border",
+          "bg-secondary text-secondary-foreground hover:bg-accent border-border",
         ghost:
-          "hover:bg-secondary hover:text-foreground text-foreground",
+          "hover:bg-secondary hover:text-foreground text-muted-foreground",
         destructive:
-          "bg-background text-foreground border border-border hover:bg-foreground hover:text-background",
+          "bg-destructive/10 text-destructive border border-destructive/30 hover:bg-destructive/20",
         link: "text-foreground underline-offset-4 hover:underline p-0 h-auto font-normal",
       },
       size: {
         default: "h-8 gap-2 px-3",
-        xs: "h-6 gap-1 px-2 text-[10px]",
+        xs: "h-6 gap-1 px-2 text-[11px]",
         sm: "h-7 gap-1.5 px-2.5 text-xs",
         lg: "h-10 gap-2.5 px-4 text-sm font-bold",
         icon: "size-8",
