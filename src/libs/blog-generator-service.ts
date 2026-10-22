@@ -664,9 +664,10 @@ You MUST respond with a JSON object matching this schema:
   }
 
   // Step 4: Post to Vercel Endpoint (temporarily disabled)
-  console.log('[Blog Gen] Blog posting is temporarily disabled; skipping publish.');
-  return { success: false, message: 'Blog posting is temporarily disabled.' };
-  // eslint-disable-next-line no-unreachable
+  if (process.env.BLOG_POSTING_ENABLED !== 'true') {
+    console.log('[Blog Gen] Blog posting is temporarily disabled (set BLOG_POSTING_ENABLED=true to re-enable); skipping publish.');
+    return { success: false, message: 'Blog posting is temporarily disabled.' };
+  }
   const blogApiKey = process.env.BLOG_API_KEY;
   if (!blogApiKey) {
     return { success: false, message: 'Missing BLOG_API_KEY in environment variables.' };
