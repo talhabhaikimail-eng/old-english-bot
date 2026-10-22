@@ -663,7 +663,10 @@ You MUST respond with a JSON object matching this schema:
     return { success: false, message: `Failed to generate blog content via Gemini: ${err.message}` };
   }
 
-  // Step 4: Post to Vercel Endpoint
+  // Step 4: Post to Vercel Endpoint (temporarily disabled)
+  console.log('[Blog Gen] Blog posting is temporarily disabled; skipping publish.');
+  return { success: false, message: 'Blog posting is temporarily disabled.' };
+  // eslint-disable-next-line no-unreachable
   const blogApiKey = process.env.BLOG_API_KEY;
   if (!blogApiKey) {
     return { success: false, message: 'Missing BLOG_API_KEY in environment variables.' };
