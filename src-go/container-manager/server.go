@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,12 +11,10 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
-
-	"gopkg.in/yaml.v3"
 )
 
 type StartRequest struct {
@@ -59,6 +58,8 @@ type ServiceSetting struct {
 	DomainMode   string            `json:"domainMode"`
 	CustomDomain string            `json:"customDomain"`
 	Env          map[string]string `json:"env"`
+	Port         int               `json:"port,omitempty"`    // container port the tunnel targets (default: first published port)
+	Primary      bool              `json:"primary,omitempty"` // this service's URL becomes the stack URL
 }
 
 type DeployComposeRequest struct {
@@ -134,7 +135,7 @@ func handleGetSessions(w http.ResponseWriter, r *http.Request) {
 			Command:          s.Metadata.Command,
 			Args:             s.Metadata.Args,
 			YAML:             s.Metadata.YAML,
-			ServiceSettings:  s.Metadata.ServiceSettings,
+			ServiceSettings:  maskServiceSettings(s.Metadata.ServiceSettings),
 			TTLMinutes:       s.Metadata.TTLMinutes,
 			ExpiresAt:        s.Metadata.ExpiresAt,
 			IsDemo:           s.Metadata.IsDemo,
@@ -605,16 +606,12 @@ func handleStopContainer(w http.ResponseWriter, r *http.Request) {
 
 	meta := sess.Metadata
 	var stopErr error
+	if opActive(req.SessionID) && !req.Force {
+		writeError(w, http.StatusConflict, "A deployment is running for this session; wait for it or use force=true")
+		return
+	}
 	if sess.Type == "docker-compose" {
-		stopErr = dockerComposeDown(meta.ComposeFile)
-		for _, svc := range meta.Services {
-			svcMeta := SessionMetadata{
-				TunnelPid:    svc.TunnelPid,
-				TunnelID:     svc.TunnelID,
-				CustomDomain: svc.CustomDomain,
-			}
-			cleanupCloudflareResources(svcMeta)
-		}
+		stopErr = teardownComposeStack(sess)
 	} else {
 		stopErr = dockerStopAndRemove(meta.ContainerName)
 		cleanupCloudflareResources(meta)
@@ -655,71 +652,12 @@ func handleParseCompose(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	if _, err := parseComposeForDeploy(req.YAML); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 
 	writeJSON(w, http.StatusOK, normalized)
-}
-
-func parsePorts(portStr string) (int, int, error) {
-	parts := strings.Split(portStr, ":")
-	if len(parts) == 1 {
-		var containerPort int
-		_, err := fmt.Sscanf(parts[0], "%d", &containerPort)
-		return 0, containerPort, err
-	} else if len(parts) == 2 {
-		var hostPort, containerPort int
-		_, err := fmt.Sscanf(parts[0], "%d", &hostPort)
-		if err != nil {
-			return 0, 0, err
-		}
-		_, err = fmt.Sscanf(parts[1], "%d", &containerPort)
-		return hostPort, containerPort, err
-	} else if len(parts) == 3 {
-		var hostPort, containerPort int
-		_, err := fmt.Sscanf(parts[1], "%d", &hostPort)
-		if err != nil {
-			return 0, 0, err
-		}
-		_, err = fmt.Sscanf(parts[2], "%d", &containerPort)
-		return hostPort, containerPort, err
-	}
-	return 0, 0, fmt.Errorf("invalid port format: %s", portStr)
-}
-
-func mergeEnvironment(service map[string]interface{}, overrides map[string]string) {
-	env, exists := service["environment"]
-	merged := make(map[string]string)
-
-	if exists {
-		switch envVal := env.(type) {
-		case map[string]interface{}:
-			for k, v := range envVal {
-				merged[k] = fmt.Sprintf("%v", v)
-			}
-		case []interface{}:
-			for _, item := range envVal {
-				if itemStr, ok := item.(string); ok {
-					parts := strings.SplitN(itemStr, "=", 2)
-					if len(parts) == 2 {
-						merged[parts[0]] = parts[1]
-					} else if len(parts) == 1 {
-						merged[parts[0]] = ""
-					}
-				}
-			}
-		case map[interface{}]interface{}:
-			for k, v := range envVal {
-				merged[fmt.Sprintf("%v", k)] = fmt.Sprintf("%v", v)
-			}
-		}
-	}
-
-	for k, v := range overrides {
-		if k != "" {
-			merged[k] = v
-		}
-	}
-
-	service["environment"] = merged
 }
 
 func handleDeployCompose(w http.ResponseWriter, r *http.Request) {
@@ -734,275 +672,60 @@ func handleDeployCompose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 1. Verify Docker is running
 	if err := verifyDockerRunning(); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	hash := req.SessionID
-	if hash == "" {
-		hash = generateHash()
+	// Updating an existing stack: the id must name a stack we own.
+	var sessionID string
+	if req.SessionID != "" {
+		sessionID = req.SessionID
+		if !strings.HasPrefix(sessionID, "compose-") {
+			sessionID = "compose-" + sessionID
+		}
+		if !validComposeSessionID(sessionID) {
+			writeError(w, http.StatusBadRequest, "Invalid sessionId")
+			return
+		}
+		if s, ok := getSession(sessionID); !ok || s.Type != "docker-compose" {
+			writeError(w, http.StatusNotFound, "Compose stack not found")
+			return
+		}
 	} else {
-		hash = strings.TrimPrefix(hash, "compose-")
+		sessionID = "compose-" + generateHash()
 	}
-	sessionID := "compose-" + hash
 
-	// Clean up old instance first if updating
-	sessionsMu.Lock()
-	oldSess, exists := sessions[sessionID]
-	sessionsMu.Unlock()
+	// Reject bad YAML up front instead of failing inside the job.
+	if _, err := parseComposeForDeploy(req.YAML); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
-	// Create async Job
 	jobID := createJob()
+	if active, ok := beginOp(sessionID, jobID); !ok {
+		failJob(jobID, "superseded by running job "+active)
+		writeJSON(w, http.StatusConflict, map[string]string{
+			"error": "A deployment is already running for this stack",
+			"jobId": active,
+		})
+		return
+	}
 
 	go func() {
-		defer func() {
-			job, exists := getJob(jobID)
-			if !exists {
-				return
-			}
-			record := DeploymentRecord{
-				ID:        generateHash(),
-				SessionID: sessionID,
-				Type:      "docker-compose",
-				Timestamp: time.Now(),
-				Logs:      job.Logs,
-			}
-			if job.Status == "done" {
-				record.Status = "success"
-				sessionsMu.RLock()
-				sess, ok := sessions[sessionID]
-				sessionsMu.RUnlock()
-				if ok {
-					record.Config = sess.Metadata
-				}
-			} else {
-				record.Status = "failed"
-				record.Error = job.Error
-				record.Config = SessionMetadata{
-					YAML:            req.YAML,
-					ServiceSettings: req.ServiceSettings,
-				}
-			}
-			appendDeployment(record)
-		}()
-
-		updateJobPhase(jobID, "validating", "Validating compose configuration...")
-		
-		if exists {
-			addJobLog(jobID, "Stopping old compose stack...")
-			_ = dockerComposeDown(oldSess.Metadata.ComposeFile)
-
-			for _, svc := range oldSess.Metadata.Services {
-				svcMeta := SessionMetadata{
-					TunnelPid:    svc.TunnelPid,
-					TunnelID:     svc.TunnelID,
-					CustomDomain: svc.CustomDomain,
-				}
-				cleanupCloudflareResources(svcMeta)
-			}
+		defer endOp(sessionID)
+		deploySem <- struct{}{}
+		defer func() { <-deploySem }()
+		if err := runComposeDeploy(composeDeploy{JobID: jobID, SessionID: sessionID, YAML: req.YAML, Settings: req.ServiceSettings}); err != nil {
+			recordEvent(sessionID, "deploy_failed", "error", "dashboard", "Compose deploy failed: %v", err)
+		} else {
+			recordEvent(sessionID, "deploy_success", "success", "dashboard", "Compose stack deployed")
 		}
-
-		root := findWorkspaceRoot()
-		stackDir := filepath.Join(root, "stacks", "compose-"+hash)
-		if err := os.MkdirAll(stackDir, 0755); err != nil {
-			failJob(jobID, "Failed to create stack directory: "+err.Error())
-			return
-		}
-		composeFilePath := filepath.Join(stackDir, "docker-compose.yml")
-
-		// Parse Compose YAML to modify env & ports dynamically
-		var composeMap map[string]interface{}
-		if err := yaml.Unmarshal([]byte(req.YAML), &composeMap); err != nil {
-			failJob(jobID, "Failed to parse compose YAML: "+err.Error())
-			return
-		}
-
-		servicesMap, ok := composeMap["services"].(map[string]interface{})
-		if !ok || len(servicesMap) == 0 {
-			failJob(jobID, "No services defined in compose file")
-			return
-		}
-
-		servicePorts := make(map[string]int)
-
-		for svcName, svcVal := range servicesMap {
-			service, ok := svcVal.(map[string]interface{})
-			if !ok {
-				continue
-			}
-
-			setting := req.ServiceSettings[svcName]
-
-			// Merge environment
-			mergeEnvironment(service, setting.Env)
-
-			// Parse/adjust ports
-			ports, exists := service["ports"]
-			var hostPort, containerPort int
-			var foundPort = false
-
-			if exists {
-				if portList, ok := ports.([]interface{}); ok && len(portList) > 0 {
-					if firstPort, ok := portList[0].(string); ok {
-						h, c, err := parsePorts(firstPort)
-						if err == nil {
-							hostPort = h
-							containerPort = c
-							foundPort = true
-						}
-					} else if firstPortNum, ok := portList[0].(int); ok {
-						hostPort = firstPortNum
-						containerPort = firstPortNum
-						foundPort = true
-					}
-				}
-			}
-
-			if setting.DomainMode == "quick" || setting.DomainMode == "custom" {
-				if foundPort {
-					if hostPort == 0 {
-						var err error
-						hostPort, err = allocatePort()
-						if err != nil {
-							failJob(jobID, "Failed to allocate host port: "+err.Error())
-							return
-						}
-						service["ports"] = []interface{}{fmt.Sprintf("%d:%d", hostPort, containerPort)}
-					}
-				} else {
-					containerPort = 80
-					var err error
-					hostPort, err = allocatePort()
-					if err != nil {
-						failJob(jobID, "Failed to allocate host port: "+err.Error())
-						return
-					}
-					service["ports"] = []interface{}{fmt.Sprintf("%d:%d", hostPort, containerPort)}
-				}
-				servicePorts[svcName] = hostPort
-			}
-		}
-
-		// Write modified compose back to file
-		modifiedYaml, err := yaml.Marshal(composeMap)
-		if err != nil {
-			failJob(jobID, "Failed to marshal modified compose: "+err.Error())
-			return
-		}
-
-		if err := os.WriteFile(composeFilePath, modifiedYaml, 0644); err != nil {
-			failJob(jobID, "Failed to write docker-compose.yml: "+err.Error())
-			return
-		}
-
-		// Starting phase
-		updateJobPhase(jobID, "starting", "Starting Docker Compose services...")
-		if err := dockerComposeUp(composeFilePath); err != nil {
-			failJob(jobID, "Failed to start compose stack: "+err.Error())
-			return
-		}
-
-		// Tunneling phase
-		updateJobPhase(jobID, "tunneling", "Setting up Cloudflare tunnels for services...")
-		serviceSessionMetas := make(map[string]ServiceSessionMetadata)
-		var mainURL = ""
-
-		for svcName, setting := range req.ServiceSettings {
-			if setting.DomainMode == "quick" || setting.DomainMode == "custom" {
-				hostPort := servicePorts[svcName]
-				if hostPort <= 0 {
-					continue
-				}
-
-				reuseTunnel := false
-				oldToken := ""
-				oldTID := ""
-				if exists {
-					if oldSvc, ok := oldSess.Metadata.Services[svcName]; ok {
-						if oldSvc.DomainMode == setting.DomainMode && oldSvc.CustomDomain == setting.CustomDomain {
-							reuseTunnel = true
-							oldToken = oldSvc.TunnelToken
-							oldTID = oldSvc.TunnelID
-						}
-					}
-				}
-
-				cleanSvcName := regexp.MustCompile(`[^a-zA-Z0-9_-]`).ReplaceAllString(svcName, "_")
-				tOpts := TunnelOptions{
-					ServiceName:    svcName,
-					DomainMode:     setting.DomainMode,
-					CustomDomain:   setting.CustomDomain,
-					HostPort:       hostPort,
-					SessionHash:    hash,
-					CleanName:      cleanSvcName,
-					ReuseTunnel:    reuseTunnel,
-					OldTunnelToken: oldToken,
-					OldTunnelID:    oldTID,
-				}
-				tRes, err := provisionTunnel(tOpts)
-				if err != nil {
-					addJobLog(jobID, "Failed to start tunnel for service "+svcName+": "+err.Error())
-					continue
-				}
-
-				if mainURL == "" {
-					mainURL = tRes.CloudflaredURL
-				}
-
-				waitForHealthyStatusWithJob(jobID, tRes.CloudflaredURL, hostPort, 45*time.Second)
-
-				serviceSessionMetas[svcName] = ServiceSessionMetadata{
-					ServiceName:    svcName,
-					Port:           80,
-					HostPort:       hostPort,
-					DomainMode:     setting.DomainMode,
-					CustomDomain:   setting.CustomDomain,
-					CloudflaredURL: tRes.CloudflaredURL,
-					TunnelPid:      tRes.TunnelPid,
-					TunnelToken:    tRes.TunnelToken,
-					TunnelID:       tRes.TunnelID,
-					Status:         "running",
-					TunnelStatus:   "up",
-				}
-			}
-		}
-
-		if mainURL == "" {
-			mainURL = "http://localhost"
-		}
-
-		sess := Session{
-			ID:        sessionID,
-			Type:      "docker-compose",
-			URL:       mainURL,
-			StartedAt: time.Now(),
-			Metadata: SessionMetadata{
-				ComposeFile:     composeFilePath,
-				Services:        serviceSessionMetas,
-				Status:          "running",
-				TunnelStatus:    "up",
-				YAML:            req.YAML,
-				ServiceSettings: req.ServiceSettings,
-			},
-		}
-		var oldPtr *Session
-		if exists {
-			oldPtr = &oldSess
-		}
-		finalizeSession(&sess, oldPtr)
-
-		sessionsMu.Lock()
-		sessions[sessionID] = sess
-		sessionsMu.Unlock()
-		saveSessions()
-
-		completeJob(jobID, sessionID)
 	}()
 
 	writeJSON(w, http.StatusAccepted, map[string]string{
-		"jobId": jobID,
+		"jobId":     jobID,
+		"sessionId": sessionID,
 	})
 }
 
@@ -1048,8 +771,8 @@ func handleLogsContainer(w http.ResponseWriter, r *http.Request) {
 	follow := r.URL.Query().Get("follow") == "true"
 
 	tail := "200"
-	if tailStr != "" {
-		tail = tailStr
+	if n, err := strconv.Atoi(tailStr); err == nil && n > 0 && n <= 10000 {
+		tail = strconv.Itoa(n)
 	}
 
 	sessionsMu.RLock()
@@ -1061,23 +784,35 @@ func handleLogsContainer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := checkComposeService(sess, service); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// The request context ends the command when a follow stream's client disconnects.
+	ctx := r.Context()
+	if !follow {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+	}
 	var cmd *exec.Cmd
 	if sess.Type == "docker-compose" {
-		args := []string{"-f", sess.Metadata.ComposeFile, "logs", "--tail", tail}
+		args := []string{"logs", "--no-color", "--tail", tail}
 		if follow {
 			args = append(args, "-f")
 		}
 		if service != "" {
-			args = append(args, service)
+			args = append(args, "--", service)
 		}
-		cmd = exec.Command("docker", append([]string{"compose"}, args...)...)
+		cmd = composeCommand(ctx, sess.Metadata.ComposeFile, args...)
 	} else {
 		args := []string{"logs", "--tail", tail}
 		if follow {
 			args = append(args, "-f")
 		}
 		args = append(args, sess.Metadata.ContainerName)
-		cmd = exec.Command("docker", args...)
+		cmd = exec.CommandContext(ctx, "docker", args...)
 	}
 
 	if follow {
@@ -1161,10 +896,20 @@ func handleStatsContainer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var targets []string
+	serviceOf := map[string]string{} // container ID / name → compose service
 	if sess.Type == "docker-compose" {
-		project := strings.TrimPrefix(sID, "compose-")
-		for name := range sess.Metadata.Services {
-			targets = append(targets, fmt.Sprintf("compose-%s-%s-1", project, name))
+		ps, err := composeContainers(sess.Metadata.ComposeFile)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "Failed to list stack containers: "+err.Error())
+			return
+		}
+		for _, c := range ps {
+			if c.State != "running" || c.ID == "" {
+				continue
+			}
+			targets = append(targets, c.ID)
+			serviceOf[c.ID] = c.Service
+			serviceOf[c.Name] = c.Service
 		}
 	} else {
 		targets = append(targets, sess.Metadata.ContainerName)
@@ -1192,6 +937,16 @@ func handleStatsContainer(w http.ResponseWriter, r *http.Request) {
 		}
 		var stat map[string]interface{}
 		if err := json.Unmarshal([]byte(line), &stat); err == nil {
+			if sess.Type == "docker-compose" {
+				id, _ := stat["ID"].(string)
+				name, _ := stat["Name"].(string)
+				for key, svc := range serviceOf {
+					if key != "" && (key == name || (id != "" && strings.HasPrefix(key, id))) {
+						stat["Service"] = svc
+						break
+					}
+				}
+			}
 			statsList = append(statsList, stat)
 		}
 	}

@@ -33,6 +33,7 @@ func main() {
 		updateNextPort()
 	}
 	resetStalePIDs()
+	backfillComposeServices()
 
 	// 3. Background workers: debounced R2 state sync + periodic volume backups
 	go startR2SyncWorker()
@@ -220,7 +221,11 @@ func restoreDockerContainers() {
 			sessionsMu.Lock()
 			delete(sessions, s.ID)
 			sessionsMu.Unlock()
-			cleanupCloudflareResources(s.Metadata)
+			if s.Type == "docker-compose" {
+				_ = teardownComposeStack(s)
+			} else {
+				cleanupCloudflareResources(s.Metadata)
+			}
 			saveSessions()
 			continue
 		}

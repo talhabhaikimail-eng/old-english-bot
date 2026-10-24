@@ -24,6 +24,7 @@ type Settings struct {
 	AutoBackupEnabled     bool   `json:"autoBackupEnabled"`     // periodically push volumes to R2
 	AutoBackupIntervalMin int    `json:"autoBackupIntervalMin"` // default 60
 	AutoRecover           bool   `json:"autoRecover"`           // restart crashed / missing containers
+	ComposeAllowUnsafe    bool   `json:"composeAllowUnsafe"`    // allow privileged / host-access options in compose stacks
 }
 
 var (

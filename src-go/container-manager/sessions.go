@@ -245,17 +245,21 @@ func isPortAvailable(port int) bool {
 }
 
 func isPortConflict(port int) bool {
-	// Check against sessions
+	// Check against sessions (callers must not hold sessionsMu)
+	sessionsMu.RLock()
 	for _, s := range sessions {
 		if s.Metadata.HostPort == port {
+			sessionsMu.RUnlock()
 			return true
 		}
 		for _, svc := range s.Metadata.Services {
 			if svc.HostPort == port {
+				sessionsMu.RUnlock()
 				return true
 			}
 		}
 	}
+	sessionsMu.RUnlock()
 	// Check if TCP listen is free
 	if !isPortAvailable(port) {
 		return true

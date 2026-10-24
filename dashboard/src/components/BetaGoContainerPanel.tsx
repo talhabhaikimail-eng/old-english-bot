@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { api, BASE } from '../api';
+import { api, BASE, MASKED_ENV_VALUE, type ComposeServiceSetting } from '../api';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -153,11 +153,9 @@ volumes:
   const [parsedCompose, setParsedCompose] = useState<NormalizedCompose | null>(null);
   const [parseError, setParseError] = useState<string | null>(null);
   const [isParsing, setIsParsing] = useState<boolean>(false);
-  const [serviceSettings, setServiceSettings] = useState<Record<string, {
-    domainMode: 'none' | 'quick' | 'custom';
-    customDomain: string;
-    env: Record<string, string>;
-  }>>({});
+  const [serviceSettings, setServiceSettings] = useState<Record<string, ComposeServiceSetting>>({});
+  // Set when the editor holds an existing stack: deploying then updates that stack in place
+  const [composeSessionId, setComposeSessionId] = useState<string | null>(null);
 
   // Stats State
   const [stats, setStats] = useState<Record<string, any>>({});
@@ -443,20 +441,25 @@ volumes:
     }
   };
 
-  const handleParseYAML = async () => {
+  // Parses the YAML and builds per-service settings. Existing settings (the current form, or a stored
+  // stack's) are kept for services that still exist, so re-parsing doesn't drop tunnels or overrides.
+  const handleParseYAML = async (yamlText: string = yamlInput, existing: Record<string, ComposeServiceSetting> = serviceSettings) => {
     setIsParsing(true);
     setParseError(null);
     try {
-      const data = await api.parseCompose(yamlInput);
+      const data = await api.parseCompose(yamlText);
       setParsedCompose(data);
       setResult('Successfully parsed Compose configuration!');
 
       const initialSettings: typeof serviceSettings = {};
       Object.entries(data.services).forEach(([sName, svc]: [string, any]) => {
+        const prev = existing[sName];
         initialSettings[sName] = {
-          domainMode: 'none',
-          customDomain: '',
-          env: { ...svc.environment }
+          domainMode: prev?.domainMode || 'none',
+          customDomain: prev?.customDomain || '',
+          port: prev?.port,
+          primary: prev?.primary,
+          env: { ...svc.environment, ...(prev?.env || {}) }
         };
       });
       setServiceSettings(initialSettings);
@@ -497,11 +500,14 @@ volumes:
     setResult('');
     setJobStatus(null);
     try {
-      const res = await api.deployCompose(yamlInput, serviceSettings);
+      const res = await api.deployCompose(yamlInput, serviceSettings, composeSessionId ?? undefined);
       if (res.error) throw new Error(res.error);
       if (res.jobId) {
         setActiveJobId(res.jobId);
-        setResult(`Compose Stack Deployment job created. Polling progress...`);
+        if (res.sessionId) setComposeSessionId(res.sessionId);
+        setResult(composeSessionId
+          ? `Updating stack ${composeSessionId}. Polling progress...`
+          : `Compose stack deployment job created (${res.sessionId}). Polling progress...`);
       } else {
         setResult(`Compose stack deployed successfully!`);
         loadSessions();
@@ -1254,8 +1260,8 @@ volumes:
                   <ScrollText className="size-4 text-muted-foreground" />
                   <h3 className="text-sm font-semibold tracking-tight m-0">Docker Compose config</h3>
                 </div>
-                <Button 
-                  onClick={handleParseYAML}
+                <Button
+                  onClick={() => handleParseYAML()}
                   disabled={isParsing || !daemonOnline}
                   size="sm"
                 >
@@ -1271,8 +1277,17 @@ volumes:
                 />
               </div>
 
+              {composeSessionId && (
+                <div className="mt-3 p-3 rounded-md bg-secondary/40 border border-border text-xs flex items-center justify-between gap-2">
+                  <span>Editing <span className="font-mono">{composeSessionId}</span>. Deploying updates this stack in place.</span>
+                  <Button variant="outline" size="xs" onClick={() => { setComposeSessionId(null); setResult('Next deploy will create a new stack.'); }}>
+                    Deploy as new stack
+                  </Button>
+                </div>
+              )}
+
               {parseError && (
-                <div className="mt-3 p-3 rounded-md bg-destructive/10 border border-destructive/30 text-destructive text-xs flex items-start gap-2">
+                <div className="mt-3 p-3 rounded-md bg-destructive/10 border border-destructive/30 text-destructive text-xs flex items-start gap-2 whitespace-pre-wrap">
                   <TriangleAlert className="size-3.5 mt-0.5 shrink-0" /> {parseError}
                 </div>
               )}
@@ -1329,6 +1344,34 @@ volumes:
                         )}
                       </div>
 
+                      {(serviceSettings[sName]?.domainMode === 'quick' || serviceSettings[sName]?.domainMode === 'custom') && (
+                        <div className="grid grid-cols-2 gap-3 items-end">
+                          <div>
+                            <label className="text-xs font-medium text-muted-foreground block mb-1">Container port</label>
+                            <Input
+                              type="number"
+                              min={1}
+                              max={65535}
+                              placeholder={(() => { const p = svc.ports.map(x => parseInt(x.split(':').pop() || '', 10)).find(n => n > 0); return p ? `${p} (first published port)` : '80'; })()}
+                              value={serviceSettings[sName]?.port ?? ''}
+                              onChange={(e) => handleServiceSettingChange(sName, 'port', e.target.value ? parseInt(e.target.value, 10) : undefined)}
+                              className="text-xs"
+                            />
+                          </div>
+                          <label className="flex items-center gap-2 text-xs cursor-pointer h-8">
+                            <input
+                              type="radio"
+                              name="compose-primary-service"
+                              checked={!!serviceSettings[sName]?.primary}
+                              onChange={() => setServiceSettings(prev => Object.fromEntries(
+                                Object.entries(prev).map(([n, st]) => [n, { ...st, primary: n === sName }])
+                              ))}
+                            />
+                            Use as stack URL
+                          </label>
+                        </div>
+                      )}
+
                       {Object.keys(svc.environment).length > 0 && (
                         <div className="space-y-1.5 border-t border-border pt-2">
                           <label className="text-xs font-medium text-muted-foreground block">Environment overrides</label>
@@ -1338,7 +1381,8 @@ volumes:
                                 <span className="text-[11px] font-mono text-muted-foreground truncate w-24 shrink-0">{k}</span>
                                 <input
                                   type="text"
-                                  value={serviceSettings[sName]?.env[k] || ''}
+                                  value={serviceSettings[sName]?.env[k] === MASKED_ENV_VALUE ? '' : (serviceSettings[sName]?.env[k] || '')}
+                                  placeholder={serviceSettings[sName]?.env[k] === MASKED_ENV_VALUE ? 'hidden (unchanged)' : undefined}
                                   onChange={(e) => handleServiceEnvChange(sName, k, e.target.value)}
                                   className="flex-1 bg-card border border-input rounded-md h-7 px-2 text-xs font-mono text-foreground outline-none focus:border-primary"
                                 />
@@ -1353,7 +1397,7 @@ volumes:
 
                 <div className="flex gap-3">
                   <Button
-                    onClick={() => setParsedCompose(null)}
+                    onClick={() => { setParsedCompose(null); setComposeSessionId(null); }}
                     variant="outline"
                     className="flex-1"
                   >
@@ -1364,7 +1408,7 @@ volumes:
                     disabled={loading || !daemonOnline}
                     className="flex-[2]"
                   >
-                    <Rocket /> Deploy stack setup
+                    <Rocket /> {composeSessionId ? 'Update stack' : 'Deploy stack setup'}
                   </Button>
                 </div>
               </Card>
@@ -1388,17 +1432,19 @@ volumes:
                       <div className="flex gap-2">
                         <Button
                           onClick={() => {
-                            // Prepopulate editor with this session's configuration
-                            setYamlInput(stack.metadata?.yaml || '');
-                            if (stack.metadata?.serviceSettings) {
-                              setServiceSettings(stack.metadata.serviceSettings);
-                            }
+                            // Load this stack into the editor; deploying will update it in place
+                            const stackYaml = stack.metadata?.yaml || '';
+                            const stored = (stack.metadata?.serviceSettings || {}) as Record<string, ComposeServiceSetting>;
+                            setYamlInput(stackYaml);
+                            setServiceSettings(stored);
+                            setComposeSessionId(stack.id);
                             setActiveTab('compose');
-                            setResult(`Loaded Compose config for redeployment: ${stack.id}`);
+                            handleParseYAML(stackYaml, stored);
+                            setResult(`Loaded ${stack.id} for editing. Deploying will update this stack.`);
                           }}
                           variant="outline" size="sm"
                         >
-                          Redeploy stack
+                          Edit stack
                         </Button>
                         <Button
                           onClick={() => handleStop(stack.id)}
@@ -1414,14 +1460,15 @@ volumes:
                     {/* Services nested inside Stack */}
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-2">
                       {stack.metadata?.services && Object.entries(stack.metadata.services).map(([svcName, svc]) => {
-                        const sStats = stats[stack.id]?.find((st: any) => st.Name?.includes(`-${svcName}-`));
+                        const sStats = stats[stack.id]?.find((st: any) => st.Service === svcName);
+                        const completed = svc.status === 'exited' && svc.exitCode === 0;
                         return (
                           <div key={svcName} className="bg-secondary/30 border border-border p-3 rounded-md flex flex-col gap-2 relative group/item">
                             <div className="flex justify-between items-start gap-1">
                               <div>
                                 <h4 className="text-xs font-semibold">{svcName}</h4>
-                                <Badge variant={svc.status === 'running' ? 'default' : 'destructive'} className="mt-1 capitalize">
-                                  {svc.status || 'unknown'}
+                                <Badge variant={svc.status === 'running' ? 'default' : completed ? 'secondary' : 'destructive'} className="mt-1 capitalize">
+                                  {completed ? 'completed' : (svc.status || 'unknown')}
                                 </Badge>
                               </div>
                               <div className="flex gap-1">

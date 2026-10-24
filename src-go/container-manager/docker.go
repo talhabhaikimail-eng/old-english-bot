@@ -237,35 +237,3 @@ func dockerRunWithJob(opts RunOptions, jobID string) error {
 func dockerRun(opts RunOptions) error {
 	return dockerRunWithJob(opts, "")
 }
-
-func dockerComposeDown(composeFile string) error {
-	log.Printf("[Docker Compose] Stopping stack: %s", composeFile)
-	err1 := exec.Command("docker", "compose", "-f", composeFile, "down").Run()
-	err2 := exec.Command("docker-compose", "-f", composeFile, "down").Run()
-	if err1 != nil && err2 != nil {
-		return fmt.Errorf("docker compose down failed: %v", err1)
-	}
-	return nil
-}
-
-func dockerComposeUp(composeFile string) error {
-	log.Printf("[Docker Compose] Starting stack: %s", composeFile)
-	err1 := exec.Command("docker", "compose", "-f", composeFile, "up", "-d").Run()
-	if err1 != nil {
-		log.Printf("[Docker Compose] Warning: 'docker compose' failed, trying 'docker-compose': %v", err1)
-		err2 := exec.Command("docker-compose", "-f", composeFile, "up", "-d").Run()
-		if err2 != nil {
-			return fmt.Errorf("docker compose up failed: %v", err2)
-		}
-	}
-	return nil
-}
-
-func dockerComposePull(composeFile string) error {
-	log.Printf("[Docker Compose] Pulling images: %s", composeFile)
-	out, err := composeCmd(composeFile, "pull")
-	if err != nil {
-		return fmt.Errorf("docker compose pull failed: %s", trimForEvent(out))
-	}
-	return nil
-}

@@ -229,6 +229,10 @@ export function SettingsTab({ onResult }: { onResult: (msg: string) => void }) {
             <input type="checkbox" checked={s.autoRecover} onChange={e => setS({ ...s, autoRecover: e.target.checked })} />
             Auto-recover crashed or missing containers (backoff, gives up after 5 tries)
           </label>
+          <label className="flex items-center gap-2 text-xs cursor-pointer">
+            <input type="checkbox" checked={!!s.composeAllowUnsafe} onChange={e => setS({ ...s, composeAllowUnsafe: e.target.checked })} />
+            Allow unsafe compose options (privileged, host network/PID, Docker socket and system path mounts)
+          </label>
           <div className="flex flex-wrap items-center gap-3">
             <label className="flex items-center gap-2 text-xs cursor-pointer">
               <input type="checkbox" checked={s.autoBackupEnabled} onChange={e => setS({ ...s, autoBackupEnabled: e.target.checked })} />

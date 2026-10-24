@@ -12,7 +12,6 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -60,19 +59,6 @@ func safeEqual(a, b string) bool {
 // (the stack directory is stacks/compose-<hash>, so that's the implicit project name).
 func composeProject(sessionID string) string {
 	return sessionID // already "compose-<hash>"
-}
-
-func composeContainerName(sessionID, service string) string {
-	return fmt.Sprintf("%s-%s-1", composeProject(sessionID), service)
-}
-
-func sortedServiceNames(s Session) []string {
-	names := make([]string, 0, len(s.Metadata.Services))
-	for n := range s.Metadata.Services {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-	return names
 }
 
 // dockerOut runs a docker command with a timeout and returns trimmed combined output.
@@ -200,7 +186,7 @@ func runRedeploy(jobID string, sess Session, actor string, ifChanged bool) {
 		}
 		rollbackContainerJob(jobID, record)
 	case "docker-compose":
-		rollbackComposeJob(jobID, record, true)
+		_ = runComposeDeploy(composeDeploy{JobID: jobID, SessionID: sess.ID, YAML: sess.Metadata.YAML, Settings: sess.Metadata.ServiceSettings, Pull: true})
 	default:
 		failJob(jobID, "unsupported session type "+sess.Type)
 		return
@@ -229,25 +215,6 @@ type ActionResult struct {
 	JobID   string `json:"jobId,omitempty"`
 }
 
-func composeCmd(file string, args ...string) (string, error) {
-	out, err := dockerOut(2*time.Minute, append([]string{"compose", "-f", file}, args...)...)
-	if err != nil {
-		out2, err2 := func() (string, error) {
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-			defer cancel()
-			cmd := exec.CommandContext(ctx, "docker-compose", append([]string{"-f", file}, args...)...)
-			var buf bytes.Buffer
-			cmd.Stdout, cmd.Stderr = &buf, &buf
-			e := cmd.Run()
-			return strings.TrimSpace(buf.String()), e
-		}()
-		if err2 == nil {
-			return out2, nil
-		}
-	}
-	return out, err
-}
-
 // performAction is shared by the dashboard, the webhook and the agent API.
 func performAction(sessionID, action, service, actor string, ifChanged bool) (ActionResult, error) {
 	sess, ok := getSession(sessionID)
@@ -259,6 +226,9 @@ func performAction(sessionID, action, service, actor string, ifChanged bool) (Ac
 	}
 	isCompose := sess.Type == "docker-compose"
 	name := sess.Metadata.ContainerName
+	if err := checkComposeService(sess, service); err != nil {
+		return ActionResult{}, err
+	}
 
 	if action == "redeploy" {
 		jobID, started, err := startRedeploy(sessionID, actor, ifChanged)
@@ -300,7 +270,7 @@ func performAction(sessionID, action, service, actor string, ifChanged bool) (Ac
 		if isCompose {
 			args := []string{action}
 			if service != "" {
-				args = append(args, service)
+				args = append(args, "--", service)
 			}
 			out, err = composeCmd(sess.Metadata.ComposeFile, args...)
 		} else {
@@ -484,19 +454,10 @@ func rotateTokens(sessionID, which string) bool {
 func execInSession(sess Session, service, command string) (string, error) {
 	target := sess.Metadata.ContainerName
 	if sess.Type == "docker-compose" {
-		if service == "" {
-			names := sortedServiceNames(sess)
-			if len(names) == 0 {
-				return "", fmt.Errorf("no services in compose stack")
-			}
-			service = names[0]
+		var err error
+		if target, err = composeServiceContainer(sess, service); err != nil {
+			return "", err
 		}
-		if _, ok := sess.Metadata.Services[service]; !ok {
-			if _, ok2 := sess.Metadata.ServiceSettings[service]; !ok2 {
-				return "", fmt.Errorf("unknown service %q", service)
-			}
-		}
-		target = composeContainerName(sess.ID, service)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

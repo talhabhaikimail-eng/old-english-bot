@@ -33,7 +33,14 @@ export interface GoEvent {
 export interface GoSettings {
   notifyUrl: string; notifyMinLevel: 'info' | 'success' | 'warn' | 'error'; publicBaseUrl: string;
   autoBackupEnabled: boolean; autoBackupIntervalMin: number; autoRecover: boolean;
+  composeAllowUnsafe: boolean;
 }
+export interface ComposeServiceSetting {
+  domainMode: string; customDomain: string; env: Record<string, string>;
+  port?: number; primary?: boolean;
+}
+/** Server placeholder for a hidden compose env override; sending it back keeps the stored value. */
+export const MASKED_ENV_VALUE = '__unchanged__';
 export interface RemoteBrowserSession {
   sessionId: string; url: string; status: string; user: string; password: string;
   startedAt: string; expiresAt?: string; remainingSeconds: number;
@@ -375,8 +382,8 @@ export const api = {
     post<{ success: boolean; message: string }>('/api/go/containers/stop', { sessionId }),
   parseCompose: (yaml: string) =>
     post<any>('/api/go/containers/compose/parse', { yaml }),
-  deployCompose: (yaml: string, serviceSettings: Record<string, { domainMode: string; customDomain: string; env: Record<string, string> }>, sessionId?: string) =>
-    post<any>('/api/go/containers/compose/deploy', { yaml, serviceSettings, sessionId }),
+  deployCompose: (yaml: string, serviceSettings: Record<string, ComposeServiceSetting>, sessionId?: string) =>
+    post<{ jobId: string; sessionId: string; error?: string }>('/api/go/containers/compose/deploy', { yaml, serviceSettings, sessionId }),
   getGoJobStatus: (id: string) =>
     authFetch(`${BASE}/api/go/containers/jobs?id=${encodeURIComponent(id)}`).then(r => {
       if (!r.ok) throw new Error(`HTTP ${r.status}`);

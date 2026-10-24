@@ -3,25 +3,11 @@ package main
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
 )
-
-// RawServiceConfig handles the flexible nature of YAML fields in compose
-type RawServiceConfig struct {
-	Image       string            `yaml:"image,omitempty"`
-	Ports       []interface{}     `yaml:"ports,omitempty"`
-	Environment interface{}       `yaml:"environment,omitempty"`
-	Volumes     []interface{}     `yaml:"volumes,omitempty"`
-	Labels      map[string]string `yaml:"labels,omitempty"`
-}
-
-type RawComposeConfig struct {
-	Version  string                       `yaml:"version"`
-	Services map[string]RawServiceConfig   `yaml:"services"`
-	Volumes  map[string]interface{}       `yaml:"volumes,omitempty"`
-}
 
 // NormalizedServiceConfig is sent to the frontend & used internally
 type NormalizedServiceConfig struct {
@@ -38,109 +24,94 @@ type NormalizedComposeConfig struct {
 	Volumes  []string                           `json:"volumes"`
 }
 
-// ParseAndNormalizeCompose parses raw compose yaml and normalizes the fields
+// ParseAndNormalizeCompose parses raw compose yaml and normalizes the fields. Compose allows several
+// syntaxes for most fields (list or map env/labels, short or long ports/volumes); all are accepted.
 func ParseAndNormalizeCompose(yamlData []byte) (*NormalizedComposeConfig, error) {
-	var raw RawComposeConfig
+	var raw map[string]interface{}
 	if err := yaml.Unmarshal(yamlData, &raw); err != nil {
 		return nil, fmt.Errorf("failed to parse YAML: %w", err)
 	}
 
-	if len(raw.Services) == 0 {
+	services, _ := raw["services"].(map[string]interface{})
+	if len(services) == 0 {
 		return nil, errors.New("compose file must define at least one service")
 	}
 
 	normalized := &NormalizedComposeConfig{
-		Version:  raw.Version,
+		Version:  envString(raw["version"]),
 		Services: make(map[string]NormalizedServiceConfig),
 		Volumes:  make([]string, 0),
 	}
 
-	// Parse volumes list from raw.Volumes
-	for volName := range raw.Volumes {
-		normalized.Volumes = append(normalized.Volumes, volName)
+	if vols, ok := raw["volumes"].(map[string]interface{}); ok {
+		for volName := range vols {
+			normalized.Volumes = append(normalized.Volumes, volName)
+		}
+		sort.Strings(normalized.Volumes)
 	}
 
-	for svcName, rawSvc := range raw.Services {
+	for svcName, rawSvc := range services {
+		svc, _ := rawSvc.(map[string]interface{})
 		normSvc := NormalizedServiceConfig{
-			Image:       rawSvc.Image,
+			Image:       envString(svc["image"]),
 			Ports:       make([]string, 0),
 			Environment: make(map[string]string),
 			Volumes:     make([]string, 0),
-			Labels:      rawSvc.Labels,
-		}
-		if normSvc.Labels == nil {
-			normSvc.Labels = make(map[string]string)
+			Labels:      make(map[string]string),
 		}
 
-		// 1. Normalize Ports (can be list of strings, integers, or maps/objects)
-		for _, p := range rawSvc.Ports {
-			if str, ok := p.(string); ok {
-				// strip /tcp or /udp suffix if present
-				cleaned := strings.Split(str, "/")[0]
-				normSvc.Ports = append(normSvc.Ports, cleaned)
-			} else if num, ok := p.(int); ok {
-				normSvc.Ports = append(normSvc.Ports, fmt.Sprintf("%d", num))
-			} else if portMap, ok := p.(map[string]interface{}); ok {
-				// Long-syntax: target, published, protocol, mode
-				target, _ := portMap["target"].(int)
-				published, _ := portMap["published"].(int)
-				if published > 0 && target > 0 {
-					normSvc.Ports = append(normSvc.Ports, fmt.Sprintf("%d:%d", published, target))
-				} else if target > 0 {
-					normSvc.Ports = append(normSvc.Ports, fmt.Sprintf("%d", target))
-				}
-			} else if portMap, ok := p.(map[interface{}]interface{}); ok {
-				// Handle yaml.v3 mapping type which might decode as map[interface{}]interface{}
-				var target, published int
-				for k, v := range portMap {
-					kStr := fmt.Sprintf("%v", k)
-					if kStr == "target" {
-						if vInt, ok := v.(int); ok {
-							target = vInt
-						}
-					} else if kStr == "published" {
-						if vInt, ok := v.(int); ok {
-							published = vInt
-						}
-					}
-				}
-				if published > 0 && target > 0 {
-					normSvc.Ports = append(normSvc.Ports, fmt.Sprintf("%d:%d", published, target))
-				} else if target > 0 {
-					normSvc.Ports = append(normSvc.Ports, fmt.Sprintf("%d", target))
-				}
-			} else {
-				normSvc.Ports = append(normSvc.Ports, fmt.Sprintf("%v", p))
-			}
-		}
-
-		// 2. Normalize Environment
-		if rawSvc.Environment != nil {
-			switch envVal := rawSvc.Environment.(type) {
+		// 1. Ports: strings ("8080:80/tcp"), integers, or long syntax maps
+		ports, _ := svc["ports"].([]interface{})
+		for _, p := range ports {
+			switch v := p.(type) {
+			case string:
+				normSvc.Ports = append(normSvc.Ports, strings.Split(v, "/")[0])
 			case map[string]interface{}:
-				for k, v := range envVal {
-					normSvc.Environment[k] = fmt.Sprintf("%v", v)
+				target, _ := toInt(v["target"])
+				published, _ := toInt(v["published"])
+				if published > 0 && target > 0 {
+					normSvc.Ports = append(normSvc.Ports, fmt.Sprintf("%d:%d", published, target))
+				} else if target > 0 {
+					normSvc.Ports = append(normSvc.Ports, fmt.Sprintf("%d", target))
 				}
-			case []interface{}:
-				for _, item := range envVal {
-					if itemStr, ok := item.(string); ok {
-						parts := strings.SplitN(itemStr, "=", 2)
-						if len(parts) == 2 {
-							normSvc.Environment[parts[0]] = parts[1]
-						} else if len(parts) == 1 {
-							normSvc.Environment[parts[0]] = ""
-						}
-					}
-				}
+			default:
+				normSvc.Ports = append(normSvc.Ports, fmt.Sprintf("%v", v))
 			}
 		}
 
-		// 3. Normalize Volumes
-		for _, v := range rawSvc.Volumes {
-			if str, ok := v.(string); ok {
-				normSvc.Volumes = append(normSvc.Volumes, str)
-			} else {
-				normSvc.Volumes = append(normSvc.Volumes, fmt.Sprintf("%v", v))
+		// 2. Environment: list or map; a bare KEY (no value) shows as empty
+		for k, v := range serviceEnv(svc) {
+			normSvc.Environment[k] = envString(v)
+		}
+
+		// 3. Volumes: short strings or long syntax maps
+		vols, _ := svc["volumes"].([]interface{})
+		for _, v := range vols {
+			switch t := v.(type) {
+			case string:
+				normSvc.Volumes = append(normSvc.Volumes, t)
+			case map[string]interface{}:
+				src, dst := envString(t["source"]), envString(t["target"])
+				if src != "" {
+					normSvc.Volumes = append(normSvc.Volumes, src+":"+dst)
+				} else {
+					normSvc.Volumes = append(normSvc.Volumes, dst)
+				}
+			default:
+				normSvc.Volumes = append(normSvc.Volumes, fmt.Sprintf("%v", t))
+			}
+		}
+
+		// 4. Labels: list ("a=b") or map
+		switch labels := svc["labels"].(type) {
+		case map[string]interface{}:
+			for k, v := range labels {
+				normSvc.Labels[k] = envString(v)
+			}
+		case []interface{}:
+			for _, item := range labels {
+				k, v, _ := strings.Cut(fmt.Sprint(item), "=")
+				normSvc.Labels[k] = v
 			}
 		}
 

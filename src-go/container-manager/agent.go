@@ -155,13 +155,12 @@ func handleAgent(w http.ResponseWriter, r *http.Request) {
 	case "inspect":
 		target := sess.Metadata.ContainerName
 		if sess.Type == "docker-compose" {
-			svc := q.Get("service")
-			if svc == "" {
-				if n := sortedServiceNames(sess); len(n) > 0 {
-					svc = n[0]
-				}
+			t, err := composeServiceContainer(sess, q.Get("service"))
+			if err != nil {
+				textOut(w, http.StatusBadRequest, err.Error()+"\n")
+				return
 			}
-			target = composeContainerName(sess.ID, svc)
+			target = t
 		}
 		out, _ := dockerOut(20*time.Second, "inspect", target)
 		w.Header().Set("Content-Type", "application/json")
@@ -359,6 +358,10 @@ func applyAgentEdit(sess Session, q url.Values) ([]string, error) {
 					problem = fmt.Errorf("for compose use env.<service>.<KEY>=VALUE")
 					return
 				}
+				if err := checkComposeService(*s, svcKey[0]); err != nil {
+					problem = err
+					return
+				}
 				setting := m.ServiceSettings[svcKey[0]]
 				if setting.Env == nil {
 					setting.Env = map[string]string{}
@@ -421,23 +424,28 @@ func humanDur(d time.Duration) string {
 }
 
 func fetchLogs(sess Session, service string, tail int, since, grep string) string {
-	args := []string{}
+	if err := checkComposeService(sess, service); err != nil {
+		return "(" + err.Error() + ")"
+	}
+	var out string
+	var err error
 	if sess.Type == "docker-compose" {
-		args = []string{"compose", "-f", sess.Metadata.ComposeFile, "logs", "--no-color", "--tail", strconv.Itoa(tail)}
+		args := []string{"logs", "--no-color", "--tail", strconv.Itoa(tail)}
 		if since != "" {
 			args = append(args, "--since", since)
 		}
 		if service != "" {
-			args = append(args, service)
+			args = append(args, "--", service)
 		}
+		out, err = composeCmdTimeout(30*time.Second, sess.Metadata.ComposeFile, args...)
 	} else {
-		args = []string{"logs", "--tail", strconv.Itoa(tail)}
+		args := []string{"logs", "--tail", strconv.Itoa(tail)}
 		if since != "" {
 			args = append(args, "--since", since)
 		}
 		args = append(args, sess.Metadata.ContainerName)
+		out, err = dockerOut(30*time.Second, args...)
 	}
-	out, err := dockerOut(30*time.Second, args...)
 	if err != nil && out == "" {
 		return "(could not read logs: " + err.Error() + ")"
 	}

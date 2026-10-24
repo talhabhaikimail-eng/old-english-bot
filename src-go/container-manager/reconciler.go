@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -16,6 +15,7 @@ import (
 )
 
 type ComposePsService struct {
+	ID       string `json:"ID"`
 	Service  string `json:"Service"`
 	Name     string `json:"Name"`
 	State    string `json:"State"`
@@ -105,25 +105,11 @@ func observeContainer(s Session) observation {
 
 func observeCompose(s Session) observation {
 	o := observation{id: s.ID, isCompose: true, composeFile: s.Metadata.ComposeFile, svcs: map[string]svcObs{}}
-	out, err := composeCmd(s.Metadata.ComposeFile, "ps", "-a", "--format", "json")
+	psServices, err := composeContainers(s.Metadata.ComposeFile)
 	if err != nil {
 		return o
 	}
 	o.composeOK = true
-	var psServices []ComposePsService
-	outputStr := strings.TrimSpace(out)
-	if strings.HasPrefix(outputStr, "[") {
-		_ = json.Unmarshal([]byte(outputStr), &psServices)
-	} else {
-		for _, line := range strings.Split(outputStr, "\n") {
-			if line = strings.TrimSpace(line); strings.HasPrefix(line, "{") {
-				var svc ComposePsService
-				if err := json.Unmarshal([]byte(line), &svc); err == nil {
-					psServices = append(psServices, svc)
-				}
-			}
-		}
-	}
 	for _, p := range psServices {
 		o.svcs[p.Service] = svcObs{Status: p.State, ExitCode: p.ExitCode, Health: p.Health}
 	}
@@ -209,10 +195,7 @@ func reconcileState() {
 		delete(sessions, s.ID)
 		sessionsMu.Unlock()
 		if s.Type == "docker-compose" {
-			_ = dockerComposeDown(s.Metadata.ComposeFile)
-			for _, svc := range s.Metadata.Services {
-				cleanupCloudflareResources(SessionMetadata{TunnelPid: svc.TunnelPid, TunnelID: svc.TunnelID, CustomDomain: svc.CustomDomain})
-			}
+			_ = teardownComposeStack(s)
 		} else {
 			_ = dockerStopAndRemove(s.Metadata.ContainerName)
 			cleanupCloudflareResources(s.Metadata)
@@ -333,7 +316,7 @@ func reconcileState() {
 			}
 		} else {
 			m := &cur.Metadata
-			running, total := 0, 0
+			running, failing, total := 0, 0, 0
 			for name, sm := range m.Services {
 				total++
 				ob, found := o.svcs[name]
@@ -346,12 +329,10 @@ func reconcileState() {
 						switch {
 						case next.Status == "running" && sm.Status != "":
 							evs = append(evs, pendingEvent{id, "recovered", "success", fmt.Sprintf("Service %s is running (was %s)", name, sm.Status)})
+						case next.Status == "exited" && next.ExitCode == 0:
+							evs = append(evs, pendingEvent{id, "state", "info", fmt.Sprintf("Service %s completed (exit code 0)", name)})
 						case next.Status == "exited" || next.Status == "dead":
-							lvl, kind := "warn", "state"
-							if next.ExitCode != 0 {
-								lvl, kind = "error", "crashed"
-							}
-							evs = append(evs, pendingEvent{id, kind, lvl, fmt.Sprintf("Service %s exited with code %d", name, next.ExitCode)})
+							evs = append(evs, pendingEvent{id, "crashed", "error", fmt.Sprintf("Service %s exited with code %d", name, next.ExitCode)})
 						case next.Status == "missing" && sm.Status != "":
 							evs = append(evs, pendingEvent{id, "missing", "error", fmt.Sprintf("Service %s no longer exists", name)})
 						}
@@ -362,6 +343,15 @@ func reconcileState() {
 					sm.Status, sm.ExitCode, sm.Health = next.Status, next.ExitCode, next.Health
 					m.Services[name] = sm
 					changed = true
+				}
+				// One-shot services (migrations, init jobs) that exited 0 are done, not failing.
+				switch sm.Status {
+				case "missing", "dead", "created":
+					failing++
+				case "exited":
+					if sm.ExitCode != 0 {
+						failing++
+					}
 				}
 				if sm.Status == "running" {
 					running++
@@ -386,7 +376,7 @@ func reconcileState() {
 			switch {
 			case total == 0 || !o.composeOK:
 				agg = "missing"
-			case running == total:
+			case running == total, running > 0 && failing == 0:
 				agg = "running"
 			case running == 0:
 				agg = "exited"
@@ -400,7 +390,7 @@ func reconcileState() {
 				if m.StatusSince != nil && time.Since(*m.StatusSince) > 2*time.Minute {
 					resetRecovery(id)
 				}
-			} else if !desiredStopped && settingsNow.AutoRecover {
+			} else if (failing > 0 || agg == "missing") && !desiredStopped && settingsNow.AutoRecover {
 				recoverIDs = append(recoverIDs, id)
 			}
 		}
@@ -557,19 +547,13 @@ func handleInspectContainer(w http.ResponseWriter, r *http.Request) {
 
 	var inspectTarget string
 	if sess.Type == "docker-compose" {
-		// Return inspect of first compose service or query service parameter
-		serviceName := r.URL.Query().Get("service")
-		if serviceName == "" {
-			names := sortedServiceNames(sess)
-			if len(names) > 0 {
-				serviceName = names[0]
-			}
-		}
-		if serviceName == "" {
-			writeError(w, http.StatusBadRequest, "No services in compose stack")
+		// Inspect the requested service, or the first one
+		target, err := composeServiceContainer(sess, r.URL.Query().Get("service"))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		inspectTarget = composeContainerName(sID, serviceName)
+		inspectTarget = target
 	} else {
 		inspectTarget = sess.Metadata.ContainerName
 	}

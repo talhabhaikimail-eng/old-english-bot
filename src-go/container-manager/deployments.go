@@ -7,12 +7,9 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
-
-	"gopkg.in/yaml.v3"
 )
 
 type DeploymentRecord struct {
@@ -115,6 +112,10 @@ func handleGetDeployments(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Rollbacks read the stored records, so the response can hide compose env overrides.
+	for i := range records {
+		records[i].Config.ServiceSettings = maskServiceSettings(records[i].Config.ServiceSettings)
+	}
 	writeJSON(w, http.StatusOK, records)
 }
 
@@ -164,14 +165,28 @@ func handleRollback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Create async Job
+	// Create async Job (one deploy per session at a time)
 	jobID := createJob()
+	if active, ok := beginOp(targetRecord.SessionID, jobID); !ok {
+		failJob(jobID, "superseded by running job "+active)
+		writeJSON(w, http.StatusConflict, map[string]string{
+			"error": "A deployment is already running for this session",
+			"jobId": active,
+		})
+		return
+	}
 
 	go func() {
+		defer endOp(targetRecord.SessionID)
 		if targetRecord.Type == "docker-container" {
 			rollbackContainerJob(jobID, *targetRecord)
 		} else if targetRecord.Type == "docker-compose" {
-			rollbackComposeJob(jobID, *targetRecord, false)
+			_ = runComposeDeploy(composeDeploy{
+				JobID:     jobID,
+				SessionID: targetRecord.SessionID,
+				YAML:      targetRecord.Config.YAML,
+				Settings:  targetRecord.Config.ServiceSettings,
+			})
 		} else {
 			failJob(jobID, "Unsupported deployment type: "+targetRecord.Type)
 		}
@@ -381,250 +396,6 @@ func rollbackContainerJob(jobID string, record DeploymentRecord) {
 	saveSessions()
 
 	completeJob(jobID, containerName)
-
-	// Record success deployment
-	record.ID = generateHash()
-	record.Timestamp = time.Now()
-	record.Status = "success"
-	record.Logs = getJobLogsCopy(jobID)
-	record.Config = sess.Metadata
-	appendDeployment(record)
-}
-
-func rollbackComposeJob(jobID string, record DeploymentRecord, pullFirst bool) {
-	updateJobPhase(jobID, "validating", "Validating compose configuration...")
-
-	sessionID := record.SessionID
-	hash := strings.TrimPrefix(sessionID, "compose-")
-
-	sessionsMu.Lock()
-	oldSess, exists := sessions[sessionID]
-	sessionsMu.Unlock()
-
-	yamlContent := record.Config.YAML
-	serviceSettings := record.Config.ServiceSettings
-
-	if exists {
-		addJobLog(jobID, "Stopping old compose stack...")
-		_ = dockerComposeDown(oldSess.Metadata.ComposeFile)
-
-		for _, svc := range oldSess.Metadata.Services {
-			svcMeta := SessionMetadata{
-				TunnelPid:    svc.TunnelPid,
-				TunnelID:     svc.TunnelID,
-				CustomDomain: svc.CustomDomain,
-			}
-			cleanupCloudflareResources(svcMeta)
-		}
-	}
-
-	root := findWorkspaceRoot()
-	stackDir := filepath.Join(root, "stacks", "compose-"+hash)
-	_ = os.MkdirAll(stackDir, 0755)
-	composeFilePath := filepath.Join(stackDir, "docker-compose.yml")
-
-	// Parse Compose YAML to modify env & ports dynamically
-	var composeMap map[string]interface{}
-	if err := yaml.Unmarshal([]byte(yamlContent), &composeMap); err != nil {
-		failJob(jobID, "Failed to parse compose YAML: "+err.Error())
-		return
-	}
-
-	servicesMap, ok := composeMap["services"].(map[string]interface{})
-	if !ok || len(servicesMap) == 0 {
-		failJob(jobID, "No services defined in compose file")
-		return
-	}
-
-	servicePorts := make(map[string]int)
-
-	for svcName, svcVal := range servicesMap {
-		service, ok := svcVal.(map[string]interface{})
-		if !ok {
-			continue
-		}
-
-		setting := serviceSettings[svcName]
-
-		// Merge environment
-		mergeEnvironment(service, setting.Env)
-
-		// Parse/adjust ports
-		ports, exists := service["ports"]
-		var hostPort, containerPort int
-		var foundPort = false
-
-		if exists {
-			if portList, ok := ports.([]interface{}); ok && len(portList) > 0 {
-				if firstPort, ok := portList[0].(string); ok {
-					h, c, err := parsePorts(firstPort)
-					if err == nil {
-						hostPort = h
-						containerPort = c
-						foundPort = true
-					}
-				} else if firstPortNum, ok := portList[0].(int); ok {
-					hostPort = firstPortNum
-					containerPort = firstPortNum
-					foundPort = true
-				}
-			}
-		}
-
-		if setting.DomainMode == "quick" || setting.DomainMode == "custom" {
-			if foundPort {
-				if hostPort == 0 {
-					var err error
-					hostPort, err = allocatePort()
-					if err != nil {
-						failJob(jobID, "Failed to allocate host port: "+err.Error())
-						return
-					}
-					service["ports"] = []interface{}{fmt.Sprintf("%d:%d", hostPort, containerPort)}
-				}
-			} else {
-				containerPort = 80
-				var err error
-				hostPort, err = allocatePort()
-				if err != nil {
-					failJob(jobID, "Failed to allocate host port: "+err.Error())
-					return
-				}
-				service["ports"] = []interface{}{fmt.Sprintf("%d:%d", hostPort, containerPort)}
-			}
-			servicePorts[svcName] = hostPort
-		}
-	}
-
-	// Write modified compose back to file
-	modifiedYaml, err := yaml.Marshal(composeMap)
-	if err != nil {
-		failJob(jobID, "Failed to marshal modified compose: "+err.Error())
-		return
-	}
-
-	if err := os.WriteFile(composeFilePath, modifiedYaml, 0644); err != nil {
-		failJob(jobID, "Failed to write docker-compose.yml: "+err.Error())
-		return
-	}
-
-	if pullFirst {
-		updateJobPhase(jobID, "pulling", "Pulling latest service images...")
-		if err := dockerComposePull(composeFilePath); err != nil {
-			addJobLog(jobID, "Warning: "+err.Error())
-		}
-	}
-
-	// Starting phase
-	updateJobPhase(jobID, "starting", "Starting Docker Compose services...")
-	if err := dockerComposeUp(composeFilePath); err != nil {
-		failJob(jobID, "Failed to start compose stack: "+err.Error())
-		// Record failed deployment
-		record.ID = generateHash()
-		record.Timestamp = time.Now()
-		record.Status = "failed"
-		record.Error = err.Error()
-		record.Logs = getJobLogsCopy(jobID)
-		appendDeployment(record)
-		return
-	}
-
-	// Tunneling phase
-	updateJobPhase(jobID, "tunneling", "Setting up Cloudflare tunnels for services...")
-	serviceSessionMetas := make(map[string]ServiceSessionMetadata)
-	var mainURL = ""
-
-	for svcName, setting := range serviceSettings {
-		if setting.DomainMode == "quick" || setting.DomainMode == "custom" {
-			hostPort := servicePorts[svcName]
-			if hostPort <= 0 {
-				continue
-			}
-
-			reuseTunnel := false
-			oldToken := ""
-			oldTID := ""
-			if exists {
-				if oldSvc, ok := oldSess.Metadata.Services[svcName]; ok {
-					if oldSvc.DomainMode == setting.DomainMode && oldSvc.CustomDomain == setting.CustomDomain {
-						reuseTunnel = true
-						oldToken = oldSvc.TunnelToken
-						oldTID = oldSvc.TunnelID
-					}
-				}
-			}
-
-			cleanSvcName := regexp.MustCompile(`[^a-zA-Z0-9_-]`).ReplaceAllString(svcName, "_")
-			tOpts := TunnelOptions{
-				ServiceName:    svcName,
-				DomainMode:     setting.DomainMode,
-				CustomDomain:   setting.CustomDomain,
-				HostPort:       hostPort,
-				SessionHash:    hash,
-				CleanName:      cleanSvcName,
-				ReuseTunnel:    reuseTunnel,
-				OldTunnelToken: oldToken,
-				OldTunnelID:    oldTID,
-			}
-			tRes, err := provisionTunnel(tOpts)
-			if err != nil {
-				addJobLog(jobID, "Failed to start tunnel for service "+svcName+": "+err.Error())
-				continue
-			}
-
-			if mainURL == "" {
-				mainURL = tRes.CloudflaredURL
-			}
-
-			serviceSessionMetas[svcName] = ServiceSessionMetadata{
-				ServiceName:    svcName,
-				Port:           80,
-				HostPort:       hostPort,
-				DomainMode:     setting.DomainMode,
-				CustomDomain:   setting.CustomDomain,
-				CloudflaredURL: tRes.CloudflaredURL,
-				TunnelPid:      tRes.TunnelPid,
-				TunnelToken:    tRes.TunnelToken,
-				TunnelID:       tRes.TunnelID,
-				Status:         "running",
-				TunnelStatus:   "up",
-			}
-		}
-	}
-
-	if mainURL == "" {
-		mainURL = "http://localhost"
-	}
-
-	sess := Session{
-		ID:        sessionID,
-		Type:      "docker-compose",
-		URL:       mainURL,
-		StartedAt: time.Now(),
-		Metadata: SessionMetadata{
-			ComposeFile:     composeFilePath,
-			Services:        serviceSessionMetas,
-			Status:          "running",
-			TunnelStatus:    "up",
-			YAML:            yamlContent,
-			ServiceSettings: serviceSettings,
-		},
-	}
-	var oldPtr *Session
-	if exists {
-		oldPtr = &oldSess
-		sess.Metadata.TTLMinutes = oldSess.Metadata.TTLMinutes
-		sess.Metadata.ExpiresAt = oldSess.Metadata.ExpiresAt
-		sess.Metadata.IsDemo = oldSess.Metadata.IsDemo
-	}
-	finalizeSession(&sess, oldPtr)
-
-	sessionsMu.Lock()
-	sessions[sessionID] = sess
-	sessionsMu.Unlock()
-	saveSessions()
-
-	completeJob(jobID, sessionID)
 
 	// Record success deployment
 	record.ID = generateHash()
