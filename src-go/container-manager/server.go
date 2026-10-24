@@ -40,6 +40,10 @@ type StartRequest struct {
 	IsDemo            bool              `json:"isDemo,omitempty"`
 	Template          string            `json:"template,omitempty"`
 	Sync              bool              `json:"sync,omitempty"`
+	Kind              string            `json:"kind,omitempty"` // "rbi" for remote-browser sessions
+	Network           string            `json:"network,omitempty"`
+	ShmSizeMB         int               `json:"shmSizeMB,omitempty"`
+	PidsLimit         int               `json:"pidsLimit,omitempty"`
 }
 
 type StopRequest struct {
@@ -143,6 +147,7 @@ func handleGetSessions(w http.ResponseWriter, r *http.Request) {
 			WebhookSecret:    s.Metadata.WebhookSecret,
 			AgentReadToken:   s.Metadata.AgentReadToken,
 			AgentWriteToken:  s.Metadata.AgentWriteToken,
+			Kind:             s.Metadata.Kind,
 		}
 
 		if s.Metadata.Services != nil {
@@ -453,6 +458,9 @@ func handleStartContainer(w http.ResponseWriter, r *http.Request) {
 			RegistryAuth:  req.RegistryAuth,
 			Command:       req.Command,
 			Args:          req.Args,
+			Network:       req.Network,
+			ShmSizeMB:     req.ShmSizeMB,
+			PidsLimit:     req.PidsLimit,
 		}
 		if err := dockerRunWithJob(runOpts, jobID); err != nil {
 			failJob(jobID, err.Error())
@@ -523,6 +531,7 @@ func handleStartContainer(w http.ResponseWriter, r *http.Request) {
 				ExpiresAt:      expiresAt,
 				IsDemo:         req.IsDemo,
 				RegistryAuth:   req.RegistryAuth,
+				Kind:           req.Kind,
 			},
 		}
 		var oldPtr *Session

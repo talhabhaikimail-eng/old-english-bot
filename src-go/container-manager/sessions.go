@@ -70,6 +70,8 @@ type SessionMetadata struct {
 	LastDeployedAt *time.Time    `json:"lastDeployedAt,omitempty"`
 	RegistryAuth   *RegistryAuth `json:"registryAuth,omitempty"` // needed to re-pull private images after a host restart
 
+	Kind string `json:"kind,omitempty"` // "rbi" = ephemeral remote-browser session
+
 	// Access tokens
 	AgentReadToken  string `json:"agentReadToken,omitempty"`
 	AgentWriteToken string `json:"agentWriteToken,omitempty"`
@@ -135,6 +137,7 @@ type SanitizedSessionMetadata struct {
 	WebhookSecret    string                                     `json:"webhookSecret,omitempty"`
 	AgentReadToken   string                                     `json:"agentReadToken,omitempty"`
 	AgentWriteToken  string                                     `json:"agentWriteToken,omitempty"`
+	Kind             string                                     `json:"kind,omitempty"`
 }
 
 type SanitizedSession struct {

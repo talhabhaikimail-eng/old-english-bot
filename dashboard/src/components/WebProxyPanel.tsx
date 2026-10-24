@@ -6,6 +6,8 @@ import {
 import { Button } from '@/components/ui/button';
 import { Card, CardTitle, CardDescription } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { api } from '../api';
+import RemoteBrowserPanel from './RemoteBrowserPanel';
 
 interface BookMark {
   name: string;
@@ -13,10 +15,12 @@ interface BookMark {
   icon: React.ReactNode;
 }
 
-export default function WebProxyPanel() {
+function LiteProxy() {
   const [urlInput, setUrlInput] = useState('');
   const [activeUrl, setActiveUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [frameSrc, setFrameSrc] = useState('');
+  const [error, setError] = useState('');
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
   const bookmarks: BookMark[] = [
@@ -89,8 +93,13 @@ export default function WebProxyPanel() {
     }
 
     setLoading(true);
+    setError('');
     setActiveUrl(formattedUrl);
     setUrlInput(formattedUrl);
+    // Each browse gets its own unguessable proxy session; the dashboard credential never appears in a URL.
+    api.createWebProxySession(formattedUrl)
+      .then(r => setFrameSrc(r.src))
+      .catch((e: Error) => { setError(e.message); setLoading(false); setActiveUrl(null); });
   };
 
   const handleFormSubmit = (e: React.FormEvent) => {
@@ -117,13 +126,9 @@ export default function WebProxyPanel() {
 
   const handleHome = () => {
     setActiveUrl(null);
+    setFrameSrc('');
     setUrlInput('');
     setLoading(false);
-  };
-
-  const getProxyUrl = (target: string) => {
-    const token = localStorage.getItem('dashboard_token') || '';
-    return `/api/web-proxy?url=${encodeURIComponent(target)}${token ? `&token=${encodeURIComponent(token)}` : ''}`;
   };
 
   return (
@@ -174,18 +179,6 @@ export default function WebProxyPanel() {
           </div>
         </form>
 
-        {activeUrl && (
-          <a 
-            href={getProxyUrl(activeUrl)} 
-            target="_blank" 
-            rel="noopener noreferrer"
-            className="px-2.5 h-8 rounded-md border border-border bg-transparent hover:bg-secondary hover:border-primary/50 text-foreground text-xs font-medium flex items-center gap-1.5"
-            title="Open Raw View"
-          >
-            <span className="hidden sm:inline">Raw view</span>
-            <ExternalLink className="w-3 h-3" />
-          </a>
-        )}
       </div>
 
       {/* Main Content Area */}
@@ -201,9 +194,13 @@ export default function WebProxyPanel() {
                 Virtual browser proxy
               </CardTitle>
               <CardDescription className="text-xs text-muted-foreground mt-1">
-                Isolated sandbox proxy routing traffic through the cloud runner IP.
+                Lite rewriting proxy: fast, but heavy sites (Google, YouTube, Discord) may break. Pages run in a sandbox without access to this dashboard. Use Remote browser for full compatibility.
               </CardDescription>
             </div>
+
+            {error && (
+              <div className="w-full rounded-lg border border-destructive/30 bg-destructive/10 p-2.5 text-xs text-destructive text-left">{error}</div>
+            )}
 
             {/* Quick Bookmarks */}
             <div className="w-full space-y-2">
@@ -242,15 +239,30 @@ export default function WebProxyPanel() {
             )}
             <iframe 
               ref={iframeRef}
-              src={getProxyUrl(activeUrl)} 
+              src={frameSrc || 'about:blank'}
               className="w-full h-full border-none bg-white"
               onLoad={handleIframeLoad}
               title="Virtual Proxy Browser Frame"
-              sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-modals"
+              sandbox="allow-scripts allow-forms allow-popups allow-modals"
             />
           </div>
         )}
       </div>
     </Card>
+  );
+}
+
+export default function WebProxyPanel() {
+  const [mode, setMode] = useState<'remote' | 'lite'>('remote');
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2">
+        <Button size="sm" variant={mode === 'remote' ? 'secondary' : 'ghost'} onClick={() => setMode('remote')}>
+          Remote browser <Badge variant="default" className="ml-1.5 text-[10px]">recommended</Badge>
+        </Button>
+        <Button size="sm" variant={mode === 'lite' ? 'secondary' : 'ghost'} onClick={() => setMode('lite')}>Lite proxy</Button>
+      </div>
+      {mode === 'remote' ? <RemoteBrowserPanel /> : <LiteProxy />}
+    </div>
   );
 }

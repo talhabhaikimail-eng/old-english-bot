@@ -63,11 +63,7 @@ import {
   cancelWorkerJob,
 } from './course-service';
 
-const Corrosion = require('corrosion');
-const webProxy = new Corrosion({
-  prefix: '/api/web-proxy/',
-  codec: 'base64',
-});
+import { createProxySession, getProxySession, proxyTokenFromUrl, assertProxyTarget, guardedHttpAgent, guardedHttpsAgent } from './web-proxy-guard';
 
 // ── Worker Shell WebSocket Relay ─────────────────────────────────────────────
 
@@ -600,6 +596,8 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
       pathname !== '/api/webhook/inbound-email' &&
       !pathname.startsWith('/api/webhook/docker/') &&
       !pathname.startsWith('/api/agent/') &&
+      // proxy session URLs carry their own random capability token; only session creation needs dashboard auth
+      !(pathname.startsWith('/api/web-proxy/') && pathname !== '/api/web-proxy/session') &&
       !pathname.startsWith('/api/portfolio')) {
     if (!usernameEnv || !passwordEnv) {
       console.error('❌ Server authentication credentials not configured in environment (DASHBOARD_USERNAME/PASSWORD).');
@@ -1438,60 +1436,62 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
     return;
   }
 
-  // ── Web Proxy (Corrosion) ──────────────────────────────────────────────────
+  // ── Web Proxy (Corrosion "lite" mode, hardened) ────────────────────────────
+  // POST /api/web-proxy/session {url}  → { src }   (dashboard-authenticated)
+  // /api/web-proxy/<token>/<encoded>/… → proxied content (authorised by the unguessable token, SSRF-guarded)
+  if (method === 'POST' && pathname === '/api/web-proxy/session') {
+    try {
+      const body = await parseJsonBody(req);
+      let target = String(body['url'] || '').trim();
+      if (!target) return err(res, 'url is required', 400);
+      if (!/^https?:\/\//i.test(target)) target = 'https://' + target;
+      assertProxyTarget(target);
+      const session = createProxySession();
+      const encoded = session.corrosion.codec.encode(target);
+      json(res, { src: `${session.prefix}${encoded}/`, expiresInSec: 7200 });
+    } catch (e) { err(res, (e as Error).message, 400); }
+    return;
+  }
+
   if (url.startsWith('/api/web-proxy')) {
     try {
-      if (url.includes('?url=')) {
-        try {
-          const params = new URL(url, 'http://localhost').searchParams;
-          let targetUrl = params.get('url');
-          if (targetUrl) {
-            if (!/^https?:\/\//i.test(targetUrl)) {
-              targetUrl = 'https://' + targetUrl;
-            }
-            let encoded = '';
-            if (webProxy.codec && typeof webProxy.codec.encode === 'function') {
-              encoded = webProxy.codec.encode(targetUrl);
-            } else {
-              encoded = Buffer.from(targetUrl).toString('base64');
-            }
-            const token = params.get('token');
-            res.writeHead(302, {
-              'Location': `/api/web-proxy/${encoded}/${token ? `?token=${encodeURIComponent(token)}` : ''}`
-            });
-            res.end();
-            return;
-          }
-        } catch (urlParamsErr) {
-          console.error('Failed to parse proxy URL params:', urlParamsErr);
-        }
+      const token = proxyTokenFromUrl(url);
+      const session = token ? getProxySession(token) : null;
+      if (!session) {
+        res.writeHead(404, { 'Content-Type': 'text/plain' });
+        res.end('Proxy session not found or expired. Start a new one from the dashboard.');
+        return;
+      }
+      const inst = session.corrosion;
+
+      // The page runs in a sandboxed (opaque-origin) iframe, so its subrequests are cross-origin: allow them.
+      // Safe because access is gated by the unguessable token in the path, never by cookies.
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Access-Control-Allow-Headers', '*');
+      res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS,HEAD');
+      if (method === 'OPTIONS') {
+        res.writeHead(204);
+        res.end();
+        return;
       }
 
-      // Strip only the 'token' parameter from the query string of the proxy path
-      // to avoid corrupting the base64 URL decoding while preserving other query params.
-      if (req.url) {
-        const [path, search] = req.url.split('?');
-        if (search) {
-          const params = new URLSearchParams(search);
-          params.delete('token');
-          const newSearch = params.toString();
-          req.url = path + (newSearch ? '?' + newSearch : '');
-        }
-      }
+      // Never forward dashboard credentials to third-party sites
+      delete req.headers['authorization'];
+      delete req.headers['x-dashboard-token'];
+      delete req.headers['x-worker-secret'];
 
-      // Detect and directly stream video/audio or range requests to bypass Corrosion's in-memory buffering
       let targetUrlStr = '';
       try {
-        const urlData = webProxy.url.unwrap(req.url || '', { flags: true, leftovers: true });
+        const urlData = inst.url.unwrap(req.url || '', { flags: true, leftovers: true });
         targetUrlStr = typeof urlData === 'string' ? urlData : urlData?.value || '';
-      } catch (e) {
+      } catch {
         // ignore
       }
 
       if (!targetUrlStr || !/^https?:\/\//i.test(targetUrlStr)) {
         const isCorrosionInternal = req.url && (
-          req.url.startsWith('/api/web-proxy/index.js') ||
-          req.url.startsWith('/api/web-proxy/gateway')
+          req.url.startsWith(`${session.prefix}index.js`) ||
+          req.url.startsWith(`${session.prefix}gateway`)
         );
         if (!isCorrosionInternal) {
           err(res, 'Invalid or missing target URL for proxy', 400);
@@ -1500,6 +1500,15 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
       }
 
       if (targetUrlStr) {
+        try {
+          assertProxyTarget(targetUrlStr);
+        } catch (blocked) {
+          res.writeHead(403, { 'Content-Type': 'text/plain' });
+          res.end((blocked as Error).message);
+          return;
+        }
+
+        // Stream video/audio and range requests directly to avoid Corrosion's in-memory buffering
         const isRange = !!req.headers['range'];
         const acceptHeader = req.headers['accept'] || '';
         const isAcceptMedia = typeof acceptHeader === 'string' && (acceptHeader.includes('video/') || acceptHeader.includes('audio/'));
@@ -1516,6 +1525,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
             headers['host'] = targetUrl.host;
             delete headers['origin'];
             delete headers['referer'];
+            delete headers['cookie']; // dashboard cookies must never reach third parties
 
             const proxyReq = requester(
               {
@@ -1524,13 +1534,13 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
                 port: targetUrl.port || undefined,
                 path: targetUrl.pathname + targetUrl.search,
                 headers: headers,
-                rejectUnauthorized: false,
+                agent: isHttps ? guardedHttpsAgent : guardedHttpAgent, // SSRF-guarded, TLS verified
               },
               (proxyRes: any) => {
                 const resHeaders = { ...proxyRes.headers };
                 if (resHeaders.location) {
                   try {
-                    resHeaders.location = webProxy.url.wrap(resHeaders.location, { base: targetUrlStr });
+                    resHeaders.location = inst.url.wrap(resHeaders.location, { base: targetUrlStr });
                   } catch (wrapErr) {
                     console.error('Failed to wrap media redirect location:', wrapErr);
                   }
@@ -1540,11 +1550,11 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
               }
             );
 
-            proxyReq.on('error', (err: Error) => {
-              console.error('Direct media proxy stream error:', err);
+            proxyReq.on('error', (e: Error) => {
+              console.error('Direct media proxy stream error:', e.message);
               if (!res.headersSent) {
-                res.writeHead(500, { 'Content-Type': 'text/plain' });
-                res.end(err.message);
+                res.writeHead(502, { 'Content-Type': 'text/plain' });
+                res.end(e.message);
               }
             });
 
@@ -1556,7 +1566,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
         }
       }
 
-      webProxy.request(req, res);
+      inst.request(req, res);
     } catch (e) {
       err(res, (e as Error).message);
     }
@@ -3112,7 +3122,13 @@ export function startLocalServer(port = 4000): Promise<string> {
         return;
       }
       if (req.url && req.url.startsWith('/api/web-proxy/')) {
-        webProxy.upgrade(req, socket, head);
+        const token = proxyTokenFromUrl(req.url);
+        const session = token ? getProxySession(token) : null;
+        if (!session) {
+          socket.destroy();
+          return;
+        }
+        session.corrosion.upgrade(req, socket, head);
       }
     });
     server.on('error', reject);

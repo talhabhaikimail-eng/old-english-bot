@@ -43,6 +43,9 @@ type RunOptions struct {
 	RegistryAuth  *RegistryAuth
 	Command       []string
 	Args          []string
+	Network       string // optional user-defined docker network (used to isolate remote-browser sessions)
+	ShmSizeMB     int
+	PidsLimit     int
 }
 
 func verifyDockerRunning() error {
@@ -198,6 +201,16 @@ func dockerRunWithJob(opts RunOptions, jobID string) error {
 	}
 	if opts.Cpus > 0 {
 		runArgs = append(runArgs, fmt.Sprintf("--cpus=%.2f", opts.Cpus))
+	}
+
+	if opts.Network != "" {
+		runArgs = append(runArgs, "--network", opts.Network)
+	}
+	if opts.ShmSizeMB > 0 {
+		runArgs = append(runArgs, fmt.Sprintf("--shm-size=%dm", opts.ShmSizeMB))
+	}
+	if opts.PidsLimit > 0 {
+		runArgs = append(runArgs, fmt.Sprintf("--pids-limit=%d", opts.PidsLimit))
 	}
 
 	// Add image name

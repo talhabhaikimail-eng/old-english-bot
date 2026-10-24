@@ -65,6 +65,9 @@ func main() {
 	http.HandleFunc("/api/go/settings/test", corsMiddleware(handleTestNotification))
 	http.HandleFunc("/api/go/system/info", corsMiddleware(handleSystemInfo))
 	http.HandleFunc("/api/go/system/prune", corsMiddleware(handlePrune))
+	http.HandleFunc("/api/go/browser/start", corsMiddleware(handleRBIStart))
+	http.HandleFunc("/api/go/browser/sessions", corsMiddleware(handleRBIList))
+	http.HandleFunc("/api/go/browser/extend", corsMiddleware(handleRBIExtend))
 	http.HandleFunc("/api/go/volumes", corsMiddleware(handleListVolumes))
 	http.HandleFunc("/api/go/volumes/delete", corsMiddleware(handleDeleteVolume))
 	http.HandleFunc("/api/go/volumes/backup-all", corsMiddleware(handleBackupAll))
@@ -211,6 +214,16 @@ func restoreDockerContainers() {
 	}
 
 	for _, s := range toRestore {
+		// Demo / remote-browser sessions are ephemeral: never resurrect them after a host restart
+		if s.Metadata.IsDemo || s.Metadata.Kind == "rbi" || (s.Metadata.ExpiresAt != nil && time.Now().After(*s.Metadata.ExpiresAt)) {
+			log.Printf("[Docker Restore] Dropping ephemeral session %s", s.ID)
+			sessionsMu.Lock()
+			delete(sessions, s.ID)
+			sessionsMu.Unlock()
+			cleanupCloudflareResources(s.Metadata)
+			saveSessions()
+			continue
+		}
 		if s.Metadata.Desired == "stopped" {
 			log.Printf("[Docker Restore] %s was stopped on purpose, leaving it stopped", s.ID)
 			continue

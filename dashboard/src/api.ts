@@ -34,6 +34,11 @@ export interface GoSettings {
   notifyUrl: string; notifyMinLevel: 'info' | 'success' | 'warn' | 'error'; publicBaseUrl: string;
   autoBackupEnabled: boolean; autoBackupIntervalMin: number; autoRecover: boolean;
 }
+export interface RemoteBrowserSession {
+  sessionId: string; url: string; status: string; user: string; password: string;
+  startedAt: string; expiresAt?: string; remainingSeconds: number;
+}
+export interface RemoteBrowserList { sessions: RemoteBrowserSession[]; max: number; firewall: string }
 export interface GoVolume { name: string; sessionId?: string; backedUp: boolean }
 export interface GoSystemInfo {
   dockerVersion: string; diskUsage: string[]; uptimeSeconds: number;
@@ -430,6 +435,17 @@ export const api = {
   deleteGoVolume: (volume: string, force = false) =>
     post<{ success: boolean }>('/api/go/volumes/delete', { volume, force }),
   backupAllGoVolumes: () => post<{ success: boolean; message: string }>('/api/go/volumes/backup-all', {}),
+  createWebProxySession: (url: string) =>
+    post<{ src: string; expiresInSec: number }>('/api/web-proxy/session', { url }),
+  startRemoteBrowser: (url: string, ttlMinutes = 30, domainMode: 'quick' | 'custom' = 'quick') =>
+    post<{ jobId: string; sessionId: string; user: string; password: string; ttlMinutes: number }>('/api/go/browser/start', { url, ttlMinutes, domainMode }),
+  listRemoteBrowsers: () =>
+    authFetch(`${BASE}/api/go/browser/sessions`).then(r => {
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return r.json() as Promise<RemoteBrowserList>;
+    }),
+  extendRemoteBrowser: (sessionId: string, minutes = 30) =>
+    post<{ success: boolean; expiresAt: string }>('/api/go/browser/extend', { sessionId, minutes }),
   getGoContainerStats: (sessionId: string) =>
     authFetch(`${BASE}/api/go/containers/stats?sessionId=${encodeURIComponent(sessionId)}`).then(r => {
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
