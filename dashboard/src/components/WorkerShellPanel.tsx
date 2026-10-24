@@ -470,310 +470,240 @@ export default function WorkerShellPanel({ initialWorkerId }: WorkerShellPanelPr
 
   const browsers = pool?.browsers || [];
 
+  const workerButtons = (vertical: boolean) =>
+    browsers.length === 0 ? (
+      <span className="text-xs text-muted-foreground">No workers currently registered in pool</span>
+    ) : (
+      browsers.map(b => {
+        const isSelected = b.workerId === selectedWorkerId;
+        return (
+          <button
+            key={b.workerId}
+            onClick={() => setSelectedWorkerId(b.workerId)}
+            className={`flex items-center gap-2 px-3 py-2 text-xs border rounded-md transition-colors whitespace-nowrap ${
+              vertical ? 'w-full' : ''
+            } ${
+              isSelected
+                ? 'border-primary/40 bg-primary/10 text-primary font-medium'
+                : 'border-border bg-secondary/40 text-muted-foreground hover:text-foreground hover:bg-secondary'
+            }`}
+          >
+            <span
+              className={`size-2 rounded-full shrink-0 ${
+                b.status === 'active' ? 'bg-primary' : 'bg-muted-foreground'
+              }`}
+            />
+            <span className="font-mono truncate">{b.workerId}</span>
+            {b.antigravityCli && (
+              <span className={`ml-auto inline-flex items-center gap-0.5 text-[10px] px-1.5 rounded-full border ${
+                b.antigravityAuth
+                  ? 'bg-primary/10 text-primary border-primary/30 font-medium'
+                  : 'bg-secondary text-muted-foreground border-border'
+              }`}>
+                {b.antigravityAuth ? (<>AGY <Zap className="size-2.5" /> Auth</>) : 'AGY'}
+              </span>
+            )}
+          </button>
+        );
+      })
+    );
+
+  const presets = [
+    { icon: Zap, label: 'Antigravity CLI (agy)', cmd: 'agy --version && agy --help' },
+    { icon: Activity, label: 'Inspect running agents', cmd: 'ps aux | grep -E "agy|chrome|course|python|node"' },
+    { icon: HardDrive, label: 'System vitals (disk/RAM)', cmd: 'df -h && free -h && uptime' },
+    { icon: GraduationCap, label: 'Course worker status', cmd: 'curl -s http://127.0.0.1:8085/worker/status | jq . || curl -s http://127.0.0.1:8085/worker/status' },
+    { icon: FileText, label: 'Worker API logs', cmd: 'tail -n 25 /tmp/worker_api.log' },
+    { icon: Globe, label: 'Check runner public IP', cmd: 'curl -s https://api.ipify.org && echo ""' },
+  ];
+
+  const sshCommand = currentWorker?.sshCommand || `ssh -p ${currentWorker?.sshPort || 2222} ${currentWorker?.sshUser || 'runner'}@localhost`;
+
+  const statusTone =
+    connStatus === 'connected'
+      ? 'border-primary/30 bg-primary/10 text-primary'
+      : connStatus === 'connecting'
+      ? 'border-amber-500/30 bg-amber-500/10 text-amber-500'
+      : 'border-destructive/30 bg-destructive/10 text-destructive';
+  const statusDot =
+    connStatus === 'connected' ? 'bg-primary' : connStatus === 'connecting' ? 'bg-amber-500' : 'bg-destructive';
+
   return (
     <div
       ref={fullScreenContainerRef}
-      className={`space-y-4 text-[13px] transition-all ${
+      className={`space-y-4 text-[13px] ${
         isFullscreen
-          ? 'fixed inset-0 z-50 bg-background p-4 flex flex-col h-screen w-screen overflow-hidden'
+          ? 'fixed inset-0 z-50 bg-background p-4 flex flex-col h-screen w-screen overflow-hidden space-y-3'
           : 'relative'
       }`}
     >
-      {/* Top Header Card */}
-      <Card className="p-4 gap-3">
-        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-          <div>
-            <div className="flex items-center gap-2 flex-wrap">
-              <SquareTerminal className="size-4 text-muted-foreground" />
-              <CardTitle>Distributed worker shell console</CardTitle>
-              <Badge
-                variant="outline"
-                className={
-                  connStatus === 'connected'
-                    ? 'border-primary/30 bg-primary/10 text-primary'
-                    : connStatus === 'connecting'
-                    ? 'border-amber-500/30 bg-amber-500/10 text-amber-500'
-                    : 'border-destructive/30 bg-destructive/10 text-destructive'
-                }
-              >
-                <span
-                  className={`size-1.5 rounded-full ${
-                    connStatus === 'connected'
-                      ? 'bg-primary'
-                      : connStatus === 'connecting'
-                      ? 'bg-amber-500'
-                      : 'bg-destructive'
-                  }`}
-                />
-                {connStatus.charAt(0).toUpperCase() + connStatus.slice(1)}
-              </Badge>
-              <Badge
-                variant="secondary"
-                className="hidden md:inline-flex"
-                title="This shell runs in the background. Closing this page will not stop your tasks."
-              >
-                <Zap /> Persistent (background)
-              </Badge>
-            </div>
-            <CardDescription className="mt-1">
-              Direct bidirectional PTY shell running continuously in worker background. Closing this tab will NOT terminate your background commands or agents.
-            </CardDescription>
-          </div>
-
-          <div className="flex items-center gap-2 flex-wrap">
-            {toastMsg && (
-              <div className="px-3 py-1 text-xs rounded-md border border-primary/30 bg-primary/10 text-primary animate-in fade-in">
-                {toastMsg}
-              </div>
-            )}
-
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => activateWorkerTab(selectedWorkerId, true)}
-              disabled={!currentWorker}
-              title="Reconnect to existing background persistent session"
-            >
-              <RefreshCw className="size-3.5" /> Reattach
-            </Button>
-
-            <Button
-              variant="destructive"
-              size="sm"
-              onClick={resetSession}
-              disabled={!currentWorker}
-              title="Kill and restart this worker's background shell session"
-            >
-              <RotateCcw className="size-3.5" /> Reset
-            </Button>
-
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => sessionsRef.current.get(selectedWorkerId)?.terminal.clear()}
-              title="Clear terminal screen"
-            >
-              <Eraser className="size-3.5" /> Clear
-            </Button>
-
-            <Button
-              variant={isFullscreen ? 'default' : 'outline'}
-              size="sm"
-              onClick={toggleFullscreen}
-              title={isFullscreen ? 'Exit Full Screen' : 'Open Full Page / Full Screen'}
-            >
-              {isFullscreen ? (
-                <><Minimize2 className="size-3.5" /> Exit fullscreen</>
-              ) : (
-                <><Maximize2 className="size-3.5" /> Fullscreen</>
-              )}
-            </Button>
-          </div>
-        </div>
-
-        {/* Worker Switcher Tabs */}
-        <div className="pt-3 border-t border-border flex items-center gap-2 overflow-x-auto pb-1">
-          <span className="text-xs font-medium text-muted-foreground whitespace-nowrap">
-            Worker node:
+      {/* Toolbar */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2 flex-wrap min-w-0">
+          <Badge variant="outline" className={statusTone}>
+            <span className={`size-1.5 rounded-full ${statusDot}`} />
+            {connStatus.charAt(0).toUpperCase() + connStatus.slice(1)}
+          </Badge>
+          <Badge
+            variant="secondary"
+            className="hidden md:inline-flex"
+            title="This shell runs in the background. Closing this page will not stop your tasks."
+          >
+            <Zap /> Persistent (background)
+          </Badge>
+          <span className="hidden lg:inline text-xs text-muted-foreground">
+            Closing this tab will not stop your background commands or agents.
           </span>
-          {browsers.length === 0 ? (
-            <span className="text-xs text-muted-foreground">No workers currently registered in pool</span>
-          ) : (
-            browsers.map(b => {
-              const isSelected = b.workerId === selectedWorkerId;
-              return (
-                <button
-                  key={b.workerId}
-                  onClick={() => setSelectedWorkerId(b.workerId)}
-                  className={`flex items-center gap-1.5 px-3 py-1 text-xs border rounded-md transition-colors whitespace-nowrap ${
-                    isSelected
-                      ? 'border-primary/40 bg-primary/10 text-primary font-medium'
-                      : 'border-border bg-secondary/40 text-muted-foreground hover:text-foreground hover:bg-secondary'
-                  }`}
-                >
-                  <span
-                    className={`size-2 rounded-full ${
-                      b.status === 'active' ? 'bg-primary' : 'bg-muted-foreground'
-                    }`}
-                  />
-                  <span className="font-mono">{b.workerId}</span>
-                  {b.antigravityCli && (
-                    <span className={`inline-flex items-center gap-0.5 text-[10px] px-1.5 rounded-full border ${
-                      b.antigravityAuth
-                        ? 'bg-primary/10 text-primary border-primary/30 font-medium'
-                        : 'bg-secondary text-muted-foreground border-border'
-                    }`}>
-                      {b.antigravityAuth ? (<>AGY <Zap className="size-2.5" /> Auth</>) : 'AGY'}
-                    </span>
-                  )}
-                </button>
-              );
-            })
-          )}
         </div>
-      </Card>
 
-      {/* Main Terminal and Agent Controls */}
-      <div className={`grid grid-cols-1 ${isFullscreen ? 'flex-1 min-h-0' : ''} gap-3`}>
+        <div className="flex items-center gap-2 flex-wrap">
+          {toastMsg && (
+            <div className="px-3 py-1 text-xs rounded-md border border-primary/30 bg-primary/10 text-primary animate-in fade-in">
+              {toastMsg}
+            </div>
+          )}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => activateWorkerTab(selectedWorkerId, true)}
+            disabled={!currentWorker}
+            title="Reconnect to existing background persistent session"
+          >
+            <RefreshCw className="size-3.5" /> Reattach
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => sessionsRef.current.get(selectedWorkerId)?.terminal.clear()}
+            title="Clear terminal screen"
+          >
+            <Eraser className="size-3.5" /> Clear
+          </Button>
+          <Button
+            variant="destructive"
+            size="sm"
+            onClick={resetSession}
+            disabled={!currentWorker}
+            title="Kill and restart this worker's background shell session"
+          >
+            <RotateCcw className="size-3.5" /> Reset
+          </Button>
+          <Button
+            variant={isFullscreen ? 'default' : 'outline'}
+            size="sm"
+            onClick={toggleFullscreen}
+            title={isFullscreen ? 'Exit Full Screen' : 'Open Full Page / Full Screen'}
+          >
+            {isFullscreen ? (
+              <><Minimize2 className="size-3.5" /> Exit fullscreen</>
+            ) : (
+              <><Maximize2 className="size-3.5" /> Fullscreen</>
+            )}
+          </Button>
+        </div>
+      </div>
+
+      {/* Fullscreen: compact worker switcher */}
+      {isFullscreen && (
+        <div className="flex items-center gap-2 overflow-x-auto">
+          <span className="text-xs font-medium text-muted-foreground whitespace-nowrap">Worker node</span>
+          {workerButtons(false)}
+        </div>
+      )}
+
+      {/* Workspace: terminal + side panel */}
+      <div className={`grid grid-cols-1 gap-4 ${isFullscreen ? 'flex-1 min-h-0' : 'xl:grid-cols-[minmax(0,1fr)_320px]'}`}>
         {/* Terminal Window */}
-        <Card className={`bg-[#0a0e17] gap-0 py-0 overflow-hidden flex flex-col ${
-          isFullscreen ? 'flex-1 min-h-0' : 'h-[540px]'
+        <Card className={`bg-[#0a0e17] gap-0 py-0 overflow-hidden flex flex-col min-w-0 ${
+          isFullscreen ? 'min-h-0' : 'h-[calc(100vh-15rem)] min-h-[480px]'
         }`}>
-          {/* Terminal Title Bar */}
-          <div className="bg-secondary border-b border-border px-3 py-2 flex items-center justify-between text-xs">
-            <div className="flex items-center gap-2">
-              <span className="flex gap-1.5">
+          <div className="bg-secondary border-b border-border px-3 py-2 flex items-center justify-between gap-3 text-xs">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="flex gap-1.5 shrink-0">
                 <span className="size-2.5 rounded-full bg-destructive/80 inline-block" />
                 <span className="size-2.5 rounded-full bg-amber-500/80 inline-block" />
                 <span className="size-2.5 rounded-full bg-primary/80 inline-block" />
               </span>
-              <span className="text-muted-foreground text-xs font-mono">
+              <span className="text-muted-foreground text-xs font-mono truncate">
                 bash — {currentWorker ? currentWorker.workerId : 'No worker selected'}
               </span>
             </div>
-
-            <div className="flex items-center gap-3 text-xs text-muted-foreground">
+            <div className="flex items-center gap-3 text-xs text-muted-foreground shrink-0">
               {currentWorker?.sshPort && (
-                <span>SSH port: <strong className="font-mono font-medium text-foreground">{currentWorker.sshPort}</strong></span>
+                <span>SSH <strong className="font-mono font-medium text-foreground">{currentWorker.sshPort}</strong></span>
               )}
               {currentWorker?.apiUrl && (
-                <span className="hidden sm:inline">API: <strong className="font-mono font-medium text-foreground">{currentWorker.apiUrl.replace(/^https?:\/\//, '')}</strong></span>
+                <span className="hidden sm:inline">API <strong className="font-mono font-medium text-foreground">{currentWorker.apiUrl.replace(/^https?:\/\//, '')}</strong></span>
               )}
             </div>
           </div>
 
-          {/* Terminal Screen Canvas */}
           <div
             ref={terminalHostRef}
             className="flex-1 w-full p-2 overflow-hidden select-text cursor-text relative"
           />
         </Card>
 
-        {/* Quick Agent Actions Bar & SSH Credentials */}
         {!isFullscreen && (
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
-            {/* Agent Actions Column */}
-            <Card className="lg:col-span-2 p-4 gap-1">
-              <CardTitle className="flex items-center gap-1.5">
-                <Zap className="size-4 text-muted-foreground" /> Agent shortcuts &amp; command presets
-              </CardTitle>
-              <CardDescription>
-                Execute autonomous agent workflows and inspect diagnostics directly inside the live shell.
-              </CardDescription>
-
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mt-3">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => injectCommand('agy --version && agy --help')}
-                  className="justify-start"
-                >
-                  <Zap className="size-3.5" /> Antigravity CLI (agy)
-                </Button>
-
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => injectCommand('ps aux | grep -E "agy|chrome|course|python|node"')}
-                  className="justify-start"
-                >
-                  <Activity className="size-3.5" /> Inspect running agents
-                </Button>
-
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => injectCommand('df -h && free -h && uptime')}
-                  className="justify-start"
-                >
-                  <HardDrive className="size-3.5" /> System vitals (disk/RAM)
-                </Button>
-
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => injectCommand('curl -s http://127.0.0.1:8085/worker/status | jq . || curl -s http://127.0.0.1:8085/worker/status')}
-                  className="justify-start"
-                >
-                  <GraduationCap className="size-3.5" /> Course worker status
-                </Button>
-
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => injectCommand('tail -n 25 /tmp/worker_api.log')}
-                  className="justify-start"
-                >
-                  <FileText className="size-3.5" /> Worker API logs
-                </Button>
-
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => injectCommand('curl -s https://api.ipify.org && echo ""')}
-                  className="justify-start"
-                >
-                  <Globe className="size-3.5" /> Check runner public IP
-                </Button>
+          <aside className="space-y-4 min-w-0">
+            {/* Worker nodes */}
+            <Card className="p-4 gap-3">
+              <div className="flex items-center justify-between">
+                <CardTitle className="flex items-center gap-1.5">
+                  <SquareTerminal className="size-4 text-muted-foreground" /> Worker nodes
+                </CardTitle>
+                <Badge variant="outline">{browsers.length}</Badge>
               </div>
+              <div className="space-y-1.5 max-h-56 overflow-y-auto">{workerButtons(true)}</div>
             </Card>
 
-            {/* Direct SSH Details Card */}
-            <Card className="p-4 gap-3 justify-between">
-              <div>
-                <CardTitle className="flex items-center justify-between">
-                  <span className="flex items-center gap-1.5"><KeyRound className="size-4 text-muted-foreground" /> OpenSSH access</span>
-                  <Badge variant="outline" className="font-mono">
-                    Port {currentWorker?.sshPort || 2222}
-                  </Badge>
+            {/* SSH access */}
+            <Card className="p-4 gap-3">
+              <div className="flex items-center justify-between">
+                <CardTitle className="flex items-center gap-1.5">
+                  <KeyRound className="size-4 text-muted-foreground" /> OpenSSH access
                 </CardTitle>
-                <CardDescription className="mt-0.5">
-                  Direct SSH terminal command &amp; credentials.
-                </CardDescription>
+                <Badge variant="outline" className="font-mono">Port {currentWorker?.sshPort || 2222}</Badge>
+              </div>
 
-                <div className="space-y-2 mt-3 text-xs">
-                  {/* SSH Command */}
-                  <div className="bg-secondary/40 border border-border p-2 rounded-md">
+              <div className="space-y-2 text-xs">
+                <div className="bg-secondary/40 border border-border p-2.5 rounded-md">
+                  <div className="text-xs font-medium text-muted-foreground flex justify-between">
+                    <span>SSH command</span>
+                    <button
+                      onClick={() => handleCopy(sshCommand, 'ssh-cmd')}
+                      className="text-primary hover:underline"
+                    >
+                      {copiedKey === 'ssh-cmd' ? 'Copied!' : 'Copy'}
+                    </button>
+                  </div>
+                  <code className="text-[11px] text-foreground block truncate mt-1 select-all font-mono">{sshCommand}</code>
+                </div>
+
+                {currentWorker?.sshPassword && (
+                  <div className="bg-secondary/40 border border-border p-2.5 rounded-md">
                     <div className="text-xs font-medium text-muted-foreground flex justify-between">
-                      <span>SSH command:</span>
-                      <button
-                        onClick={() => handleCopy(currentWorker?.sshCommand || `ssh -p ${currentWorker?.sshPort || 2222} ${currentWorker?.sshUser || 'runner'}@localhost`, 'ssh-cmd')}
-                        className="text-primary hover:underline"
-                      >
-                        {copiedKey === 'ssh-cmd' ? 'Copied!' : 'Copy'}
-                      </button>
+                      <span>Password</span>
+                      <div className="flex gap-3">
+                        <button
+                          onClick={() => setShowPassword(p => !p)}
+                          className="text-muted-foreground hover:text-foreground"
+                        >
+                          {showPassword ? 'Hide' : 'Show'}
+                        </button>
+                        <button
+                          onClick={() => handleCopy(currentWorker.sshPassword!, 'ssh-pwd')}
+                          className="text-primary hover:underline"
+                        >
+                          {copiedKey === 'ssh-pwd' ? 'Copied!' : 'Copy'}
+                        </button>
+                      </div>
                     </div>
-                    <code className="text-[11px] text-foreground block truncate mt-0.5 select-all font-mono">
-                      {currentWorker?.sshCommand || `ssh -p ${currentWorker?.sshPort || 2222} ${currentWorker?.sshUser || 'runner'}@localhost`}
+                    <code className="text-[11px] text-foreground block mt-1 select-all font-mono">
+                      {showPassword ? currentWorker.sshPassword : '••••••••••••••••'}
                     </code>
                   </div>
-
-                  {/* Password */}
-                  {currentWorker?.sshPassword && (
-                    <div className="bg-secondary/40 border border-border p-2 rounded-md">
-                      <div className="text-xs font-medium text-muted-foreground flex justify-between">
-                        <span>Password:</span>
-                        <div className="flex gap-2">
-                          <button
-                            onClick={() => setShowPassword(p => !p)}
-                            className="text-muted-foreground hover:text-foreground"
-                          >
-                            {showPassword ? 'Hide' : 'Show'}
-                          </button>
-                          <button
-                            onClick={() => handleCopy(currentWorker.sshPassword!, 'ssh-pwd')}
-                            className="text-primary hover:underline"
-                          >
-                            {copiedKey === 'ssh-pwd' ? 'Copied!' : 'Copy'}
-                          </button>
-                        </div>
-                      </div>
-                      <code className="text-[11px] text-foreground block mt-0.5 select-all font-mono">
-                        {showPassword ? currentWorker.sshPassword : '••••••••••••••••'}
-                      </code>
-                    </div>
-                  )}
-                </div>
+                )}
               </div>
 
               {currentWorker?.vscodeUrl && (
@@ -787,7 +717,30 @@ export default function WorkerShellPanel({ initialWorkerId }: WorkerShellPanelPr
                 </Button>
               )}
             </Card>
-          </div>
+
+            {/* Command presets */}
+            <Card className="p-4 gap-3">
+              <div>
+                <CardTitle className="flex items-center gap-1.5">
+                  <Zap className="size-4 text-muted-foreground" /> Command presets
+                </CardTitle>
+                <CardDescription className="mt-0.5">Run diagnostics inside the live shell.</CardDescription>
+              </div>
+              <div className="space-y-1.5">
+                {presets.map(({ icon: Icon, label, cmd }) => (
+                  <Button
+                    key={label}
+                    variant="outline"
+                    size="sm"
+                    onClick={() => injectCommand(cmd)}
+                    className="w-full justify-start"
+                  >
+                    <Icon className="size-3.5" /> {label}
+                  </Button>
+                ))}
+              </div>
+            </Card>
+          </aside>
         )}
       </div>
     </div>

@@ -152,6 +152,7 @@ export default function SessionsManagerPanel() {
   const [result, setResult] = useState('');
 
   const [activeTab, setActiveTab] = useState<TabType>('all');
+  const [launchTab, setLaunchTab] = useState<'browser' | 'container'>('browser');
   const [searchQuery, setSearchQuery] = useState('');
   const [searchMode, setSearchMode] = useState<SearchMode>('all');
 
@@ -394,46 +395,37 @@ export default function SessionsManagerPanel() {
 
   return (
     <div className="space-y-4 mx-auto text-sm text-foreground">
-      {/* Header */}
-      <div className="rounded-lg border border-border bg-card p-4">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <div className="size-9 rounded-md bg-secondary border border-border flex items-center justify-center shrink-0 text-muted-foreground">
-              <ShieldCheck className="size-4" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2 flex-wrap">
-                <h1 className="text-sm font-semibold tracking-tight text-foreground">
-                  Active workloads
-                </h1>
-                <Badge variant="default">
-                  <span className="size-1.5 rounded-full bg-primary" />
-                  Cloudflare protected
-                </Badge>
-              </div>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                {sessions.length} workload(s) running with Cloudflare secure zero-trust tunnels.
-              </p>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-3">
-            <Button
-              variant="outline"
-              size="icon"
-              onClick={() => loadSessions()}
-              title="Refresh workload sessions"
-            >
-              <RefreshCw />
-            </Button>
-            <div className="bg-secondary/40 px-4 py-1.5 rounded-md border border-border text-center min-w-[110px]">
-              <span className="text-xs font-medium block text-muted-foreground">
-                Total active
-              </span>
-              <span className="text-xl font-semibold text-foreground">{totalSessions}</span>
-            </div>
-          </div>
+      {/* Toolbar */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2.5 text-xs text-muted-foreground">
+          <Badge variant="default">
+            <ShieldCheck />
+            Cloudflare protected
+          </Badge>
+          <span>{sessions.length} workload(s) running through secure zero-trust tunnels</span>
         </div>
+        <Button variant="outline" size="sm" onClick={() => loadSessions()} title="Refresh workload sessions">
+          <RefreshCw className="size-3.5" /> Refresh
+        </Button>
+      </div>
+
+      {/* Stat strip */}
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+        {[
+          { n: totalSessions, label: 'Total active', icon: <Layers className="size-4" />, hl: true },
+          { n: dockerSessions.length, label: 'Docker', icon: <Container className="size-4" /> },
+          { n: customBrowserSessions.length + browsers.length, label: 'Browsers', icon: <Globe className="size-4" /> },
+          { n: terminalSessions.length, label: 'Terminals', icon: <Terminal className="size-4" /> },
+          { n: vscodeSessions.length, label: 'VS Code', icon: <Cpu className="size-4" /> },
+        ].map((c) => (
+          <div key={c.label} className="rounded-lg border border-border bg-card p-4 flex items-start justify-between">
+            <div>
+              <div className="text-xs font-medium text-muted-foreground">{c.label}</div>
+              <div className={`text-2xl font-semibold tabular-nums mt-1 ${c.hl ? 'text-primary' : 'text-foreground'}`}>{c.n}</div>
+            </div>
+            <span className="text-muted-foreground">{c.icon}</span>
+          </div>
+        ))}
       </div>
 
       {/* Result Status Banner */}
@@ -453,149 +445,11 @@ export default function SessionsManagerPanel() {
       {/* Responsive Main Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
 
-        {/* LEFT COLUMN: Controls & Launchers */}
-        <div className="lg:col-span-4 space-y-4">
-
-          {/* Workload Counter Stats Grid */}
-          <div className="rounded-lg border border-border bg-card p-4 space-y-4">
-            <div className="flex justify-between items-center">
-              <span className={`${sectionTitle} flex items-center gap-2`}>
-                <Layers className="size-4 text-muted-foreground" /> Workload breakdown
-              </span>
-              <Badge variant="default">
-                <span className="size-1.5 rounded-full bg-primary animate-pulse" /> Live
-              </Badge>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              {[
-                { n: dockerSessions.length, label: 'Docker', icon: <Container className="size-3.5" /> },
-                { n: customBrowserSessions.length + browsers.length, label: 'Browsers', icon: <Globe className="size-3.5" /> },
-                { n: terminalSessions.length, label: 'Terminals', icon: <Terminal className="size-3.5" /> },
-                { n: vscodeSessions.length, label: 'VS Code', icon: <Cpu className="size-3.5" /> },
-              ].map((c) => (
-                <div key={c.label} className="p-3 rounded-md bg-secondary/40 border border-border">
-                  <div className="text-xl font-semibold text-foreground">{c.n}</div>
-                  <div className="text-xs font-medium text-muted-foreground flex items-center gap-1.5 mt-0.5">
-                    {c.icon} {c.label}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Quick Launch Browser Card */}
-          <div className="rounded-lg border border-border bg-card p-4 space-y-3">
-            <div className="flex items-center gap-2 text-foreground">
-              <Globe className="size-4 text-muted-foreground" />
-              <CardTitle className={sectionTitle}>
-                Quick web browser
-              </CardTitle>
-            </div>
-            <div className="flex flex-col sm:flex-row gap-2">
-              <Input
-                type="url"
-                value={customUrl}
-                onChange={(e) => setCustomUrl(e.target.value)}
-                placeholder="https://example.com"
-                className="flex-1 text-xs font-mono"
-              />
-              <Button onClick={startCustomBrowser} disabled={loading}>
-                <Play /> Launch
-              </Button>
-            </div>
-          </div>
-
-          {/* Deploy Container Card */}
-          <div className="rounded-lg border border-border bg-card p-4 space-y-4">
-            <div className="flex items-center gap-2 border-b border-border pb-3 text-foreground">
-              <Container className="size-4 text-muted-foreground" />
-              <CardTitle className={sectionTitle}>
-                Deploy container instance
-              </CardTitle>
-            </div>
-
-            <div className="space-y-3 text-xs">
-              <div>
-                <label className={fieldLabel}>Image URI</label>
-                <Input
-                  type="text"
-                  value={dockerImage}
-                  onChange={(e) => setDockerImage(e.target.value)}
-                  placeholder="nginx:latest"
-                  className="w-full text-xs font-mono"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className={fieldLabel}>Container port</label>
-                  <Input
-                    type="number"
-                    value={dockerPort}
-                    onChange={(e) => setDockerPort(e.target.value)}
-                    className="w-full text-xs font-mono"
-                  />
-                </div>
-                <div>
-                  <label className={fieldLabel}>Host port</label>
-                  <Input
-                    type="number"
-                    value={hostPort}
-                    onChange={(e) => setHostPort(e.target.value)}
-                    className="w-full text-xs font-mono"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className={fieldLabel}>Network mode</label>
-                <select
-                  value={domainMode}
-                  onChange={(e) => setDomainMode(e.target.value as 'quick' | 'custom')}
-                  className={selectCls}
-                >
-                  <option value="quick">Quick tunnel (trycloudflare)</option>
-                  <option value="custom">Custom subdomain</option>
-                </select>
-              </div>
-
-              {domainMode === 'custom' && (
-                <div>
-                  <label className={fieldLabel}>Custom subdomain</label>
-                  <Input
-                    type="text"
-                    value={customDomain}
-                    onChange={(e) => setCustomDomain(e.target.value)}
-                    placeholder="whoami.yourdomain.com"
-                    className="w-full text-xs font-mono"
-                  />
-                </div>
-              )}
-
-              <div>
-                <label className={fieldLabel}>Environment variables</label>
-                <Textarea
-                  value={dockerEnv}
-                  onChange={(e) => setDockerEnv(e.target.value)}
-                  rows={2}
-                  placeholder={"KEY=VALUE\nOTHER_KEY=123"}
-                  className="w-full font-mono text-xs resize-y"
-                />
-              </div>
-
-              <Button onClick={deployCustomContainer} disabled={loading} className="w-full">
-                <Zap /> {loading ? 'Deploying...' : 'Deploy container'}
-              </Button>
-            </div>
-          </div>
-        </div>
-
         {/* RIGHT COLUMN: Search Controls, Tabs, Workload List */}
-        <div className="lg:col-span-8 space-y-4">
+        <div className="lg:col-span-8 space-y-4 min-w-0">
 
           {/* Search & Filter Bar */}
-          <div className="rounded-lg border border-border bg-card p-3 space-y-2">
+          <div className="rounded-lg border border-border bg-card p-3 space-y-3">
             <div className="flex flex-col sm:flex-row gap-2 items-stretch sm:items-center">
               <div className="relative flex-1">
                 <Search className="size-4 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
@@ -643,10 +497,7 @@ export default function SessionsManagerPanel() {
                 </button>
               </div>
             )}
-          </div>
-
-          {/* Filter Tabs */}
-          <div className="flex gap-1.5 overflow-x-auto pb-1">
+          <div className="flex gap-1.5 overflow-x-auto border-t border-border pt-3">
             {(['all', 'docker', 'browser', 'terminal', 'vscode', 'android'] as TabType[]).map((tab) => {
               const active = activeTab === tab;
               const count =
@@ -684,6 +535,7 @@ export default function SessionsManagerPanel() {
                 </button>
               );
             })}
+          </div>
           </div>
 
           {/* Workloads Card List Container */}
@@ -943,6 +795,128 @@ export default function SessionsManagerPanel() {
             })()}
           </div>
         </div>
+        {/* Launch panel */}
+        <aside className="lg:col-span-4 lg:sticky lg:top-4 self-start">
+          <div className="rounded-lg border border-border bg-card overflow-hidden">
+            <div className="flex gap-1 p-1.5 border-b border-border bg-secondary/30">
+              {([
+                { id: 'browser', label: 'Quick browser', icon: <Globe className="size-3.5" /> },
+                { id: 'container', label: 'Deploy container', icon: <Container className="size-3.5" /> },
+              ] as const).map((t) => (
+                <button
+                  key={t.id}
+                  onClick={() => setLaunchTab(t.id)}
+                  className={`flex-1 h-8 inline-flex items-center justify-center gap-1.5 rounded-md text-xs font-medium transition-colors ${
+                    launchTab === t.id
+                      ? 'bg-card text-foreground border border-border shadow-sm'
+                      : 'text-muted-foreground hover:text-foreground border border-transparent'
+                  }`}
+                >
+                  {t.icon} {t.label}
+                </button>
+              ))}
+            </div>
+
+            <div className="p-4">
+              {launchTab === 'browser' ? (
+                <div className="space-y-3">
+                  <p className="text-xs text-muted-foreground">Open a URL in an isolated remote browser session.</p>
+        <div className="flex flex-col sm:flex-row gap-2">
+          <Input
+            type="url"
+            value={customUrl}
+            onChange={(e) => setCustomUrl(e.target.value)}
+            placeholder="https://example.com"
+            className="flex-1 text-xs font-mono"
+          />
+          <Button onClick={startCustomBrowser} disabled={loading}>
+            <Play /> Launch
+          </Button>
+        </div>
+
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <p className="text-xs text-muted-foreground">Run any Docker image behind a secure tunnel.</p>
+        <div className="space-y-3 text-xs">
+          <div>
+            <label className={fieldLabel}>Image URI</label>
+            <Input
+              type="text"
+              value={dockerImage}
+              onChange={(e) => setDockerImage(e.target.value)}
+              placeholder="nginx:latest"
+              className="w-full text-xs font-mono"
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className={fieldLabel}>Container port</label>
+              <Input
+                type="number"
+                value={dockerPort}
+                onChange={(e) => setDockerPort(e.target.value)}
+                className="w-full text-xs font-mono"
+              />
+            </div>
+            <div>
+              <label className={fieldLabel}>Host port</label>
+              <Input
+                type="number"
+                value={hostPort}
+                onChange={(e) => setHostPort(e.target.value)}
+                className="w-full text-xs font-mono"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className={fieldLabel}>Network mode</label>
+            <select
+              value={domainMode}
+              onChange={(e) => setDomainMode(e.target.value as 'quick' | 'custom')}
+              className={selectCls}
+            >
+              <option value="quick">Quick tunnel (trycloudflare)</option>
+              <option value="custom">Custom subdomain</option>
+            </select>
+          </div>
+
+          {domainMode === 'custom' && (
+            <div>
+              <label className={fieldLabel}>Custom subdomain</label>
+              <Input
+                type="text"
+                value={customDomain}
+                onChange={(e) => setCustomDomain(e.target.value)}
+                placeholder="whoami.yourdomain.com"
+                className="w-full text-xs font-mono"
+              />
+            </div>
+          )}
+
+          <div>
+            <label className={fieldLabel}>Environment variables</label>
+            <Textarea
+              value={dockerEnv}
+              onChange={(e) => setDockerEnv(e.target.value)}
+              rows={2}
+              placeholder={"KEY=VALUE\nOTHER_KEY=123"}
+              className="w-full font-mono text-xs resize-y"
+            />
+          </div>
+
+          <Button onClick={deployCustomContainer} disabled={loading} className="w-full">
+            <Zap /> {loading ? 'Deploying...' : 'Deploy container'}
+          </Button>
+        </div>
+
+                </div>
+              )}
+            </div>
+          </div>
+        </aside>
       </div>
 
       {/* Edit Container Dialog */}
