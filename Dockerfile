@@ -36,6 +36,19 @@ RUN apk add --no-cache \
     chromium \
     chromium-chromedriver
 
+# Dev Tools converters (/api/tools): LibreOffice for office documents, plus fonts that are
+# metric-compatible with Word/Excel defaults (Arial, Times, Calibri…) so layouts don't shift.
+RUN apk add --no-cache \
+    libreoffice \
+    font-liberation \
+    font-noto \
+    font-noto-cjk \
+    ttf-dejavu \
+    fontconfig \
+    iputils \
+    traceroute \
+    && fc-cache -f
+
 RUN apk add --no-cache --repository=https://dl-cdn.alpinelinux.org/alpine/edge/testing/ \
     cloudflared
 

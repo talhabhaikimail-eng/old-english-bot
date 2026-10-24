@@ -1,3 +1,10 @@
+// Theme colours are CSS variables; wrapping them in color-mix lets opacity modifiers such as
+// `bg-primary/10` work (Tailwind 3 can't apply alpha to a bare var()).
+const themed = name => ({ opacityValue }) =>
+  opacityValue === undefined
+    ? `var(--${name})`
+    : `color-mix(in srgb, var(--${name}) calc(${opacityValue} * 100%), transparent)`;
+
 /** @type {import('tailwindcss').Config} */
 export default {
   darkMode: 'class',
@@ -35,39 +42,39 @@ export default {
           900: '#18181b',
           950: '#09090b',
         },
-        background: 'var(--background)',
-        foreground: 'var(--foreground)',
+        background: themed('background'),
+        foreground: themed('foreground'),
         card: {
-          DEFAULT: 'var(--card)',
-          foreground: 'var(--card-foreground)',
+          DEFAULT: themed('card'),
+          foreground: themed('card-foreground'),
         },
         popover: {
-          DEFAULT: 'var(--popover)',
-          foreground: 'var(--popover-foreground)',
+          DEFAULT: themed('popover'),
+          foreground: themed('popover-foreground'),
         },
         primary: {
-          DEFAULT: 'var(--primary)',
-          foreground: 'var(--primary-foreground)',
+          DEFAULT: themed('primary'),
+          foreground: themed('primary-foreground'),
         },
         secondary: {
-          DEFAULT: 'var(--secondary)',
-          foreground: 'var(--secondary-foreground)',
+          DEFAULT: themed('secondary'),
+          foreground: themed('secondary-foreground'),
         },
         muted: {
-          DEFAULT: 'var(--muted)',
-          foreground: 'var(--muted-foreground)',
+          DEFAULT: themed('muted'),
+          foreground: themed('muted-foreground'),
         },
         accent: {
-          DEFAULT: 'var(--accent)',
-          foreground: 'var(--accent-foreground)',
+          DEFAULT: themed('accent'),
+          foreground: themed('accent-foreground'),
         },
         destructive: {
-          DEFAULT: 'var(--destructive)',
-          foreground: 'var(--destructive-foreground)',
+          DEFAULT: themed('destructive'),
+          foreground: themed('destructive-foreground'),
         },
-        border: 'var(--border)',
-        input: 'var(--input)',
-        ring: 'var(--ring)',
+        border: themed('border'),
+        input: themed('input'),
+        ring: themed('ring'),
       },
       fontFamily: {
         sans: ['Inter', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'Roboto', 'sans-serif'],

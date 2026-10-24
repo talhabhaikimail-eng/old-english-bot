@@ -52,6 +52,7 @@ src-go/browser-cdp-connection/browser-cdp-connection
 # Dashboard build artifacts
 dashboard/node_modules/
 dashboard/dist/
+dashboard/dist-e2e/
 
 # Generated CV files
 /applications/
@@ -66,3 +67,4 @@ cloudflared.deb
 downloaded_files/
 worker_browser/course_worker/bin/
 
+src/scripts/tools-tests/fixtures/docs-gen/

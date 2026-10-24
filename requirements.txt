@@ -8,4 +8,9 @@ cryptography
 psutil
 requests
 websockets>=12.0
+# Dev Tools image/PDF engines (src/scripts/tools)
+pillow>=11
+pillow-heif
+numpy
+pymupdf
 

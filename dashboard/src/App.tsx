@@ -9,7 +9,7 @@ import {
   Globe, Network, Search, MapPin, Layers, Briefcase, Contact, Monitor, LayoutDashboard,
   SquareTerminal, Code2, Radio, Smartphone, Link2, Zap, BrainCircuit, Download, PlaySquare,
   Clapperboard, Cpu, Mic, PenLine, GraduationCap, Sun, Moon, RefreshCw, LogOut, Menu, X,
-  Timer, ChevronsLeft, ChevronsRight, type LucideIcon,
+  Timer, ChevronsLeft, ChevronsRight, Wrench, type LucideIcon,
 } from 'lucide-react';
 
 const SessionsPanel = React.lazy(() => import('./components/SessionsPanel'));
@@ -35,6 +35,7 @@ const CodeExecPanel = React.lazy(() => import('./components/CodeExecPanel'));
 const ProxyPanel = React.lazy(() => import('./components/ProxyPanel'));
 const CourseWorkerPanel = React.lazy(() => import('./components/CourseWorkerPanel'));
 const WorkerShellPanel = React.lazy(() => import('./components/WorkerShellPanel'));
+const DevToolsPanel = React.lazy(() => import('./components/DevToolsPanel'));
 
 interface NavItem {
   id: NavSection;
@@ -72,6 +73,7 @@ const NAV_CATEGORIES: NavCategory[] = [
       { id: 'manager',   label: 'Session Manager', icon: LayoutDashboard },
       { id: 'shell',     label: 'Worker Shells (WebSSH)', icon: SquareTerminal },
       { id: 'code-exec', label: 'Code Executor (Runner)', icon: Code2 },
+      { id: 'dev-tools', label: 'Dev Tools',      icon: Wrench },
       { id: 'proxy-net', label: 'HTTP Network Proxy', icon: Radio },
       { id: 'android',   label: 'Android',        icon: Smartphone },
       { id: 'urls',      label: 'Live URLs',      icon: Link2 },
@@ -97,7 +99,7 @@ const NAV: NavItem[] = NAV_CATEGORIES.flatMap(cat => cat.items);
 
 const VALID_SECTIONS: NavSection[] = [
   'google', 'web-proxy', 'search', 'places', 'pool', 'indeed', 'contacts',
-  'sessions', 'manager', 'shell', 'code-exec', 'proxy-net', 'android', 'urls', 'go-containers',
+  'sessions', 'manager', 'shell', 'code-exec', 'dev-tools', 'proxy-net', 'android', 'urls', 'go-containers',
   'ai-tools', 'media', 'youtube', 'movies', 'llm', 'tts', 'blog-gen', 'courses'
 ];
 
@@ -528,6 +530,7 @@ export default function App() {
                 {section === 'sessions' && <SessionsPanel />}
                 {section === 'manager' && <SessionsManagerPanel />}
                 {section === 'code-exec' && <CodeExecPanel />}
+                {section === 'dev-tools' && <DevToolsPanel />}
                 {section === 'proxy-net' && <ProxyPanel />}
                 {section === 'android' && <AndroidPanel />}
 

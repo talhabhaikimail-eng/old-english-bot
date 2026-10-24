@@ -52,6 +52,7 @@ import { runJobsScraper } from './jobs-scraper-service';
 import { getJobsFromR2, getJobsStatusFromR2, saveJobsStatusToR2, getReceivedEmailsFromR2, saveReceivedEmailsToR2, ReceivedEmail } from './r2-jobs-store';
 import { generateAndPostBlog, generateCommunityBlog } from './blog-generator-service';
 import { handlePortfolioRequest } from './portfolio-api';
+import { handleToolsRequest } from './tools';
 import {
   listCourses,
   getCourseStats,
@@ -659,6 +660,11 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
       err(res, 'Unauthorized', 401);
       return;
     }
+  }
+
+  // ── Dev Tools API (/api/tools/*) ─────────────────────────────────────────────
+  if (pathname.startsWith('/api/tools/')) {
+    if (await handleToolsRequest(req, res)) return;
   }
 
   // ── Dispatch Portfolio API Request ──────────────────────────────────────────

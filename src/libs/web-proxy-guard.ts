@@ -20,14 +20,14 @@ const Corrosion = require('corrosion');
 // ── SSRF guard ───────────────────────────────────────────────────────────────
 
 function ipv4Blocked(parts: number[]): boolean {
-  const [a, b] = parts;
+  const [a, b, c] = parts;
   return (
     a === 0 || a === 10 || a === 127 ||
     (a === 100 && b >= 64 && b <= 127) ||     // CGNAT
     (a === 169 && b === 254) ||               // link-local + cloud metadata
     (a === 172 && b >= 16 && b <= 31) ||
     (a === 192 && b === 168) ||
-    (a === 192 && b === 0) ||
+    (a === 192 && b === 0 && (c === 0 || c === 2)) || // IETF protocol assignments + TEST-NET-1 (not all of 192.0/16)
     (a === 198 && (b === 18 || b === 19)) ||
     a >= 224                                  // multicast / reserved
   );
