@@ -599,6 +599,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
       pathname !== '/api/media/download' &&
       pathname !== '/api/webhook/inbound-email' &&
       !pathname.startsWith('/api/webhook/docker/') &&
+      !pathname.startsWith('/api/agent/') &&
       !pathname.startsWith('/api/portfolio')) {
     if (!usernameEnv || !passwordEnv) {
       console.error('❌ Server authentication credentials not configured in environment (DASHBOARD_USERNAME/PASSWORD).');
@@ -669,7 +670,8 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
   }
 
   // ── Proxy Go Container Manager ──────────────────────────────────────────────
-  if (url.startsWith('/api/go/')) {
+  // /api/agent/* is the token-protected plain-text agent API; the Go service validates the per-session token itself.
+  if (url.startsWith('/api/go/') || url.startsWith('/api/agent/')) {
     const targetUrl = `http://127.0.0.1:18080${url}`;
     const parsedTarget = new URL(targetUrl);
     
@@ -680,6 +682,9 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
       }
     }
     headers['host'] = parsedTarget.host;
+    // Let the Go service build correct public URLs (the client can't spoof this: we always overwrite it)
+    const fwdProto = (req.headers['x-forwarded-proto'] as string | undefined)?.split(',')[0]?.trim() || 'https';
+    headers['x-public-origin'] = `${fwdProto}://${req.headers.host || ''}`;
 
     const proxyReq = require('http').request({
       method: req.method,
@@ -947,7 +952,24 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
       const { sessionManager } = require('./session-manager');
       const session = sessionManager.getSession(sessionId);
 
-      if (!session || session.type !== 'docker-container') {
+      if (!session) {
+        // Not a Node-managed container: hand over to the Go container manager, which owns its own webhook secrets.
+        const goReq = require('http').request({
+          method: method,
+          hostname: '127.0.0.1',
+          port: 18080,
+          path: `/api/go/webhook/${encodeURIComponent(sessionId)}${urlObj.search}`,
+          headers: { 'content-type': (req.headers['content-type'] as string) || 'application/json' },
+        }, (goRes: any) => {
+          res.writeHead(goRes.statusCode || 502, { 'Content-Type': 'application/json' });
+          goRes.pipe(res);
+        });
+        goReq.on('error', () => err(res, 'Session not found', 404));
+        req.pipe(goReq);
+        return;
+      }
+
+      if (session.type !== 'docker-container') {
         return err(res, 'Session not found or invalid type', 404);
       }
 

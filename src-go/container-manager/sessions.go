@@ -61,6 +61,18 @@ type SessionMetadata struct {
 	TTLMinutes      int                               `json:"ttlMinutes,omitempty"`
 	ExpiresAt       *time.Time                        `json:"expiresAt,omitempty"`
 	IsDemo          bool                              `json:"isDemo,omitempty"`
+
+	// Lifecycle / observed state (persisted so it survives a host restart via R2)
+	Desired        string        `json:"desired,omitempty"` // "running" | "stopped"
+	RestartCount   int           `json:"restartCount,omitempty"`
+	OOMKilled      bool          `json:"oomKilled,omitempty"`
+	StatusSince    *time.Time    `json:"statusSince,omitempty"`
+	LastDeployedAt *time.Time    `json:"lastDeployedAt,omitempty"`
+	RegistryAuth   *RegistryAuth `json:"registryAuth,omitempty"` // needed to re-pull private images after a host restart
+
+	// Access tokens
+	AgentReadToken  string `json:"agentReadToken,omitempty"`
+	AgentWriteToken string `json:"agentWriteToken,omitempty"`
 }
 
 type Session struct {
@@ -115,6 +127,14 @@ type SanitizedSessionMetadata struct {
 	ExpiresAt        *time.Time                                 `json:"expiresAt,omitempty"`
 	IsDemo           bool                                       `json:"isDemo,omitempty"`
 	RemainingSeconds int                                        `json:"remainingSeconds,omitempty"`
+	Desired          string                                     `json:"desired,omitempty"`
+	RestartCount     int                                        `json:"restartCount,omitempty"`
+	OOMKilled        bool                                       `json:"oomKilled,omitempty"`
+	StatusSince      *time.Time                                 `json:"statusSince,omitempty"`
+	LastDeployedAt   *time.Time                                 `json:"lastDeployedAt,omitempty"`
+	WebhookSecret    string                                     `json:"webhookSecret,omitempty"`
+	AgentReadToken   string                                     `json:"agentReadToken,omitempty"`
+	AgentWriteToken  string                                     `json:"agentWriteToken,omitempty"`
 }
 
 type SanitizedSession struct {
@@ -154,6 +174,7 @@ func loadSessions() error {
 	}
 
 	for _, s := range sessList {
+		ensureSessionSecrets(&s)
 		sessions[s.ID] = s
 	}
 	log.Printf("[Go Container Manager] Loaded %d sessions from disk.", len(sessions))
@@ -182,22 +203,15 @@ func saveSessions() {
 		return
 	}
 
-	if err := os.WriteFile(sessionsFile, data, 0644); err != nil {
+	if err := writeFileAtomic(sessionsFile, data); err != nil {
 		log.Printf("Error writing sessions: %v", err)
 		return
 	}
 
-	// Trigger R2 upload in background (Node bridge for Phase 1, Go-native in Phase 5)
-	go func() {
-		if err := saveStateToR2(); err != nil {
-			log.Printf("❌ Failed to sync state to R2: %v", err)
-		}
-	}()
+	// Debounced upload of auth_info (sessions, deployments, events, settings) to R2
+	scheduleR2Sync()
 }
 
-func saveStateToR2() error {
-	return backupStateToR2()
-}
 
 func updateNextPort() {
 	nextPortMu.Lock()
@@ -259,6 +273,55 @@ func allocatePort() (int, error) {
 		}
 	}
 	return 0, fmt.Errorf("failed to allocate a free port after 1000 attempts")
+}
+
+// generateToken returns a long random token, optionally prefixed ("r_" read-only, "w_" control).
+func generateToken(prefix string) string {
+	b := make([]byte, 24)
+	if _, err := rand.Read(b); err != nil {
+		return prefix + fmt.Sprintf("%x", time.Now().UnixNano())
+	}
+	return prefix + fmt.Sprintf("%x", b)
+}
+
+// ensureSessionSecrets backfills webhook / agent tokens for sessions created before they existed.
+func ensureSessionSecrets(s *Session) {
+	if s.Metadata.WebhookSecret == "" {
+		s.Metadata.WebhookSecret = generateToken("")
+	}
+	if s.Metadata.AgentReadToken == "" {
+		s.Metadata.AgentReadToken = generateToken("r_")
+	}
+	if s.Metadata.AgentWriteToken == "" {
+		s.Metadata.AgentWriteToken = generateToken("w_")
+	}
+	if s.Metadata.Desired == "" {
+		s.Metadata.Desired = "running"
+	}
+}
+
+// finalizeSession carries access tokens / registry credentials over from the previous incarnation of a session
+// and stamps lifecycle fields. Call it right before storing a freshly (re)deployed session.
+func finalizeSession(sess *Session, old *Session) {
+	if old != nil {
+		if sess.Metadata.WebhookSecret == "" {
+			sess.Metadata.WebhookSecret = old.Metadata.WebhookSecret
+		}
+		if sess.Metadata.AgentReadToken == "" {
+			sess.Metadata.AgentReadToken = old.Metadata.AgentReadToken
+		}
+		if sess.Metadata.AgentWriteToken == "" {
+			sess.Metadata.AgentWriteToken = old.Metadata.AgentWriteToken
+		}
+		if sess.Metadata.RegistryAuth == nil {
+			sess.Metadata.RegistryAuth = old.Metadata.RegistryAuth
+		}
+	}
+	ensureSessionSecrets(sess)
+	now := time.Now()
+	sess.Metadata.Desired = "running"
+	sess.Metadata.LastDeployedAt = &now
+	sess.Metadata.StatusSince = &now
 }
 
 func generateHash() string {

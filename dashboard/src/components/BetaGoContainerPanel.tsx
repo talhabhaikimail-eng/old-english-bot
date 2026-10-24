@@ -4,6 +4,8 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/com
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
+import { SessionControls, EventsTab, SettingsTab, VolumesCard } from './GoContainerExtras';
+import { Activity, SlidersHorizontal } from 'lucide-react';
 import { X, Inbox, FolderOpen, ScrollText, RefreshCw, TriangleAlert, Box, Layers, HardDrive, History, Loader2, Circle, CircleCheck, CircleX, CircleDot, ChevronDown, ChevronRight, Settings2, Rocket, Search } from 'lucide-react';
 
 interface ServiceSessionMetadata {
@@ -54,6 +56,12 @@ interface GoSession {
     args?: string[];
     yaml?: string;
     serviceSettings?: Record<string, any>;
+    desired?: string;
+    restartCount?: number;
+    oomKilled?: boolean;
+    statusSince?: string;
+    agentReadToken?: string;
+    agentWriteToken?: string;
   };
 }
 
@@ -98,7 +106,7 @@ export default function BetaGoContainerPanel() {
   const [daemonOnline, setDaemonOnline] = useState(true);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState('');
-  const [activeTab, setActiveTab] = useState<'single' | 'compose' | 'backups' | 'history'>('single');
+  const [activeTab, setActiveTab] = useState<'single' | 'compose' | 'backups' | 'history' | 'events' | 'settings'>('single');
 
   // Single Workload Deploy States
   const [image, setImage] = useState('');
@@ -176,6 +184,13 @@ volumes:
 
   // Edit / Redeploy Modal
   const [editingSession, setEditingSession] = useState<GoSession | null>(null);
+  const [search, setSearch] = useState('');
+  const matches = (sess: GoSession) => {
+    const q = search.trim().toLowerCase();
+    if (!q) return true;
+    const m = sess.metadata;
+    return [sess.id, m?.containerName, m?.image, m?.status, sess.url].some(v => (v || '').toLowerCase().includes(q));
+  };
 
   const loadSessions = async () => {
     try {
@@ -409,6 +424,7 @@ volumes:
   };
 
   const handleStop = async (sessionId: string) => {
+    if (!confirm(`Remove ${sessionId}? This stops the container(s), deletes the Cloudflare tunnel and forgets the session. Use Stop instead to keep it.`)) return;
     setLoading(true);
     setResult('');
     try {
@@ -707,6 +723,8 @@ volumes:
             ['compose', Layers, 'Compose stacks'],
             ['backups', HardDrive, 'Volume backups (R2)'],
             ['history', History, 'Deployment history'],
+            ['events', Activity, 'Events & audit'],
+            ['settings', SlidersHorizontal, 'Alerts & settings'],
           ] as const).map(([key, Icon, label]) => (
             <Button
               key={key}
@@ -719,6 +737,10 @@ volumes:
             </Button>
           ))}
         </div>
+
+        {(activeTab === 'single' || activeTab === 'compose') && (
+          <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Filter by name, image, status…" className="text-xs max-w-sm" />
+        )}
 
         {/* Status/Result Alert Box */}
         {result && (
@@ -1121,7 +1143,7 @@ volumes:
             </div>
 
             <div className="p-5 flex-1 overflow-y-auto space-y-4 max-h-[70vh] scrollbar-thin">
-              {sessions.filter(s => s.type === 'docker-container').map((sess) => {
+              {sessions.filter(s => s.type === 'docker-container' && matches(s)).map((sess) => {
                 const sStats = stats[sess.id]?.[0];
                 return (
                   <div key={sess.id} className="rounded-lg p-4 border border-border bg-card hover:bg-secondary/30 transition-colors group relative">
@@ -1165,7 +1187,7 @@ volumes:
                         </div>
 
                         {/* Top-Right action buttons */}
-                        <div className="flex gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <div className="flex flex-wrap justify-end gap-1.5">
                           <Button
                             onClick={() => { setLogsSession(sess); setLogsService(''); setFollowLogs(true); }}
                             variant="outline" size="sm"
@@ -1188,7 +1210,7 @@ volumes:
                             onClick={() => handleStop(sess.id)}
                             variant="destructive" size="sm"
                           >
-                            Stop
+                            Remove
                           </Button>
                         </div>
                       </div>
@@ -1204,6 +1226,8 @@ volumes:
                           </div>
                         </div>
                       )}
+
+                      <SessionControls session={sess} onResult={setResult} onJob={setActiveJobId} reload={loadSessions} />
                     </div>
                   </div>
                 );
@@ -1353,7 +1377,7 @@ volumes:
               </div>
 
               <div className="p-5 space-y-4 max-h-[50vh] overflow-y-auto scrollbar-thin">
-                {sessions.filter(s => s.type === 'docker-compose').map((stack) => (
+                {sessions.filter(s => s.type === 'docker-compose' && matches(s)).map((stack) => (
                   <div key={stack.id} className="rounded-lg p-4 border border-border bg-card space-y-3">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
@@ -1380,10 +1404,12 @@ volumes:
                           onClick={() => handleStop(stack.id)}
                           variant="destructive" size="sm"
                         >
-                          Down stack
+                          Remove stack
                         </Button>
                       </div>
                     </div>
+
+                    <SessionControls session={stack} onResult={setResult} onJob={setActiveJobId} reload={loadSessions} />
 
                     {/* Services nested inside Stack */}
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-2">
@@ -1398,7 +1424,7 @@ volumes:
                                   {svc.status || 'unknown'}
                                 </Badge>
                               </div>
-                              <div className="flex gap-1 opacity-0 group-hover/item:opacity-100 transition-opacity">
+                              <div className="flex gap-1">
                                 <Button
                                   onClick={() => { setLogsSession(stack); setLogsService(svcName); setFollowLogs(true); }}
                                   variant="outline" size="xs"
@@ -1410,6 +1436,15 @@ volumes:
                                   variant="outline" size="xs"
                                 >
                                   Inspect
+                                </Button>
+                                <Button
+                                  onClick={async () => {
+                                    try { const r = await api.goAction(stack.id, 'restart', { service: svcName }); setResult(r.message); loadSessions(); }
+                                    catch (e: any) { setResult(`Error: ${e.message}`); }
+                                  }}
+                                  variant="outline" size="xs"
+                                >
+                                  Restart
                                 </Button>
                               </div>
                             </div>
@@ -1478,6 +1513,7 @@ volumes:
                 </Button>
               </CardContent>
             </Card>
+            <VolumesCard onPick={setBackupVolumeInput} onResult={setResult} />
           </div>
 
           {/* List of backups on R2 */}
@@ -1544,6 +1580,12 @@ volumes:
           </div>
         </div>
       )}
+
+      {activeTab === 'events' && (
+        <EventsTab sessionIds={sessions.map(s => ({ id: s.id, label: s.metadata?.containerName || s.id }))} />
+      )}
+
+      {activeTab === 'settings' && <SettingsTab onResult={setResult} />}
 
       {/* MODAL: Realtime log stream */}
       {logsSession && (

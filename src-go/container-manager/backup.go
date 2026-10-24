@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -101,7 +102,7 @@ func backupStateToR2() error {
 
 	root := findWorkspaceRoot()
 	authInfoDir := filepath.Join(root, "auth_info")
-	tarPath := filepath.Join(root, "state.tar.gz")
+	tarPath := filepath.Join(root, "state-go.tar.gz")
 
 	if _, err := os.Stat(authInfoDir); os.IsNotExist(err) {
 		return fmt.Errorf("auth_info folder not found")
@@ -127,70 +128,141 @@ func backupStateToR2() error {
 	return err
 }
 
+func getS3ClientErr() (*s3.Client, error) {
+	c, _, err := getS3Client()
+	return c, err
+}
+
+var volumeNameRe = regexp.MustCompile(`^[a-zA-Z0-9_.-]+$`)
+
+// backupVolumeToR2 tars a docker volume (via a throwaway alpine container) and uploads it to volumes/<name>.tar.gz.
+func backupVolumeToR2(volume string) error {
+	if !volumeNameRe.MatchString(volume) {
+		return fmt.Errorf("invalid volume name")
+	}
+	client, bucket, err := getS3Client()
+	if err != nil {
+		return err
+	}
+	backupsDir := filepath.Join(findWorkspaceRoot(), "backups")
+	_ = os.MkdirAll(backupsDir, 0755)
+	tarFile := filepath.Join(backupsDir, volume+".tar.gz")
+	defer os.Remove(tarFile)
+
+	cmd := exec.Command("docker", "run", "--rm",
+		"-v", fmt.Sprintf("%s:/data", volume),
+		"-v", fmt.Sprintf("%s:/backup", backupsDir),
+		"alpine", "tar", "-czf", fmt.Sprintf("/backup/%s.tar.gz", volume), "-C", "/data", ".")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to tar docker volume: %v (stderr: %s)", err, stderr.String())
+	}
+
+	file, err := os.Open(tarFile)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	key := fmt.Sprintf("volumes/%s.tar.gz", volume)
+	if _, err := client.PutObject(context.TODO(), &s3.PutObjectInput{Bucket: &bucket, Key: &key, Body: file}); err != nil {
+		return fmt.Errorf("failed to upload to Cloudflare R2: %w", err)
+	}
+	return nil
+}
+
+func restoreVolumeFromR2(volume string) error {
+	if !volumeNameRe.MatchString(volume) {
+		return fmt.Errorf("invalid volume name")
+	}
+	client, bucket, err := getS3Client()
+	if err != nil {
+		return err
+	}
+	backupsDir := filepath.Join(findWorkspaceRoot(), "backups")
+	_ = os.MkdirAll(backupsDir, 0755)
+	tarFile := filepath.Join(backupsDir, volume+".tar.gz")
+	defer os.Remove(tarFile)
+
+	key := fmt.Sprintf("volumes/%s.tar.gz", volume)
+	res, err := client.GetObject(context.TODO(), &s3.GetObjectInput{Bucket: &bucket, Key: &key})
+	if err != nil {
+		return fmt.Errorf("failed to fetch backup from Cloudflare R2: %w", err)
+	}
+	defer res.Body.Close()
+	out, err := os.Create(tarFile)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, res.Body); err != nil {
+		out.Close()
+		return fmt.Errorf("failed to write temp tar file: %w", err)
+	}
+	out.Close()
+
+	_ = exec.Command("docker", "volume", "create", volume).Run()
+	cmd := exec.Command("docker", "run", "--rm",
+		"-v", fmt.Sprintf("%s:/data", volume),
+		"-v", fmt.Sprintf("%s:/backup", backupsDir),
+		"alpine", "tar", "-xzf", fmt.Sprintf("/backup/%s.tar.gz", volume), "-C", "/data")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to extract docker volume: %v (stderr: %s)", err, stderr.String())
+	}
+	return nil
+}
+
+func listR2VolumeBackups() []string {
+	client, bucket, err := getS3Client()
+	if err != nil {
+		return nil
+	}
+	prefix := "volumes/"
+	var names []string
+	var token *string
+	for {
+		res, err := client.ListObjectsV2(context.TODO(), &s3.ListObjectsV2Input{Bucket: &bucket, Prefix: &prefix, ContinuationToken: token})
+		if err != nil {
+			return names
+		}
+		for _, obj := range res.Contents {
+			n := strings.TrimSuffix(strings.TrimPrefix(*obj.Key, prefix), ".tar.gz")
+			if n != "" {
+				names = append(names, n)
+			}
+		}
+		if res.IsTruncated == nil || !*res.IsTruncated {
+			return names
+		}
+		token = res.NextContinuationToken
+	}
+}
+
+func r2HasVolumeBackup(volume string) bool {
+	client, bucket, err := getS3Client()
+	if err != nil {
+		return false
+	}
+	key := fmt.Sprintf("volumes/%s.tar.gz", volume)
+	_, err = client.HeadObject(context.TODO(), &s3.HeadObjectInput{Bucket: &bucket, Key: &key})
+	return err == nil
+}
+
 func handleBackupVolume(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
 		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
 		return
 	}
-
 	var req VolumeBackupRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "Invalid request body")
-		return
-	}
-
-	if req.Volume == "" {
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Volume == "" {
 		writeError(w, http.StatusBadRequest, "Missing volume name")
 		return
 	}
-
-	client, bucket, err := getS3Client()
-	if err != nil {
+	if err := backupVolumeToR2(req.Volume); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-
-	// Create backups directory in workspace
-	root := findWorkspaceRoot()
-	backupsDir := filepath.Join(root, "backups")
-	_ = os.MkdirAll(backupsDir, 0755)
-
-	tarFile := filepath.Join(backupsDir, fmt.Sprintf("%s.tar.gz", req.Volume))
-	defer os.Remove(tarFile)
-
-	// Since we are running in GH actions (Linux) or local Docker, we run a temporary container to tar the volume.
-	// We mount the target volume to /data, and the backups host folder to /backup.
-	cmd := exec.Command("docker", "run", "--rm",
-		"-v", fmt.Sprintf("%s:/data", req.Volume),
-		"-v", fmt.Sprintf("%s:/backup", backupsDir),
-		"alpine", "tar", "-czf", fmt.Sprintf("/backup/%s.tar.gz", req.Volume), "-C", "/data", ".")
-
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to tar docker volume: %v (stderr: %s)", err, stderr.String()))
-		return
-	}
-
-	// Upload to R2
-	file, err := os.Open(tarFile)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "Failed to open tar file: "+err.Error())
-		return
-	}
-	defer file.Close()
-
-	key := fmt.Sprintf("volumes/%s.tar.gz", req.Volume)
-	_, err = client.PutObject(context.TODO(), &s3.PutObjectInput{
-		Bucket: &bucket,
-		Key:    &key,
-		Body:   file,
-	})
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "Failed to upload to Cloudflare R2: "+err.Error())
-		return
-	}
-
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"success": true,
 		"message": fmt.Sprintf("Volume '%s' backed up successfully to R2.", req.Volume),
@@ -202,72 +274,15 @@ func handleRestoreVolume(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
 		return
 	}
-
 	var req VolumeBackupRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "Invalid request body")
-		return
-	}
-
-	if req.Volume == "" {
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Volume == "" {
 		writeError(w, http.StatusBadRequest, "Missing volume name")
 		return
 	}
-
-	client, bucket, err := getS3Client()
-	if err != nil {
+	if err := restoreVolumeFromR2(req.Volume); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-
-	// Create backups directory in workspace
-	root := findWorkspaceRoot()
-	backupsDir := filepath.Join(root, "backups")
-	_ = os.MkdirAll(backupsDir, 0755)
-
-	tarFile := filepath.Join(backupsDir, fmt.Sprintf("%s.tar.gz", req.Volume))
-	defer os.Remove(tarFile)
-
-	// Download from R2
-	key := fmt.Sprintf("volumes/%s.tar.gz", req.Volume)
-	res, err := client.GetObject(context.TODO(), &s3.GetObjectInput{
-		Bucket: &bucket,
-		Key:    &key,
-	})
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "Failed to fetch backup from Cloudflare R2: "+err.Error())
-		return
-	}
-	defer res.Body.Close()
-
-	out, err := os.Create(tarFile)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "Failed to create temp tar file: "+err.Error())
-		return
-	}
-	if _, err := io.Copy(out, res.Body); err != nil {
-		out.Close()
-		writeError(w, http.StatusInternalServerError, "Failed to write temp tar file: "+err.Error())
-		return
-	}
-	out.Close()
-
-	// Ensure the named volume exists first
-	_ = exec.Command("docker", "volume", "create", req.Volume).Run()
-
-	// Run container to untar volume contents
-	cmd := exec.Command("docker", "run", "--rm",
-		"-v", fmt.Sprintf("%s:/data", req.Volume),
-		"-v", fmt.Sprintf("%s:/backup", backupsDir),
-		"alpine", "tar", "-xzf", fmt.Sprintf("/backup/%s.tar.gz", req.Volume), "-C", "/data")
-
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to extract docker volume: %v (stderr: %s)", err, stderr.String()))
-		return
-	}
-
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"success": true,
 		"message": fmt.Sprintf("Volume '%s' restored successfully from R2.", req.Volume),

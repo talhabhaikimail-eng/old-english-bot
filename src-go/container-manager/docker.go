@@ -247,3 +247,12 @@ func dockerComposeUp(composeFile string) error {
 	}
 	return nil
 }
+
+func dockerComposePull(composeFile string) error {
+	log.Printf("[Docker Compose] Pulling images: %s", composeFile)
+	out, err := composeCmd(composeFile, "pull")
+	if err != nil {
+		return fmt.Errorf("docker compose pull failed: %s", trimForEvent(out))
+	}
+	return nil
+}

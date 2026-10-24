@@ -26,6 +26,21 @@ export function authFetch(url: string, init?: RequestInit): Promise<Response> {
   });
 }
 
+export interface GoEvent {
+  id: string; time: string; sessionId?: string; name?: string;
+  kind: string; level: 'info' | 'success' | 'warn' | 'error'; message: string; actor?: string;
+}
+export interface GoSettings {
+  notifyUrl: string; notifyMinLevel: 'info' | 'success' | 'warn' | 'error'; publicBaseUrl: string;
+  autoBackupEnabled: boolean; autoBackupIntervalMin: number; autoRecover: boolean;
+}
+export interface GoVolume { name: string; sessionId?: string; backedUp: boolean }
+export interface GoSystemInfo {
+  dockerVersion: string; diskUsage: string[]; uptimeSeconds: number;
+  sessions: { total: number; running: number; needAttention: number };
+  r2: { lastAttempt: string; lastSuccess: string; lastError?: string; pending: boolean };
+}
+
 async function post<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     method: 'POST',
@@ -383,6 +398,38 @@ export const api = {
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       return r.json() as Promise<{ backups: string[] }>;
     }),
+  goAction: (sessionId: string, action: 'start' | 'stop' | 'restart' | 'pause' | 'unpause' | 'redeploy', opts: { service?: string; ifChanged?: boolean } = {}) =>
+    post<{ success: boolean; message: string; jobId?: string }>('/api/go/containers/action', { sessionId, action, ...opts }),
+  goExec: (sessionId: string, command: string, service?: string) =>
+    post<{ success: boolean; output: string; error?: string }>('/api/go/containers/exec', { sessionId, command, service }),
+  goRotateTokens: (sessionId: string, which: 'webhook' | 'agent' | 'all') =>
+    post<{ success: boolean }>('/api/go/containers/rotate-tokens', { sessionId, which }),
+  getGoEvents: (sessionId?: string, limit = 100) =>
+    authFetch(`${BASE}/api/go/containers/events?limit=${limit}${sessionId ? `&sessionId=${encodeURIComponent(sessionId)}` : ''}`).then(r => {
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return r.json() as Promise<GoEvent[]>;
+    }),
+  getGoSettings: () =>
+    authFetch(`${BASE}/api/go/settings`).then(r => {
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return r.json() as Promise<GoSettings>;
+    }),
+  saveGoSettings: (settings: GoSettings) => post<GoSettings>('/api/go/settings', settings),
+  testGoNotification: () => post<{ success: boolean }>('/api/go/settings/test', {}),
+  getGoSystemInfo: () =>
+    authFetch(`${BASE}/api/go/system/info`).then(r => {
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return r.json() as Promise<GoSystemInfo>;
+    }),
+  pruneGoImages: (all = false) => post<{ success: boolean; output: string }>('/api/go/system/prune', { all }),
+  listGoVolumes: () =>
+    authFetch(`${BASE}/api/go/volumes`).then(r => {
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return r.json() as Promise<GoVolume[]>;
+    }),
+  deleteGoVolume: (volume: string, force = false) =>
+    post<{ success: boolean }>('/api/go/volumes/delete', { volume, force }),
+  backupAllGoVolumes: () => post<{ success: boolean; message: string }>('/api/go/volumes/backup-all', {}),
   getGoContainerStats: (sessionId: string) =>
     authFetch(`${BASE}/api/go/containers/stats?sessionId=${encodeURIComponent(sessionId)}`).then(r => {
       if (!r.ok) throw new Error(`HTTP ${r.status}`);

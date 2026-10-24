@@ -171,7 +171,7 @@ func handleRollback(w http.ResponseWriter, r *http.Request) {
 		if targetRecord.Type == "docker-container" {
 			rollbackContainerJob(jobID, *targetRecord)
 		} else if targetRecord.Type == "docker-compose" {
-			rollbackComposeJob(jobID, *targetRecord)
+			rollbackComposeJob(jobID, *targetRecord, false)
 		} else {
 			failJob(jobID, "Unsupported deployment type: "+targetRecord.Type)
 		}
@@ -206,6 +206,10 @@ func rollbackContainerJob(jobID string, record DeploymentRecord) {
 	args := record.Config.Args
 	domainMode := record.Config.DomainMode
 	customDomain := record.Config.CustomDomain
+	registryAuth := record.Config.RegistryAuth
+	if registryAuth == nil && exists {
+		registryAuth = oldSess.Metadata.RegistryAuth
+	}
 
 	if !exists && isPortConflict(hostPort) {
 		var err error
@@ -218,7 +222,7 @@ func rollbackContainerJob(jobID string, record DeploymentRecord) {
 
 	updateJobPhase(jobID, "pulling", "Checking and downloading Docker image...")
 
-	webhookSecret := generateHash()
+	webhookSecret := generateToken("")
 	var activeTunnelToken = record.Config.TunnelToken
 	var activeTunnelID = record.Config.TunnelID
 	var reuseTunnel = false
@@ -278,6 +282,7 @@ func rollbackContainerJob(jobID string, record DeploymentRecord) {
 		RestartPolicy: restartPolicy,
 		Command:       command,
 		Args:          args,
+		RegistryAuth:  registryAuth,
 	}
 
 	if err := dockerRunWithJob(runOpts, jobID); err != nil {
@@ -356,10 +361,19 @@ func rollbackContainerJob(jobID string, record DeploymentRecord) {
 			RestartPolicy:  restartPolicy,
 			Command:        command,
 			Args:           args,
+			RegistryAuth:   registryAuth,
 			Status:         "running",
 			TunnelStatus:   "up",
 		},
 	}
+	var oldPtr *Session
+	if exists {
+		oldPtr = &oldSess
+		sess.Metadata.TTLMinutes = oldSess.Metadata.TTLMinutes
+		sess.Metadata.ExpiresAt = oldSess.Metadata.ExpiresAt
+		sess.Metadata.IsDemo = oldSess.Metadata.IsDemo
+	}
+	finalizeSession(&sess, oldPtr)
 
 	sessionsMu.Lock()
 	sessions[sessionID] = sess
@@ -377,7 +391,7 @@ func rollbackContainerJob(jobID string, record DeploymentRecord) {
 	appendDeployment(record)
 }
 
-func rollbackComposeJob(jobID string, record DeploymentRecord) {
+func rollbackComposeJob(jobID string, record DeploymentRecord, pullFirst bool) {
 	updateJobPhase(jobID, "validating", "Validating compose configuration...")
 
 	sessionID := record.SessionID
@@ -494,6 +508,13 @@ func rollbackComposeJob(jobID string, record DeploymentRecord) {
 		return
 	}
 
+	if pullFirst {
+		updateJobPhase(jobID, "pulling", "Pulling latest service images...")
+		if err := dockerComposePull(composeFilePath); err != nil {
+			addJobLog(jobID, "Warning: "+err.Error())
+		}
+	}
+
 	// Starting phase
 	updateJobPhase(jobID, "starting", "Starting Docker Compose services...")
 	if err := dockerComposeUp(composeFilePath); err != nil {
@@ -589,6 +610,14 @@ func rollbackComposeJob(jobID string, record DeploymentRecord) {
 			ServiceSettings: serviceSettings,
 		},
 	}
+	var oldPtr *Session
+	if exists {
+		oldPtr = &oldSess
+		sess.Metadata.TTLMinutes = oldSess.Metadata.TTLMinutes
+		sess.Metadata.ExpiresAt = oldSess.Metadata.ExpiresAt
+		sess.Metadata.IsDemo = oldSess.Metadata.IsDemo
+	}
+	finalizeSession(&sess, oldPtr)
 
 	sessionsMu.Lock()
 	sessions[sessionID] = sess

@@ -7,9 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -26,17 +24,23 @@ func main() {
 	log.Printf("[Go Container Manager] Workspace Root: %s", root)
 	log.Printf("[Go Container Manager] Sessions File: %s", sessionsFile)
 
-	// 2. Load existing sessions from disk
+	// 2. Load persisted state (restored from R2 by the workflow before we start)
+	loadSettings()
+	loadEvents()
 	if err := loadSessions(); err != nil {
 		log.Printf("[Go Container Manager] Warning: failed to load sessions: %v", err)
 	} else {
 		updateNextPort()
 	}
+	resetStalePIDs()
 
-	// 3. Restore any running containers/tunnels
-	go restoreDockerContainers()
+	// 3. Background workers: debounced R2 state sync + periodic volume backups
+	go startR2SyncWorker()
+	go startAutoBackupWorker()
 
-	// 4. Start background reconciler
+	// 4. Schedule restore of every session that should be running (registers jobs synchronously so the
+	//    reconciler below does not fight them), then start the reconciler.
+	restoreDockerContainers()
 	go startReconciler()
 
 	// 5. Setup HTTP routes with CORS middleware
@@ -53,6 +57,21 @@ func main() {
 	http.HandleFunc("/api/go/containers/stats", corsMiddleware(handleStatsContainer))
 	http.HandleFunc("/api/go/containers/deployments", corsMiddleware(handleGetDeployments))
 	http.HandleFunc("/api/go/containers/rollback", corsMiddleware(handleRollback))
+	http.HandleFunc("/api/go/containers/action", corsMiddleware(handleContainerAction))
+	http.HandleFunc("/api/go/containers/events", corsMiddleware(handleGetEvents))
+	http.HandleFunc("/api/go/containers/exec", corsMiddleware(handleExec))
+	http.HandleFunc("/api/go/containers/rotate-tokens", corsMiddleware(handleRotateTokens))
+	http.HandleFunc("/api/go/settings", corsMiddleware(handleSettings))
+	http.HandleFunc("/api/go/settings/test", corsMiddleware(handleTestNotification))
+	http.HandleFunc("/api/go/system/info", corsMiddleware(handleSystemInfo))
+	http.HandleFunc("/api/go/system/prune", corsMiddleware(handlePrune))
+	http.HandleFunc("/api/go/volumes", corsMiddleware(handleListVolumes))
+	http.HandleFunc("/api/go/volumes/delete", corsMiddleware(handleDeleteVolume))
+	http.HandleFunc("/api/go/volumes/backup-all", corsMiddleware(handleBackupAll))
+
+	// Public, secret-protected entry points (the Node proxy exposes these without dashboard auth)
+	http.HandleFunc("/api/go/webhook/", handleWebhook)
+	http.HandleFunc("/api/agent/", handleAgent)
 	
 	// Volume backup/restore routes (Phase 5)
 	http.HandleFunc("/api/go/volumes/backup", corsMiddleware(handleBackupVolume))
@@ -105,6 +124,20 @@ func main() {
 		}
 	}
 	sessionsMu.Unlock()
+
+	// Final flush so the next host starts from the freshest state
+	if err := flushR2Sync(); err != nil {
+		log.Printf("[Go Container Manager] Final state sync failed: %v", err)
+	}
+	if getSettings().AutoBackupEnabled {
+		done := make(chan struct{})
+		go func() { _, _ = backupAllVolumes(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(90 * time.Second):
+			log.Println("[Go Container Manager] Volume backup on shutdown timed out")
+		}
+	}
 
 	log.Println("[Go Container Manager] Daemon stopped.")
 }
@@ -159,9 +192,10 @@ func loadEnv(path string) {
 	}
 }
 
-// RESTORE containers and tunnels upon reboot
+// RESTORE containers and tunnels upon reboot.
+// The host is ephemeral (restarted every ~5h), so containers are usually gone: state comes back from R2
+// (auth_info + volume tarballs) and every session that should be running is redeployed from its stored config.
 func restoreDockerContainers() {
-	log.Println("[Docker Restore] Restoring running containers...")
 	sessionsMu.RLock()
 	var toRestore []Session
 	for _, s := range sessions {
@@ -171,103 +205,51 @@ func restoreDockerContainers() {
 	}
 	sessionsMu.RUnlock()
 
+	log.Printf("[Docker Restore] Restoring %d session(s)...", len(toRestore))
+	if len(toRestore) > 0 {
+		recordEvent("", "state", "info", "system", "Container manager started — restoring %d session(s) from R2 state", len(toRestore))
+	}
+
 	for _, s := range toRestore {
-		go func(sess Session) {
-			meta := sess.Metadata
-			if sess.Type == "docker-compose" {
-				log.Printf("[Docker Restore] Restoring compose stack %s...", sess.ID)
-				if err := dockerComposeUp(meta.ComposeFile); err != nil {
-					log.Printf("[Docker Restore] Failed to restore compose stack %s: %v", sess.ID, err)
-				}
+		if s.Metadata.Desired == "stopped" {
+			log.Printf("[Docker Restore] %s was stopped on purpose, leaving it stopped", s.ID)
+			continue
+		}
 
-				updatedServices := make(map[string]ServiceSessionMetadata)
-				for name, svc := range meta.Services {
-					if svc.DomainMode == "custom" || svc.DomainMode == "quick" {
-						cleanSvcName := regexp.MustCompile(`[^a-zA-Z0-9_-]`).ReplaceAllString(name, "_")
-						tOpts := TunnelOptions{
-							ServiceName:    name,
-							DomainMode:     svc.DomainMode,
-							CustomDomain:   svc.CustomDomain,
-							HostPort:       svc.HostPort,
-							SessionHash:    strings.TrimPrefix(sess.ID, "compose-"),
-							CleanName:      cleanSvcName,
-							ReuseTunnel:    true,
-							OldTunnelToken: svc.TunnelToken,
-							OldTunnelID:    svc.TunnelID,
-						}
-						tRes, err := provisionTunnel(tOpts)
-						if err != nil {
-							log.Printf("[Docker Restore] Failed to restore tunnel for service %s: %v", name, err)
-						} else {
-							svc.TunnelPid = tRes.TunnelPid
-							svc.CloudflaredURL = tRes.CloudflaredURL
-							svc.TunnelToken = tRes.TunnelToken
-							svc.TunnelID = tRes.TunnelID
-						}
-					}
-					updatedServices[name] = svc
+		if s.Type == "docker-container" {
+			if containerExists(s.Metadata.ContainerName) {
+				// Same host, manager restarted: just make sure it is running (reconciler repairs the tunnel)
+				if s.Metadata.Status != "running" {
+					_, _ = dockerOut(time.Minute, "start", s.Metadata.ContainerName)
 				}
-
-				sessionsMu.Lock()
-				if s, ok := sessions[sess.ID]; ok {
-					s.Metadata.Services = updatedServices
-					sessions[sess.ID] = s
-				}
-				sessionsMu.Unlock()
-				saveSessions()
-				return
+				continue
 			}
-
-			// Single container
-			// Check if container is running
-			cmd := exec.Command("docker", "ps", "--filter", "name="+meta.ContainerName, "--format", "{{.Names}}")
-			out, _ := cmd.Output()
-			isRunning := strings.TrimSpace(string(out)) == meta.ContainerName
-
-			if !isRunning {
-				log.Printf("[Docker Restore] Starting container %s...", meta.ContainerName)
-				runOpts := RunOptions{
-					Image:         meta.Image,
-					ContainerName: meta.ContainerName,
-					Port:          meta.Port,
-					HostPort:      meta.HostPort,
-					Env:           meta.Env,
+		} else if _, err := os.Stat(s.Metadata.ComposeFile); err == nil {
+			if out, _ := composeCmd(s.Metadata.ComposeFile, "ps", "-aq"); strings.TrimSpace(out) != "" {
+				if err := dockerComposeUp(s.Metadata.ComposeFile); err != nil {
+					log.Printf("[Docker Restore] compose up failed for %s: %v", s.ID, err)
 				}
-				if err := dockerRun(runOpts); err != nil {
-					log.Printf("[Docker Restore] Failed to run container %s: %v", meta.ContainerName, err)
-				}
+				continue
 			}
+		}
 
-			// Restore Tunnel
-			if meta.DomainMode == "custom" || meta.DomainMode == "quick" {
-				cleanName := regexp.MustCompile(`[^a-zA-Z0-9_-]`).ReplaceAllString(meta.ContainerName, "_")
-				tOpts := TunnelOptions{
-					ServiceName:    "custom-container",
-					DomainMode:     meta.DomainMode,
-					CustomDomain:   meta.CustomDomain,
-					HostPort:       meta.HostPort,
-					SessionHash:    strings.TrimPrefix(sess.ID, "docker-"),
-					CleanName:      cleanName,
-					ReuseTunnel:    true,
-					OldTunnelToken: meta.TunnelToken,
-					OldTunnelID:    meta.TunnelID,
-				}
-				tRes, err := provisionTunnel(tOpts)
-				if err != nil {
-					log.Printf("[Docker Restore] Failed to restore tunnel for container %s: %v", meta.ContainerName, err)
-				} else {
-					sess.Metadata.TunnelPid = tRes.TunnelPid
-					sess.URL = tRes.CloudflaredURL
-					sess.Metadata.CloudflaredURL = tRes.CloudflaredURL
-					sess.Metadata.TunnelToken = tRes.TunnelToken
-					sess.Metadata.TunnelID = tRes.TunnelID
-					
-					sessionsMu.Lock()
-					sessions[sess.ID] = sess
-					sessionsMu.Unlock()
-					saveSessions()
-				}
-			}
-		}(s)
+		if _, _, err := startRedeploy(s.ID, "system", false); err != nil {
+			log.Printf("[Docker Restore] Failed to schedule restore of %s: %v", s.ID, err)
+			recordEvent(s.ID, "deploy_failed", "error", "system", "Restore failed to start: %v", err)
+		}
+	}
+}
+
+// resetStalePIDs forgets tunnel PIDs from a previous host/process: they could now belong to unrelated processes.
+func resetStalePIDs() {
+	sessionsMu.Lock()
+	defer sessionsMu.Unlock()
+	for id, s := range sessions {
+		s.Metadata.TunnelPid = 0
+		for name, svc := range s.Metadata.Services {
+			svc.TunnelPid = 0
+			s.Metadata.Services[name] = svc
+		}
+		sessions[id] = s
 	}
 }

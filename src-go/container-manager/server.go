@@ -135,6 +135,14 @@ func handleGetSessions(w http.ResponseWriter, r *http.Request) {
 			ExpiresAt:        s.Metadata.ExpiresAt,
 			IsDemo:           s.Metadata.IsDemo,
 			RemainingSeconds: remainingSecs,
+			Desired:          s.Metadata.Desired,
+			RestartCount:     s.Metadata.RestartCount,
+			OOMKilled:        s.Metadata.OOMKilled,
+			StatusSince:      s.Metadata.StatusSince,
+			LastDeployedAt:   s.Metadata.LastDeployedAt,
+			WebhookSecret:    s.Metadata.WebhookSecret,
+			AgentReadToken:   s.Metadata.AgentReadToken,
+			AgentWriteToken:  s.Metadata.AgentWriteToken,
 		}
 
 		if s.Metadata.Services != nil {
@@ -302,7 +310,7 @@ func handleStartContainer(w http.ResponseWriter, r *http.Request) {
 	oldSess, exists := sessions[sessionID]
 	sessionsMu.Unlock()
 
-	webhookSecret := generateHash()
+	webhookSecret := generateToken("")
 	var activeTunnelToken = req.TunnelToken
 	var activeTunnelID = ""
 	var reuseTunnel = false
@@ -514,8 +522,14 @@ func handleStartContainer(w http.ResponseWriter, r *http.Request) {
 				TTLMinutes:     ttlMinutes,
 				ExpiresAt:      expiresAt,
 				IsDemo:         req.IsDemo,
+				RegistryAuth:   req.RegistryAuth,
 			},
 		}
+		var oldPtr *Session
+		if exists {
+			oldPtr = &oldSess
+		}
+		finalizeSession(&sess, oldPtr)
 
 		sessionsMu.Lock()
 		sessions[sessionID] = sess
@@ -603,6 +617,7 @@ func handleStopContainer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	recordEvent(req.SessionID, "action", "warn", "dashboard", "Session removed (stopped and cleaned up)")
 	sessionsMu.Lock()
 	delete(sessions, req.SessionID)
 	sessionsMu.Unlock()
@@ -963,6 +978,11 @@ func handleDeployCompose(w http.ResponseWriter, r *http.Request) {
 				ServiceSettings: req.ServiceSettings,
 			},
 		}
+		var oldPtr *Session
+		if exists {
+			oldPtr = &oldSess
+		}
+		finalizeSession(&sess, oldPtr)
 
 		sessionsMu.Lock()
 		sessions[sessionID] = sess
@@ -1005,8 +1025,10 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 		"docker":      dockerStatus,
 		"cloudflared": cloudflaredStatus,
 		"cfCreds":     cfCredsStatus,
-		"version":     "1.0.0",
+		"version":     "2.0.0",
 		"uptime":      "up",
+		"uptimeSeconds": int(time.Since(processStartedAt).Seconds()),
+		"r2":          getR2Status(),
 	})
 }
 
