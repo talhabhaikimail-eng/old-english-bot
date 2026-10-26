@@ -53,6 +53,7 @@ import { getJobsFromR2, getJobsStatusFromR2, saveJobsStatusToR2, getReceivedEmai
 import { generateAndPostBlog, generateCommunityBlog } from './blog-generator-service';
 import { handlePortfolioRequest } from './portfolio-api';
 import { handleToolsRequest } from './tools';
+import { handleSiteAuditRequest } from './site-audit-proxy';
 import {
   listCourses,
   getCourseStats,
@@ -666,6 +667,9 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
   if (pathname.startsWith('/api/tools/')) {
     if (await handleToolsRequest(req, res)) return;
   }
+
+  // ── SEO Site Auditor (Go service) ────────────────────────────────────────────
+  if (handleSiteAuditRequest(req, res)) return;
 
   // ── Dispatch Portfolio API Request ──────────────────────────────────────────
   if (pathname.startsWith('/api/portfolio')) {

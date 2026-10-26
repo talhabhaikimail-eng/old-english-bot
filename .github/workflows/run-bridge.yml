@@ -212,7 +212,8 @@ jobs:
             container-manager
             contact-scraper
             cv-server
-          key: go-bins-${{ runner.os }}-${{ hashFiles('src-go/container-manager/**', 'src-go/contact-scraper/**', 'src-go/create-cv/**') }}
+            site-auditor
+          key: go-bins-${{ runner.os }}-${{ hashFiles('src-go/container-manager/**', 'src-go/contact-scraper/**', 'src-go/create-cv/**', 'src-go/site-auditor/**') }}
 
       - name: Prepare Go environment
         if: steps.go-bins.outputs.cache-hit != 'true'
@@ -227,7 +228,8 @@ jobs:
           (cd src-go/container-manager && go build -o ../../container-manager .) & P1=$!
           (cd src-go/contact-scraper && go build -o ../../contact-scraper .) & P2=$!
           (cd src-go/create-cv && go build -o ../../cv-server .) & P3=$!
-          wait $P1 && wait $P2 && wait $P3
+          (cd src-go/site-auditor && go build -o ../../site-auditor .) & P4=$!
+          wait $P1 && wait $P2 && wait $P3 && wait $P4
 
       # Saved immediately (not in a post step) because bridge runs usually end cancelled
       - name: Save Go binaries
@@ -238,6 +240,7 @@ jobs:
             container-manager
             contact-scraper
             cv-server
+            site-auditor
           key: ${{ steps.go-bins.outputs.cache-primary-key }}
 
       - name: Start session manager
@@ -266,6 +269,24 @@ jobs:
           SUCCESS=0
           for i in {1..10}; do
             if curl -s http://127.0.0.1:8081/health > /dev/null; then
+              SUCCESS=1
+              break
+            fi
+            sleep 1
+          done
+          if [ $SUCCESS -ne 1 ]; then
+            exit 1
+          fi
+
+      - name: Start SEO site auditor
+        run: |
+          chmod +x site-auditor
+          # PAGESPEED_API_KEY is optional; without it Lighthouse runs hit Google's tiny anonymous quota
+          PORT=8083 AUDITOR_DATA_DIR=data/site-audits PAGESPEED_API_KEY="${{ secrets.PAGESPEED_API_KEY }}" ./site-auditor > site-auditor.log 2>&1 &
+
+          SUCCESS=0
+          for i in {1..10}; do
+            if curl -s http://127.0.0.1:8083/health > /dev/null; then
               SUCCESS=1
               break
             fi
@@ -330,7 +351,7 @@ jobs:
             aws s3 cp state.tar.gz s3://${R2_BUCKET_NAME}/state.tar.gz --endpoint-url https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com
 
             echo "📤 Uploading logs to R2..."
-            for logfile in bridge.log container-manager.log contact-scraper.log; do
+            for logfile in bridge.log container-manager.log contact-scraper.log site-auditor.log; do
               if [ -f "$logfile" ]; then
                 aws s3 cp "$logfile" "s3://${R2_BUCKET_NAME}/logs/bridge-${{ github.run_id }}-$logfile" --endpoint-url "https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com" || echo "Failed to upload $logfile"
               fi

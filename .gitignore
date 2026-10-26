@@ -68,3 +68,8 @@ downloaded_files/
 worker_browser/course_worker/bin/
 
 src/scripts/tools-tests/fixtures/docs-gen/
+
+# SEO site auditor reports (src-go/site-auditor)
+data/site-audits/
+src-go/site-auditor/data/
+/site-auditor
