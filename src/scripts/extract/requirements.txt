@@ -1,0 +1,11 @@
+# Installed on demand into the extractor's own venv (src/libs/extractor). torch comes from the
+# CPU-only index first (see extractor setup) so pip doesn't pull the multi-GB CUDA build.
+transformers>=4.45,<5
+huggingface_hub>=0.25
+safetensors
+trafilatura>=1.12
+extruct>=0.17
+lxml_html_clean
+fastapi
+uvicorn
+pydantic>=2

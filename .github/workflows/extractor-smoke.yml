@@ -1,0 +1,22 @@
+name: Extractor smoke test
+
+# Runs the AI web extractor end to end (pip install, NuExtract download, extraction) on a runner.
+# Manual, or on pushes to ci/extractor-smoke* branches — it never restarts the bridge.
+on:
+  workflow_dispatch:
+  push:
+    branches: ['ci/extractor-smoke*']
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Smoke test
+        run: node node_modules/tsx/dist/cli.mjs src/scripts/tools-tests/extractor-smoke.ts

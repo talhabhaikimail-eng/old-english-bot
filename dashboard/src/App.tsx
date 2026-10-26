@@ -9,7 +9,7 @@ import {
   Globe, Network, Search, MapPin, Layers, Briefcase, Contact, Monitor, LayoutDashboard,
   SquareTerminal, Code2, Radio, Smartphone, Link2, Zap, BrainCircuit, Download, PlaySquare,
   Clapperboard, Cpu, Mic, PenLine, GraduationCap, Sun, Moon, RefreshCw, LogOut, Menu, X,
-  Timer, ChevronsLeft, ChevronsRight, Wrench, ScanSearch, type LucideIcon,
+  Timer, ChevronsLeft, ChevronsRight, Wrench, ScanSearch, Sparkles, type LucideIcon,
 } from 'lucide-react';
 
 const SessionsPanel = React.lazy(() => import('./components/SessionsPanel'));
@@ -37,6 +37,7 @@ const CourseWorkerPanel = React.lazy(() => import('./components/CourseWorkerPane
 const WorkerShellPanel = React.lazy(() => import('./components/WorkerShellPanel'));
 const DevToolsPanel = React.lazy(() => import('./components/DevToolsPanel'));
 const SiteAuditPanel = React.lazy(() => import('./components/SiteAuditPanel'));
+const ExtractorPanel = React.lazy(() => import('./components/ExtractorPanel'));
 
 interface NavItem {
   id: NavSection;
@@ -90,6 +91,7 @@ const NAV_CATEGORIES: NavCategory[] = [
       { id: 'youtube',   label: 'YouTube',        icon: PlaySquare },
       { id: 'movies',    label: 'Movies',         icon: Clapperboard },
       { id: 'llm',       label: 'Local LLM',      icon: Cpu },
+      { id: 'extractor', label: 'AI Web Extractor', icon: Sparkles },
       { id: 'tts',       label: 'Voice / TTS',    icon: Mic },
       { id: 'blog-gen',  label: 'Blog Generator', icon: PenLine },
       { id: 'courses',   label: 'Course Downloader', icon: GraduationCap },
@@ -102,7 +104,7 @@ const NAV: NavItem[] = NAV_CATEGORIES.flatMap(cat => cat.items);
 const VALID_SECTIONS: NavSection[] = [
   'google', 'web-proxy', 'search', 'places', 'pool', 'indeed', 'contacts',
   'sessions', 'manager', 'shell', 'code-exec', 'dev-tools', 'site-audit', 'proxy-net', 'android', 'urls', 'go-containers',
-  'ai-tools', 'media', 'youtube', 'movies', 'llm', 'tts', 'blog-gen', 'courses'
+  'ai-tools', 'media', 'youtube', 'movies', 'llm', 'extractor', 'tts', 'blog-gen', 'courses'
 ];
 
 export default function App() {
@@ -534,6 +536,7 @@ export default function App() {
                 {section === 'code-exec' && <CodeExecPanel />}
                 {section === 'dev-tools' && <DevToolsPanel />}
                 {section === 'site-audit' && <SiteAuditPanel />}
+                {section === 'extractor' && <ExtractorPanel />}
                 {section === 'proxy-net' && <ProxyPanel />}
                 {section === 'android' && <AndroidPanel />}
 
