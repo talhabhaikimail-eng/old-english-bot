@@ -1,6 +1,9 @@
 package main
 
-import "sort"
+import (
+	"fmt"
+	"sort"
+)
 
 type IssueDef struct {
 	ID       string `json:"id"`
@@ -70,6 +73,7 @@ var issueCatalog = []IssueDef{
 	def("blocked-robots", "crawl", "warning", "Internal URLs blocked by robots.txt", "Blocked URLs cannot be crawled; if they are linked they may still be indexed without content.", "Remove the Disallow rule if the page should rank, or stop linking to it."),
 	def("deep-page", "crawl", "notice", "Pages more than 4 clicks from the homepage", "Deep pages get crawled less often and receive less internal link equity.", "Link to important deep pages from hubs, navigation or the homepage."),
 	def("orphan-page", "crawl", "warning", "Orphan pages (in sitemap, not linked internally)", "Pages with no internal links are hard for users and crawlers to discover and rank poorly.", "Add contextual internal links to these pages or remove them from the sitemap if obsolete."),
+	def("intermittent-errors", "crawl", "notice", "Pages that failed on the first attempt", "The server returned a timeout or temporary error before succeeding on retry; crawlers that don't retry may treat these pages as broken.", "Check server capacity, rate limiting and upstream timeouts for these URLs."),
 	def("single-inlink", "crawl", "notice", "Pages with only one internal inlink", "Weakly linked pages receive little internal PageRank.", "Add more internal links from relevant pages."),
 
 	// ── Indexability ──
@@ -111,6 +115,7 @@ var issueCatalog = []IssueDef{
 	def("lorem-ipsum", "content", "warning", "Placeholder text (lorem ipsum)", "Placeholder copy looks unfinished to users and search engines.", "Replace placeholder text with real content."),
 	def("doctype-missing", "content", "notice", "Missing <!DOCTYPE html>", "Without a doctype, browsers render in quirks mode.", "Start every HTML document with <!DOCTYPE html>."),
 	def("charset-missing", "content", "notice", "Character encoding not declared", "Browsers may misrender text without a declared charset.", "Add <meta charset=\"utf-8\"> as the first element in <head>."),
+	def("w3c-html-errors", "content", "notice", "HTML validation errors (W3C)", "The W3C Nu validator found markup errors; badly nested or unclosed tags can make browsers and crawlers parse the page differently than intended.", "Open the W3C report for the page and fix errors starting with the first one — later errors are often caused by earlier ones."),
 	def("deprecated-html", "content", "notice", "Deprecated HTML elements", "Tags like <font> and <center> are obsolete and signal outdated markup.", "Replace them with CSS."),
 	def("keyword-missing-title", "content", "notice", "Focus keyword missing from title", "Pages targeting a keyword should mention it in the title.", "Work the focus keyword naturally into the title."),
 	def("keyword-missing-h1", "content", "notice", "Focus keyword missing from H1", "The main heading should reflect the target query.", "Include the focus keyword in the H1."),
@@ -124,6 +129,7 @@ var issueCatalog = []IssueDef{
 	def("no-outlinks", "links", "warning", "Pages with no internal outlinks", "Dead-end pages trap users and crawlers and don't pass link equity.", "Add navigation and contextual links to related pages."),
 	def("too-many-links", "links", "notice", "Too many links on a page (> 300)", "Huge link counts dilute equity and can look spammy.", "Trim boilerplate links and keep only useful navigation."),
 	def("http-links", "links", "warning", "HTTPS pages linking to HTTP internal URLs", "Links to http:// trigger redirects and may expose users to insecure pages.", "Update internal links to use https://."),
+	def("links-to-unsafe", "links", "error", "Links to unsafe sites (Google Safe Browsing)", "Linking to malware or phishing pages endangers visitors and can get your own pages flagged.", "Remove or replace links that Google Safe Browsing flags."),
 	def("generic-anchors", "links", "notice", "Non-descriptive anchor text", "Anchors like 'click here' tell users and search engines nothing about the target.", "Use descriptive anchor text that names the destination."),
 
 	// ── Performance ──
@@ -167,6 +173,11 @@ var issueCatalog = []IssueDef{
 	siteDef("dns-no-spf", "security", "notice", "No SPF record", "Without SPF anyone can spoof email from your domain.", "Publish a TXT record like v=spf1 include:<provider> -all."),
 	siteDef("dns-no-dmarc", "security", "notice", "No DMARC record", "DMARC protects your domain against phishing and improves deliverability.", "Publish _dmarc TXT: v=DMARC1; p=quarantine; rua=mailto:…"),
 	siteDef("dns-no-caa", "security", "notice", "No CAA record", "CAA restricts which certificate authorities may issue certificates for your domain.", "Add a CAA record for your CA (e.g. 0 issue \"letsencrypt.org\")."),
+	siteDef("observatory-low-grade", "security", "warning", "Low Mozilla HTTP Observatory grade", "Mozilla's independent scan found missing or weak security headers and cookie settings (grade C or below).", "Open the Observatory report and fix the failed tests — usually CSP, HSTS, cookies and X-Content-Type-Options."),
+	siteDef("ssllabs-low-grade", "security", "warning", "SSL Labs grade below A", "Qualys SSL Labs found weak protocols, ciphers or certificate-chain problems in the TLS setup.", "Disable TLS 1.0/1.1 and weak ciphers, serve the full certificate chain and enable HSTS; re-test on SSL Labs."),
+	siteDef("safe-browsing-flagged", "security", "error", "Site flagged by Google Safe Browsing", "Browsers show a full-page red warning and Google may remove or label flagged pages in search results.", "Remove the malware/phishing content, then request a review in Google Search Console → Security issues."),
+	siteDef("domain-expiring", "security", "warning", "Domain registration expires within 30 days", "An expired domain takes the whole site and its e-mail offline and can be re-registered by someone else.", "Renew the domain and enable auto-renew at your registrar."),
+	siteDef("domain-no-transfer-lock", "security", "notice", "Domain transfer lock not enabled", "Without clientTransferProhibited, a compromised registrar account can transfer the domain away more easily.", "Enable the transfer lock (registrar lock) in your registrar's control panel."),
 	siteDef("security-txt-missing", "security", "notice", "No security.txt", "Researchers have no standard way to report vulnerabilities to you.", "Publish /.well-known/security.txt (RFC 9116)."),
 
 	// ── Structured data ──
@@ -238,14 +249,15 @@ var sevWeight = map[string]float64{"error": 0.10, "warning": 0.03, "notice": 0.0
 
 // issueCollector accumulates affected URLs per issue.
 type issueCollector struct {
-	byID map[string]*IssueResult
+	byID     map[string]*IssueResult
+	disabled map[string]bool
 }
 
 func newCollector() *issueCollector { return &issueCollector{byID: map[string]*IssueResult{}} }
 
 func (c *issueCollector) add(id, u, detail string) {
 	d, ok := issueIndex[id]
-	if !ok {
+	if !ok || c.disabled[id] {
 		return
 	}
 	r := c.byID[id]
@@ -332,4 +344,29 @@ func grade(s int) string {
 		return "D"
 	}
 	return "F"
+}
+
+// retitle rewrites titles of threshold-based checks when the audit used custom thresholds.
+func retitle(issues []IssueResult, t Thresholds) {
+	if t == defaultThresholds {
+		return
+	}
+	titles := map[string]string{
+		"title-too-long":  fmt.Sprintf("Title too long (> %d chars)", t.TitleMax),
+		"title-too-short": fmt.Sprintf("Title too short (< %d chars)", t.TitleMin),
+		"desc-too-long":   fmt.Sprintf("Meta description too long (> %d chars)", t.DescMax),
+		"desc-too-short":  fmt.Sprintf("Meta description too short (< %d chars)", t.DescMin),
+		"thin-content":    fmt.Sprintf("Low word count (< %d words)", t.ThinWords),
+		"slow-ttfb":       fmt.Sprintf("Slow server response (TTFB > %dms)", t.SlowTTFBMs),
+		"slow-page":       fmt.Sprintf("Slow HTML download (> %.1fs)", float64(t.SlowLoadMs)/1000),
+		"large-html":      fmt.Sprintf("Large HTML document (> %d KB)", t.LargeHTMLKB),
+		"img-large":       fmt.Sprintf("Large images (> %d KB)", t.LargeImgKB),
+		"excessive-dom":   fmt.Sprintf("Excessive DOM size (> %d elements)", t.MaxDOM),
+		"deep-page":       fmt.Sprintf("Pages more than %d clicks from the homepage", t.DeepClicks),
+	}
+	for i := range issues {
+		if v, ok := titles[issues[i].ID]; ok {
+			issues[i].Title = v
+		}
+	}
 }

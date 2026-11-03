@@ -99,6 +99,7 @@ type SiteInfo struct {
 	Tech            []Tech         `json:"tech"`
 	PageSpeed       []PageSpeedRun `json:"pageSpeed,omitempty"`
 	HomeSchema      []string       `json:"homeSchema,omitempty"`
+	ThirdParty      *ThirdParty    `json:"thirdParty,omitempty"`
 }
 
 func tlsVersionName(v uint16) string {

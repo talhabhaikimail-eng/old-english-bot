@@ -81,6 +81,21 @@ func (a *Audit) analyze() {
 	}
 
 	c := newCollector()
+	c.disabled = a.disabled
+	if a.opts.Mode != "crawl" {
+		// List and sitemap audits don't follow links, so link-graph checks would be false positives.
+		c.disabled = map[string]bool{}
+		for k := range a.disabled {
+			c.disabled[k] = true
+		}
+		for _, id := range []string{"orphan-page", "single-inlink", "deep-page", "no-outlinks", "redirect-internal", "not-in-sitemap"} {
+			c.disabled[id] = true
+		}
+		if a.start.Path != "/" {
+			c.disabled["no-org-schema"] = true
+		}
+	}
+	th := a.th
 	sum := &r.Summary
 	sum.StatusCodes = map[string]int{}
 	sum.DepthHist = map[string]int{}
@@ -279,6 +294,9 @@ func (a *Audit) analyze() {
 		case p.Status >= 400:
 			c.add("http-4xx", p.URL, strconv.Itoa(p.Status))
 		}
+		if p.Retried && p.Error == "" && p.Status > 0 && p.Status < 400 {
+			c.add("intermittent-errors", p.URL, "succeeded on the second attempt")
+		}
 		if p.InSitemap && !p.Indexable {
 			c.add("sitemap-non-indexable", p.URL, p.IndexReason)
 		}
@@ -310,12 +328,15 @@ func (a *Audit) analyze() {
 		u := p.URL
 		var issues []string
 		add := func(id, detail string) {
+			if c.disabled[id] {
+				return
+			}
 			c.add(id, u, detail)
 			issues = append(issues, id)
 		}
 		indexable := p.Indexable
 
-		if p.Depth > 4 {
+		if p.Depth > th.DeepClicks {
 			add("deep-page", fmt.Sprintf("%d clicks", p.Depth))
 		}
 		if p.InSitemap && p.UniqueInlinks == 0 && u != start {
@@ -368,9 +389,9 @@ func (a *Audit) analyze() {
 		switch {
 		case p.Title == "":
 			add("title-missing", "")
-		case len([]rune(p.Title)) > 60 || p.TitlePx > 580:
+		case len([]rune(p.Title)) > th.TitleMax || p.TitlePx > th.TitleMax*580/60:
 			add("title-too-long", fmt.Sprintf("%d chars, ~%dpx", len([]rune(p.Title)), p.TitlePx))
-		case len([]rune(p.Title)) < 30:
+		case len([]rune(p.Title)) < th.TitleMin:
 			add("title-too-short", fmt.Sprintf("%d chars", len([]rune(p.Title))))
 		}
 		if p.TitleCount > 1 {
@@ -385,9 +406,9 @@ func (a *Audit) analyze() {
 		switch {
 		case p.Description == "":
 			add("desc-missing", "")
-		case len([]rune(p.Description)) > 160:
+		case len([]rune(p.Description)) > th.DescMax:
 			add("desc-too-long", fmt.Sprintf("%d chars", len([]rune(p.Description))))
-		case len([]rune(p.Description)) < 70:
+		case len([]rune(p.Description)) < th.DescMin:
 			add("desc-too-short", fmt.Sprintf("%d chars", len([]rune(p.Description))))
 		}
 		if p.DescCount > 1 {
@@ -424,7 +445,7 @@ func (a *Audit) analyze() {
 		if !hasH2 && p.WordCount > 300 {
 			add("h2-missing", "")
 		}
-		if indexable && p.WordCount < 200 {
+		if indexable && p.WordCount < th.ThinWords {
 			add("thin-content", fmt.Sprintf("%d words", p.WordCount))
 		}
 		if p.TextRatio < 10 && p.Size > 5000 {
@@ -512,16 +533,16 @@ func (a *Audit) analyze() {
 		}
 
 		// Performance
-		if p.Timing.TTFBMs > 800 {
+		if p.Timing.TTFBMs > th.SlowTTFBMs {
 			add("slow-ttfb", fmt.Sprintf("%d ms", p.Timing.TTFBMs))
 		}
-		if p.Timing.TotalMs > 3000 {
+		if p.Timing.TotalMs > th.SlowLoadMs {
 			add("slow-page", fmt.Sprintf("%.1f s", float64(p.Timing.TotalMs)/1000))
 		}
-		if p.Size > 500*1024 {
+		if p.Size > th.LargeHTMLKB*1024 {
 			add("large-html", fmt.Sprintf("%d KB", p.Size/1024))
 		}
-		if p.DOMNodes > 1500 {
+		if p.DOMNodes > th.MaxDOM {
 			add("excessive-dom", fmt.Sprintf("%d elements, depth %d", p.DOMNodes, p.DOMDepth))
 		}
 		if p.Compression == "" && p.Size > 2048 {
@@ -564,7 +585,7 @@ func (a *Audit) analyze() {
 			if img.Status >= 400 {
 				brokenImg = append(brokenImg, img.Src)
 			}
-			if img.Size > 200*1024 && img.Format != "svg" {
+			if img.Size > int64(th.LargeImgKB)*1024 && img.Format != "svg" {
 				largeImg = append(largeImg, fmt.Sprintf("%s (%d KB)", img.Src, img.Size/1024))
 			}
 			if (img.Width == "" || img.Height == "") && img.Format != "svg" {
@@ -772,9 +793,12 @@ func (a *Audit) analyze() {
 
 	a.assetIssues(c)
 	a.siteIssues(c)
+	a.thirdPartyIssues(c)
+	r.CustomSearch = a.searchResults(pages)
 
 	// ── Finalise ──
 	r.Issues = c.results(max(htmlN, 1))
+	retitle(r.Issues, th)
 	for _, is := range r.Issues {
 		switch is.Severity {
 		case "error":

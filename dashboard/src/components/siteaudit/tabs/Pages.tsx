@@ -6,7 +6,7 @@ import type { PageRow } from '../api';
 import type { ReportCtx } from '../Report';
 import { Pager, StatusPill, shortUrl } from '../ui';
 
-type Col = { key: keyof PageRow | 'issueCount'; label: string; num?: boolean; width?: string; render?: (p: PageRow) => React.ReactNode; title?: string };
+type Col = { key: string; label: string; num?: boolean; width?: string; render?: (p: PageRow) => React.ReactNode; title?: string; value?: (p: PageRow) => string | number };
 
 const FILTERS: { id: string; label: string; test: (p: PageRow) => boolean }[] = [
   { id: 'all', label: 'All URLs', test: () => true },
@@ -20,6 +20,9 @@ const FILTERS: { id: string; label: string; test: (p: PageRow) => boolean }[] = 
   { id: 'thin', label: 'Thin (< 200 words)', test: p => p.isHtml && p.words < 200 },
   { id: 'slow', label: 'Slow (TTFB > 800ms)', test: p => p.ttfbMs > 800 },
   { id: 'with-issues', label: 'With errors/warnings', test: p => p.issues.length > 0 },
+  { id: 'not-in-sitemap', label: 'Indexable, not in sitemap', test: p => p.indexable && !p.inSitemap },
+  { id: 'canonicalised', label: 'Canonicalised elsewhere', test: p => !!p.canonical && p.canonical !== p.url },
+  { id: 'retried', label: 'Needed a retry (flaky)', test: p => !!p.retried },
 ];
 
 export function PagesTab({ ctx, initialFilter }: { ctx: ReportCtx; initialFilter?: string }) {
@@ -29,7 +32,11 @@ export function PagesTab({ ctx, initialFilter }: { ctx: ReportCtx; initialFilter
   const [q, setQ] = useState('');
   const [sort, setSort] = useState<{ key: Col['key']; dir: 1 | -1 }>({ key: 'linkScore', dir: -1 });
   const [offset, setOffset] = useState(0);
-  const [view, setView] = useState<'seo' | 'tech' | 'links'>('seo');
+  const [view, setView] = useState<'seo' | 'tech' | 'links' | 'custom'>('seo');
+  const [issue, setIssue] = useState('');
+  const [depthMax, setDepthMax] = useState('');
+  const hasCustom = (r.options.extract?.length || 0) + (r.options.customSearch?.length || 0) > 0;
+  const pageIssues = useMemo(() => r.issues.filter(i => !i.site && !i.asset).map(i => ({ id: i.id, title: i.title, n: i.count })), [r.issues]);
   const limit = 100;
   const sevOf = useMemo(() => Object.fromEntries(r.issues.map(i => [i.id, i.severity])), [r.issues]);
 
@@ -58,6 +65,13 @@ export function PagesTab({ ctx, initialFilter }: { ctx: ReportCtx; initialFilter
       { key: 'inSitemap', label: 'Sitemap', render: p => p.inSitemap ? 'Yes' : '' },
       { key: 'images', label: 'Images', num: true },
     ],
+    custom: [
+      ...(r.options.extract || []).map((e): Col => ({ key: 'x:' + e.name, label: e.name, value: p => p.extracted?.[e.name]?.[0] ?? '',
+        render: p => <span className="truncate block" title={p.extracted?.[e.name]?.join('\n')}>{p.extracted?.[e.name]?.join(' | ') || ''}</span> })),
+      ...(r.options.customSearch || []).map((c): Col => ({ key: 's:' + c.name, label: c.name, num: true, value: p => p.custom?.[c.name] ?? -1,
+        title: (c.absent ? 'Missing: ' : 'Occurrences of ') + c.pattern,
+        render: p => p.custom === undefined ? '' : c.absent ? (p.custom[c.name] ? '' : <span className="text-amber-600 dark:text-amber-400">missing</span>) : (p.custom[c.name] || '') })),
+    ],
   };
   const cols = columns[view];
 
@@ -70,17 +84,21 @@ export function PagesTab({ ctx, initialFilter }: { ctx: ReportCtx; initialFilter
         else if (statusFilter === 'error') { if (!p.error) return false; }
         else if (String(p.status) !== statusFilter || p.blocked || p.error) return false;
       } else if (f && !f.test(p)) return false;
+      if (issue && !p.issues.includes(issue)) return false;
+      if (depthMax !== '' && (p.depth < 0 || p.depth > Number(depthMax))) return false;
       return !needle || (p.url + ' ' + (p.title || '') + ' ' + (p.h1 || '')).toLowerCase().includes(needle);
     });
     const k = sort.key;
+    const col = cols.find(c => c.key === k);
+    const val = (p: PageRow) => col?.value ? col.value(p) : k === 'issueCount' ? p.issues.length : (p as any)[k];
     out = [...out].sort((a, b) => {
-      const av = k === 'issueCount' ? a.issues.length : (a as any)[k];
-      const bv = k === 'issueCount' ? b.issues.length : (b as any)[k];
+      const av = val(a);
+      const bv = val(b);
       if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * sort.dir;
       return String(av ?? '').localeCompare(String(bv ?? '')) * sort.dir;
     });
     return out;
-  }, [r.pages, filter, q, sort, statusFilter]);
+  }, [r.pages, filter, q, sort, statusFilter, issue, depthMax, view]);
 
   const header = (c: Col) => (
     <th key={c.key} title={c.title} className={cn('px-2 py-2 font-medium text-muted-foreground whitespace-nowrap cursor-pointer select-none hover:text-foreground', c.num && 'text-right')}
@@ -97,12 +115,20 @@ export function PagesTab({ ctx, initialFilter }: { ctx: ReportCtx; initialFilter
           {FILTERS.map(f => <option key={f.id} value={f.id}>{f.label} ({r.pages.filter(f.test).length})</option>)}
         </select>
         <div className="inline-flex rounded-md border border-border bg-secondary p-0.5">
-          {(['seo', 'tech', 'links'] as const).map(v => (
+          {(['seo', 'tech', 'links', ...(hasCustom ? ['custom'] as const : [])] as const).map(v => (
             <button key={v} onClick={() => setView(v)} className={cn('h-7 px-2.5 rounded-[5px] text-xs font-medium cursor-pointer', view === v ? 'bg-card border border-border shadow-sm' : 'text-muted-foreground hover:text-foreground')}>
-              {v === 'seo' ? 'On-page' : v === 'tech' ? 'Technical' : 'Links'}
+              {v === 'seo' ? 'On-page' : v === 'tech' ? 'Technical' : v === 'links' ? 'Links' : 'Custom'}
             </button>
           ))}
         </div>
+        <select value={issue} onChange={e => { setIssue(e.target.value); setOffset(0); }} className="h-8 max-w-56 rounded-md border border-input bg-card px-2 text-xs" title="Only pages with this issue">
+          <option value="">Any issue</option>
+          {pageIssues.map(i => <option key={i.id} value={i.id}>{i.title} ({i.n})</option>)}
+        </select>
+        <select value={depthMax} onChange={e => { setDepthMax(e.target.value); setOffset(0); }} className="h-8 rounded-md border border-input bg-card px-2 text-xs" title="Maximum click depth">
+          <option value="">Any depth</option>
+          {[0, 1, 2, 3, 4, 5].map(d => <option key={d} value={d}>Depth ≤ {d}</option>)}
+        </select>
         <div className="relative flex-1 min-w-48">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
           <Input value={q} onChange={e => { setQ(e.target.value); setOffset(0); }} placeholder="Filter by URL, title or H1…" className="pl-8 h-8 text-xs" />

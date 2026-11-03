@@ -279,10 +279,24 @@ jobs:
           fi
 
       - name: Start SEO site auditor
+        env:
+          GH_PAGESPEED_API_KEY: ${{ secrets.PAGESPEED_API_KEY }}
+          GH_SAFE_BROWSING_API_KEY: ${{ secrets.SAFE_BROWSING_API_KEY }}
+          GH_SSLLABS_EMAIL: ${{ secrets.SSLLABS_EMAIL }}
         run: |
           chmod +x site-auditor
-          # PAGESPEED_API_KEY is optional; without it Lighthouse runs hit Google's tiny anonymous quota
-          PORT=8083 AUDITOR_DATA_DIR=data/site-audits PAGESPEED_API_KEY="${{ secrets.PAGESPEED_API_KEY }}" ./site-auditor > site-auditor.log 2>&1 &
+          # All keys are optional and may live in ENV_FILE or in separate secrets (a separate secret wins).
+          # PAGESPEED_API_KEY: without it Lighthouse hits Google's tiny anonymous quota.
+          # SAFE_BROWSING_API_KEY falls back to the PageSpeed key (enable the Safe Browsing API on it).
+          # SSLLABS_EMAIL switches SSL Labs checks to the registered v4 API.
+          if [ -f .env.secret ]; then set -a; source .env.secret; set +a; fi
+          export PAGESPEED_API_KEY="${GH_PAGESPEED_API_KEY:-${PAGESPEED_API_KEY:-}}"
+          export SAFE_BROWSING_API_KEY="${GH_SAFE_BROWSING_API_KEY:-${SAFE_BROWSING_API_KEY:-}}"
+          export SSLLABS_EMAIL="${GH_SSLLABS_EMAIL:-${SSLLABS_EMAIL:-}}"
+          [ -n "$PAGESPEED_API_KEY" ] && echo "::add-mask::$PAGESPEED_API_KEY"
+          [ -n "$SAFE_BROWSING_API_KEY" ] && echo "::add-mask::$SAFE_BROWSING_API_KEY"
+          echo "Site auditor keys: PageSpeed=$([ -n "$PAGESPEED_API_KEY" ] && echo set || echo none), Safe Browsing=$([ -n "$SAFE_BROWSING_API_KEY" ] && echo set || echo 'none (falls back to PageSpeed key)'), SSL Labs email=$([ -n "$SSLLABS_EMAIL" ] && echo set || echo none)"
+          PORT=8083 AUDITOR_DATA_DIR=data/site-audits ./site-auditor > site-auditor.log 2>&1 &
 
           SUCCESS=0
           for i in {1..10}; do

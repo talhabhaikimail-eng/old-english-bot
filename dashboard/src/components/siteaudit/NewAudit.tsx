@@ -1,10 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Globe, Loader2, Play, Settings2, Trash2, History, Square, TrendingDown, TrendingUp, Minus } from 'lucide-react';
+import { Globe, Loader2, Play, Settings2, Trash2, History, Square, TrendingDown, TrendingUp, Minus, ListChecks } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
-import { Checkbox, ErrorBox, FieldLabel, NumberField, Segmented } from '../devtools/shared';
-import { auditApi, type AuditOptions, type AuditSummary } from './api';
+import { ErrorBox, Segmented } from '../devtools/shared';
+import { auditApi, type AuditSummary } from './api';
+import { AuditSettings, DEFAULT_SETTINGS, loadSettings, saveSettings, toOptions, type Settings } from './AuditSettings';
 import { MiniScore, ScoreRing, Section, SeverityBadge, fmtMs, timeAgo } from './ui';
 
 const PRESETS = [
@@ -15,64 +16,63 @@ const PRESETS = [
 ] as const;
 type Preset = typeof PRESETS[number]['value'] | 'custom';
 
-const UAS = [
-  { value: 'default', label: 'Site Auditor' },
-  { value: 'googlebot', label: 'Googlebot' },
-  { value: 'googlebot-mobile', label: 'Googlebot Smartphone' },
-  { value: 'bingbot', label: 'Bingbot' },
-  { value: 'chrome', label: 'Chrome desktop' },
-  { value: 'iphone', label: 'iPhone Safari' },
-];
-
 const KEY_STORE = 'siteaudit_psi_key';
 function storageGet(k: string) { try { return localStorage.getItem(k) || ''; } catch { return ''; } }
 function storageSet(k: string, v: string) { try { v ? localStorage.setItem(k, v) : localStorage.removeItem(k); } catch { /* unavailable */ } }
 
 export const FEATURES = [
-  ['Site crawler', 'Screaming Frog-style crawl with robots.txt, sitemaps, depth & link graph'],
-  ['130+ checks', 'Semrush / Ahrefs site-audit issues with why-it-matters and how-to-fix'],
-  ['Broken links', 'Internal, external, images, JS & CSS — with every page linking to them'],
+  ['Site crawler', 'Crawl, sitemap-only or URL-list audits with robots.txt, depth, folder scope & param rules'],
+  ['145+ checks', 'Site-audit issues with why-it-matters and how-to-fix; tune thresholds or switch checks off'],
+  ['Broken links', 'Internal, external, images, JS & CSS — re-verified with a browser UA to cut false positives'],
   ['Duplicates', 'Duplicate titles, descriptions, H1s and near-duplicate content (simhash)'],
   ['Lighthouse', 'PageSpeed Insights lab scores + real-user Core Web Vitals (CrUX)'],
-  ['Security', 'TLS certificate, HTTPS, HSTS, security-header grade, mixed content'],
-  ['DNS & email', 'A/AAAA, NS, MX, SPF, DMARC, CAA and DNSSEC'],
-  ['Tech stack', 'Wappalyzer-style detection of CMS, frameworks, CDN, analytics…'],
-  ['Structured data', 'JSON-LD / microdata types and rich-result property validation'],
-  ['International', 'hreflang codes, self-references, return links and x-default'],
-  ['Accessibility', 'Alt text, labels, button names, heading order, duplicate IDs'],
+  ['3rd-party verification', 'W3C validator, Mozilla Observatory, Safe Browsing, SSL Labs, RDAP, Wayback, Tranco'],
+  ['Security', 'TLS certificate, HTTPS, HSTS, security-header grade, mixed content, domain expiry'],
+  ['Custom search', 'Find pages containing (or missing) any text/regex and extract fields into columns'],
+  ['Staging sites', 'Basic auth and custom headers, sent only to the audited host and never stored'],
+  ['Change tracking', 'Compare any two audits: new and fixed issues, added/removed pages, status changes'],
+  ['Client reports', 'Printable HTML report plus CSV/JSON exports of pages, issues, links and assets'],
   ['AI search', 'AI crawler access, llms.txt and JavaScript-only content'],
 ];
 
 export function NewAudit({ onStarted, onOpen }: { onStarted: (id: string) => void; onOpen: (id: string) => void }) {
   const [url, setUrl] = useState('');
-  const [preset, setPreset] = useState<Preset>('standard');
+  const [settings, setSettings] = useState<Settings>(loadSettings);
+  const [preset, setPreset] = useState<Preset>(() => PRESETS.find(p => p.pages === settings.maxPages)?.value ?? 'custom');
   const [advanced, setAdvanced] = useState(false);
-  const [opts, setOpts] = useState<Required<Pick<AuditOptions, 'maxPages' | 'maxDepth' | 'concurrency' | 'userAgent' | 'respectRobots' | 'includeSubdomains' | 'checkExternal' | 'checkResources' | 'useSitemaps' | 'stripQuery' | 'crawlDelayMs' | 'timeoutSec' | 'pageSpeed'>>>({
-    maxPages: 100, maxDepth: 10, concurrency: 8, userAgent: 'default', respectRobots: true, includeSubdomains: false,
-    checkExternal: true, checkResources: true, useSitemaps: true, stripQuery: false, crawlDelayMs: 0, timeoutSec: 20, pageSpeed: true,
-  });
-  const [keyword, setKeyword] = useState('');
-  const [include, setInclude] = useState('');
-  const [exclude, setExclude] = useState('');
   const [psiKey, setPsiKey] = useState(() => storageGet(KEY_STORE));
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState('');
-  const set = <K extends keyof typeof opts>(k: K, v: (typeof opts)[K]) => setOpts(o => ({ ...o, [k]: v }));
+  const set = <K extends keyof Settings>(k: K, v: Settings[K]) => {
+    setSettings(o => ({ ...o, [k]: v }));
+    if (k === 'maxPages') setPreset(PRESETS.find(p => p.pages === v)?.value ?? 'custom');
+  };
+  useEffect(() => { saveSettings(settings); }, [settings]);
+
+  const listMode = settings.mode === 'list';
+  const listCount = settings.urlList.split('\n').filter(l => l.trim()).length;
+  const canStart = listMode ? listCount > 0 : !!url.trim();
+  const customised = useMemo(() => {
+    const n: string[] = [];
+    if (settings.mode !== 'crawl') n.push(settings.mode === 'list' ? `${listCount} listed URLs` : 'sitemap only');
+    if (settings.subfolderOnly) n.push('folder only');
+    if (settings.customSearch.length + settings.extract.length) n.push(`${settings.customSearch.length + settings.extract.length} custom rules`);
+    if (settings.disabled.length) n.push(`${settings.disabled.length} checks off`);
+    if (settings.authUser || settings.headers.trim()) n.push('authenticated');
+    if (settings.verify.sslLabs) n.push('SSL Labs');
+    return n;
+  }, [settings, listCount]);
 
   const start = async (e?: React.FormEvent) => {
     e?.preventDefault();
-    if (!url.trim()) return;
+    if (!canStart) return;
+    const opts = toOptions(url, settings, psiKey);
+    if (typeof opts === 'string') { setError(opts); setAdvanced(true); return; }
     setStarting(true);
     setError('');
     storageSet(KEY_STORE, psiKey.trim());
-    const lines = (s: string) => s.split('\n').map(x => x.trim()).filter(Boolean);
     try {
-      const res = await auditApi.start({
-        url: url.trim(), ...opts,
-        maxPages: Number.isFinite(opts.maxPages) ? opts.maxPages : 100,
-        keyword: keyword.trim() || undefined, include: lines(include), exclude: lines(exclude),
-        pageSpeedKey: psiKey.trim() || undefined,
-      });
+      const res = await auditApi.start(opts);
       onStarted(res.id);
     } catch (err) {
       setError((err as Error).message);
@@ -88,14 +88,16 @@ export function NewAudit({ onStarted, onOpen }: { onStarted: (id: string) => voi
         <div className="relative max-w-3xl">
           <h2 className="text-lg font-semibold tracking-tight">Audit any website</h2>
           <p className="text-xs text-muted-foreground mt-1">
-            Crawls the site and runs every check from the premium SEO suites — technical SEO, content, links, speed, security, schema and AI-search readiness — in one report.
+            Crawls the site and runs every check from the premium SEO suites — technical SEO, content, links, speed, security, schema and AI-search readiness — then cross-checks the results with independent third-party services.
           </p>
           <form onSubmit={start} className="mt-4 flex flex-col sm:flex-row gap-2">
             <div className="relative flex-1">
-              <Globe className="absolute left-2.5 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
-              <Input value={url} onChange={e => setUrl(e.target.value)} placeholder="example.com" className="pl-8 h-10" autoFocus />
+              {listMode ? <ListChecks className="absolute left-2.5 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" /> : <Globe className="absolute left-2.5 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />}
+              <Input value={listMode ? `${listCount.toLocaleString()} URLs from your list — edit in Crawl settings › Scope` : url} readOnly={listMode}
+                onChange={e => setUrl(e.target.value)} placeholder="example.com" className={cn('pl-8 h-10', listMode && 'text-muted-foreground cursor-pointer')} autoFocus
+                onClick={() => listMode && setAdvanced(true)} />
             </div>
-            <Button type="submit" size="lg" disabled={starting || !url.trim()}>
+            <Button type="submit" size="lg" disabled={starting || !canStart}>
               {starting ? <Loader2 className="animate-spin" /> : <Play />} Start audit
             </Button>
           </form>
@@ -104,58 +106,20 @@ export function NewAudit({ onStarted, onOpen }: { onStarted: (id: string) => voi
               onChange={v => {
                 setPreset(v);
                 const p = PRESETS.find(x => x.value === v);
-                if (p) set('maxPages', p.pages);
+                if (p) setSettings(o => ({ ...o, maxPages: p.pages }));
                 if (v === 'custom') setAdvanced(true);
               }} />
             <Button type="button" variant="ghost" size="sm" onClick={() => setAdvanced(a => !a)}>
               <Settings2 /> {advanced ? 'Hide' : 'Crawl'} settings
             </Button>
+            {customised.length > 0 && <span className="text-[11px] text-muted-foreground">{customised.join(' · ')}</span>}
           </div>
           {error && <div className="mt-3"><ErrorBox message={error} /></div>}
         </div>
 
         {advanced && (
-          <div className="relative mt-5 pt-5 border-t border-border grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-            <NumberField label="Max pages" value={opts.maxPages} min={1} max={10000} onChange={v => { set('maxPages', v); setPreset('custom'); }} />
-            <NumberField label="Max click depth" value={opts.maxDepth} min={1} max={50} onChange={v => set('maxDepth', v)} />
-            <NumberField label="Parallel requests" value={opts.concurrency} min={1} max={32} onChange={v => set('concurrency', v)} />
-            <NumberField label="Delay between requests" suffix="ms" value={opts.crawlDelayMs} min={0} max={10000} step={100} onChange={v => set('crawlDelayMs', v)} />
-            <div className="space-y-1.5">
-              <FieldLabel>User agent</FieldLabel>
-              <select value={opts.userAgent} onChange={e => set('userAgent', e.target.value)}
-                className="w-full h-8 rounded-md border border-input bg-card px-2 text-xs">
-                {UAS.map(u => <option key={u.value} value={u.value}>{u.label}</option>)}
-              </select>
-            </div>
-            <NumberField label="Request timeout" suffix="s" value={opts.timeoutSec} min={5} max={60} onChange={v => set('timeoutSec', v)} />
-            <div className="space-y-1.5">
-              <FieldLabel>Focus keyword (optional)</FieldLabel>
-              <Input value={keyword} onChange={e => setKeyword(e.target.value)} placeholder="e.g. running shoes" className="h-8 text-xs" />
-            </div>
-            <div className="space-y-1.5">
-              <FieldLabel>PageSpeed API key (optional)</FieldLabel>
-              <Input value={psiKey} onChange={e => setPsiKey(e.target.value)} placeholder="AIza…" type="password" className="h-8 text-xs" />
-            </div>
-            <div className="space-y-1.5 md:col-span-2">
-              <FieldLabel>Only crawl URLs matching (regex, one per line)</FieldLabel>
-              <textarea value={include} onChange={e => setInclude(e.target.value)} rows={2} placeholder="/blog/"
-                className="w-full rounded-md border border-input bg-card px-2 py-1.5 text-xs font-mono" />
-            </div>
-            <div className="space-y-1.5 md:col-span-2">
-              <FieldLabel>Exclude URLs matching (regex, one per line)</FieldLabel>
-              <textarea value={exclude} onChange={e => setExclude(e.target.value)} rows={2} placeholder={'/tag/\n\\?page='}
-                className="w-full rounded-md border border-input bg-card px-2 py-1.5 text-xs font-mono" />
-            </div>
-            <div className="md:col-span-2 xl:col-span-4 flex flex-wrap gap-x-5 gap-y-2">
-              <Checkbox checked={opts.respectRobots} onChange={v => set('respectRobots', v)}>Respect robots.txt</Checkbox>
-              <Checkbox checked={opts.useSitemaps} onChange={v => set('useSitemaps', v)}>Crawl sitemap URLs (find orphans)</Checkbox>
-              <Checkbox checked={opts.checkExternal} onChange={v => set('checkExternal', v)}>Check external links</Checkbox>
-              <Checkbox checked={opts.checkResources} onChange={v => set('checkResources', v)}>Check images, JS & CSS</Checkbox>
-              <Checkbox checked={opts.pageSpeed} onChange={v => set('pageSpeed', v)}>Lighthouse / Core Web Vitals</Checkbox>
-              <Checkbox checked={opts.includeSubdomains} onChange={v => set('includeSubdomains', v)}>Include subdomains</Checkbox>
-              <Checkbox checked={opts.stripQuery} onChange={v => set('stripQuery', v)}>Ignore query strings</Checkbox>
-            </div>
-          </div>
+          <AuditSettings s={settings} set={set} psiKey={psiKey} setPsiKey={setPsiKey}
+            onReset={() => { if (confirm('Reset all audit settings to their defaults?')) { setSettings(DEFAULT_SETTINGS); setPreset('standard'); } }} />
         )}
       </section>
 

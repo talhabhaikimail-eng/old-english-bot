@@ -82,7 +82,7 @@ func newMux(store *Store) http.Handler {
 			return
 		}
 		if a != nil {
-			writeJSON(w, 200, map[string]any{"id": a.report.ID, "status": runningStatus(a), "progress": a.Progress(), "options": a.opts, "startUrl": a.report.StartURL})
+			writeJSON(w, 200, map[string]any{"id": a.report.ID, "status": runningStatus(a), "progress": a.Progress(), "options": a.report.Options, "startUrl": a.report.StartURL})
 			return
 		}
 		writeJSON(w, 200, overview(rep))
@@ -174,6 +174,32 @@ func newMux(store *Store) http.Handler {
 		rows := resourceRows(rep, q.Get("kind"), q.Get("filter"), strings.ToLower(q.Get("q")))
 		writePaged(w, r, rows)
 	})
+	mux.HandleFunc("GET /api/audits/{id}/compare", func(w http.ResponseWriter, r *http.Request) {
+		rep := finished(store, w, r)
+		if rep == nil {
+			return
+		}
+		baseID := r.URL.Query().Get("base")
+		if baseID == "" {
+			// Default to the previous finished audit of the same host.
+			for _, s := range store.List() {
+				if s.Host == rep.Host && s.ID != rep.ID && s.Status == "done" && s.CreatedAt.Before(rep.CreatedAt) {
+					baseID = s.ID
+					break
+				}
+			}
+			if baseID == "" {
+				writeErr(w, 404, "no earlier finished audit of "+rep.Host+" to compare with")
+				return
+			}
+		}
+		a, base, err := store.Get(baseID)
+		if err != nil || a != nil || base == nil {
+			writeErr(w, 404, "comparison audit not found or still running")
+			return
+		}
+		writeJSON(w, 200, compareReports(base, rep))
+	})
 	mux.HandleFunc("GET /api/audits/{id}/export", func(w http.ResponseWriter, r *http.Request) {
 		rep := finished(store, w, r)
 		if rep == nil {
@@ -214,36 +240,39 @@ func finished(store *Store, w http.ResponseWriter, r *http.Request) *Report {
 
 // PageRow is the compact per-page record used by the pages table.
 type PageRow struct {
-	URL         string   `json:"url"`
-	Status      int      `json:"status"`
-	Error       string   `json:"error,omitempty"`
-	Blocked     bool     `json:"blocked,omitempty"`
-	ContentType string   `json:"contentType,omitempty"`
-	Depth       int      `json:"depth"`
-	Indexable   bool     `json:"indexable"`
-	IndexReason string   `json:"indexReason,omitempty"`
-	Title       string   `json:"title,omitempty"`
-	TitleLen    int      `json:"titleLen"`
-	Description string   `json:"description,omitempty"`
-	DescLen     int      `json:"descLen"`
-	H1          string   `json:"h1,omitempty"`
-	H1Count     int      `json:"h1Count"`
-	Words       int      `json:"words"`
-	TTFBMs      int      `json:"ttfbMs"`
-	LoadMs      int      `json:"loadMs"`
-	SizeKB      float64  `json:"sizeKb"`
-	Inlinks     int      `json:"inlinks"`
-	Outlinks    int      `json:"outlinks"`
-	External    int      `json:"external"`
-	LinkScore   float64  `json:"linkScore"`
-	InSitemap   bool     `json:"inSitemap"`
-	Canonical   string   `json:"canonical,omitempty"`
-	RedirectTo  string   `json:"redirectTo,omitempty"`
-	Readability float64  `json:"readability"`
-	Images      int      `json:"images"`
-	Schema      []string `json:"schema,omitempty"`
-	Issues      []string `json:"issues"`
-	IsHTML      bool     `json:"isHtml"`
+	URL         string              `json:"url"`
+	Status      int                 `json:"status"`
+	Error       string              `json:"error,omitempty"`
+	Blocked     bool                `json:"blocked,omitempty"`
+	ContentType string              `json:"contentType,omitempty"`
+	Depth       int                 `json:"depth"`
+	Indexable   bool                `json:"indexable"`
+	IndexReason string              `json:"indexReason,omitempty"`
+	Title       string              `json:"title,omitempty"`
+	TitleLen    int                 `json:"titleLen"`
+	Description string              `json:"description,omitempty"`
+	DescLen     int                 `json:"descLen"`
+	H1          string              `json:"h1,omitempty"`
+	H1Count     int                 `json:"h1Count"`
+	Words       int                 `json:"words"`
+	TTFBMs      int                 `json:"ttfbMs"`
+	LoadMs      int                 `json:"loadMs"`
+	SizeKB      float64             `json:"sizeKb"`
+	Inlinks     int                 `json:"inlinks"`
+	Outlinks    int                 `json:"outlinks"`
+	External    int                 `json:"external"`
+	LinkScore   float64             `json:"linkScore"`
+	InSitemap   bool                `json:"inSitemap"`
+	Canonical   string              `json:"canonical,omitempty"`
+	RedirectTo  string              `json:"redirectTo,omitempty"`
+	Readability float64             `json:"readability"`
+	Images      int                 `json:"images"`
+	Schema      []string            `json:"schema,omitempty"`
+	Issues      []string            `json:"issues"`
+	IsHTML      bool                `json:"isHtml"`
+	Retried     bool                `json:"retried,omitempty"`
+	Custom      map[string]int      `json:"custom,omitempty"`
+	Extracted   map[string][]string `json:"extracted,omitempty"`
 }
 
 func pageRow(p *Page) PageRow {
@@ -252,7 +281,8 @@ func pageRow(p *Page) PageRow {
 		Description: firstN(p.Description, 320), DescLen: len([]rune(p.Description)), H1Count: len(p.H1), Words: p.WordCount,
 		TTFBMs: p.Timing.TTFBMs, LoadMs: p.Timing.TotalMs, SizeKB: float64(p.Size*10/1024) / 10, Inlinks: p.Inlinks,
 		Outlinks: p.InternalLinks, External: p.ExternalLinks, LinkScore: p.LinkScore, InSitemap: p.InSitemap, Canonical: p.Canonical,
-		RedirectTo: p.RedirectTo, Readability: p.Readability, Images: len(p.Images), Issues: p.Issues, IsHTML: p.IsHTML}
+		RedirectTo: p.RedirectTo, Readability: p.Readability, Images: len(p.Images), Issues: p.Issues, IsHTML: p.IsHTML,
+		Retried: p.Retried, Custom: p.Custom, Extracted: p.Extracted}
 	if len(p.H1) > 0 {
 		row.H1 = p.H1[0]
 	}
@@ -273,8 +303,7 @@ func overview(r *Report) map[string]any {
 	for _, p := range r.Pages {
 		rows = append(rows, pageRow(p))
 	}
-	opts := r.Options
-	opts.PageSpeedKey = ""
+	opts := r.Options.redactedCopy()
 	resStats := map[string]map[string]int{}
 	for _, res := range r.Resources {
 		m := resStats[res.Kind]
@@ -301,6 +330,7 @@ func overview(r *Report) map[string]any {
 		"dupTitles": nonNil(r.DupTitles), "dupDescriptions": nonNil(r.DupDescs), "dupH1": nonNil(r.DupH1),
 		"dupContent": nonNil(r.DupContent), "nearDuplicates": nonNil(r.NearDups), "redirectChains": nonNil(r.Chains),
 		"truncated": r.Truncated, "progress": r.Progress, "resourceStats": resStats, "edgeCount": len(r.Edges),
+		"customSearch": nonNil(r.CustomSearch),
 	}
 }
 
@@ -320,6 +350,7 @@ type LinkRow struct {
 	Status   int    `json:"status"`
 	Error    string `json:"error,omitempty"`
 	Redirect string `json:"redirectTo,omitempty"`
+	Reverify string `json:"reverified,omitempty"`
 }
 
 func linkRows(r *Report, typ, q string) []LinkRow {
@@ -345,7 +376,7 @@ func linkRows(r *Report, typ, q string) []LinkRow {
 					broken = tp.Error != "" || tp.Status >= 400
 				}
 			} else if x := res[l.URL]; x != nil {
-				row.Status, row.Error, row.Redirect = x.Status, x.Error, x.RedirectTo
+				row.Status, row.Error, row.Redirect, row.Reverify = x.Status, x.Error, x.RedirectTo, x.Reverified
 				broken = (x.Status != 0 || x.Error != "") && externalBroken(x)
 			}
 			switch typ {
@@ -438,6 +469,14 @@ func writePaged[T any](w http.ResponseWriter, r *http.Request, rows []T) {
 
 func exportReport(w http.ResponseWriter, r *Report, typ, format string) {
 	name := fmt.Sprintf("%s-%s-%s", sanitizeName(r.Host), typ, r.CreatedAt.Format("2006-01-02"))
+	if format == "html" || typ == "report" {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Content-Disposition", `attachment; filename="`+sanitizeName(r.Host)+`-seo-report-`+r.CreatedAt.Format("2006-01-02")+`.html"`)
+		if err := writeHTMLReport(w, r); err != nil {
+			log.Printf("html report: %v", err)
+		}
+		return
+	}
 	if format == "json" || typ == "full" {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Content-Disposition", `attachment; filename="`+name+`.json"`)
@@ -451,6 +490,8 @@ func exportReport(w http.ResponseWriter, r *Report, typ, format string) {
 			v = linkRows(r, "", "")
 		case "resources":
 			v = r.Resources
+		case "custom":
+			v = r.CustomSearch
 		}
 		enc := json.NewEncoder(w)
 		enc.SetIndent("", " ")
@@ -486,6 +527,17 @@ func exportReport(w http.ResponseWriter, r *Report, typ, format string) {
 			}
 			cw.Write([]string{x.URL, x.Kind, itoa(x.Status), x.Error, strconv.FormatInt(x.Size, 10), x.ContentType, x.CacheControl, x.Compression, x.RedirectTo, b(x.Internal), itoa(x.FoundOnCount), ex})
 		}
+	case "custom":
+		cw.Write([]string{"Rule", "Type", "Pattern", "URL", "Occurrences"})
+		for _, cs := range r.CustomSearch {
+			kind := "contains"
+			if cs.Rule.Absent {
+				kind = "does not contain"
+			}
+			for _, u := range cs.URLs {
+				cw.Write([]string{cs.Rule.Name, kind, cs.Rule.Pattern, u, itoa(cs.Counts[u])})
+			}
+		}
 	case "images":
 		cw.Write([]string{"Page", "Image", "Alt", "Has alt", "Width", "Height", "Lazy", "Format", "Status", "Size (bytes)"})
 		for _, p := range r.Pages {
@@ -494,18 +546,37 @@ func exportReport(w http.ResponseWriter, r *Report, typ, format string) {
 			}
 		}
 	default: // pages
-		cw.Write([]string{"URL", "Status", "Indexable", "Indexability reason", "Depth", "Title", "Title length", "Title px", "Meta description", "Description length",
+		header := []string{"URL", "Status", "Indexable", "Indexability reason", "Depth", "Title", "Title length", "Title px", "Meta description", "Description length",
 			"H1", "H1 count", "Words", "Readability", "Canonical", "Meta robots", "X-Robots-Tag", "Redirects to", "TTFB (ms)", "Load (ms)", "Size (bytes)",
 			"Transfer (bytes)", "Compression", "Inlinks", "Unique inlinks", "Internal outlinks", "External outlinks", "Link score", "In sitemap", "Images",
-			"Images missing alt", "Schema types", "Lang", "Content type", "Issues"})
+			"Images missing alt", "Schema types", "Lang", "Content type", "Issues"}
+		var extra []string
+		for _, e := range r.Options.Extract {
+			extra = append(extra, e.Name)
+		}
+		for _, cs := range r.Options.CustomSearch {
+			extra = append(extra, "Search: "+cs.Name)
+		}
+		cw.Write(append(header, extra...))
 		for _, p := range r.Pages {
 			row := pageRow(p)
-			cw.Write([]string{p.URL, itoa(p.Status) + map[bool]string{true: " " + p.Error, false: ""}[p.Error != ""], b(p.Indexable), p.IndexReason, itoa(p.Depth),
+			var ex []string
+			for _, e := range r.Options.Extract {
+				ex = append(ex, strings.Join(p.Extracted[e.Name], " | "))
+			}
+			for _, cs := range r.Options.CustomSearch {
+				if p.Custom == nil {
+					ex = append(ex, "")
+				} else {
+					ex = append(ex, itoa(p.Custom[cs.Name]))
+				}
+			}
+			cw.Write(append([]string{p.URL, itoa(p.Status) + map[bool]string{true: " " + p.Error, false: ""}[p.Error != ""], b(p.Indexable), p.IndexReason, itoa(p.Depth),
 				p.Title, itoa(row.TitleLen), itoa(p.TitlePx), p.Description, itoa(row.DescLen), row.H1, itoa(len(p.H1)), itoa(p.WordCount),
 				strconv.FormatFloat(p.Readability, 'f', 1, 64), p.Canonical, p.MetaRobots, p.XRobots, p.RedirectTo, itoa(p.Timing.TTFBMs),
 				itoa(p.Timing.TotalMs), itoa(p.Size), strconv.FormatInt(p.TransferSize, 10), p.Compression, itoa(p.Inlinks), itoa(p.UniqueInlinks),
 				itoa(p.InternalLinks), itoa(p.ExternalLinks), strconv.FormatFloat(p.LinkScore, 'f', 1, 64), b(p.InSitemap), itoa(len(p.Images)),
-				itoa(p.A11y.ImagesNoAlt), strings.Join(row.Schema, " "), p.Lang, row.ContentType, strings.Join(p.Issues, " ")})
+				itoa(p.A11y.ImagesNoAlt), strings.Join(row.Schema, " "), p.Lang, row.ContentType, strings.Join(p.Issues, " ")}, ex...))
 		}
 	}
 }

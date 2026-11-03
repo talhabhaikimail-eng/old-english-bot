@@ -105,7 +105,7 @@ function LinksView({ ctx }: { ctx: ReportCtx }) {
                   {l.redirectTo && <span className="block text-[10px] text-muted-foreground truncate">→ {shortUrl(l.redirectTo, r.site.origin)}</span>}
                 </td>
                 <td className="px-2 py-1.5 truncate" title={l.anchor}>{l.anchor || <span className="text-muted-foreground italic">empty</span>}</td>
-                <td className="px-2 py-1.5 text-center"><StatusPill status={l.status} error={l.error} /></td>
+                <td className="px-2 py-1.5 text-center" title={l.reverified}><StatusPill status={l.status} error={l.error} />{l.reverified && <span className="block text-[10px] text-muted-foreground">{l.reverified.startsWith('confirmed') ? 're-checked ✓' : 'cleared on re-check'}</span>}</td>
                 <td className="px-2 py-1.5 text-center text-[11px] text-muted-foreground">{l.internal ? 'internal' : 'external'}{l.nofollow ? ' · nf' : ''}</td>
               </tr>
             ))}
@@ -164,6 +164,7 @@ function AssetsView({ ctx }: { ctx: ReportCtx }) {
                 <td className="px-2 py-1.5 font-mono text-[11px] truncate" title={x.url + (x.redirectTo ? `\n→ ${x.redirectTo}` : '')}>
                   <ExtLink href={x.url}>{shortUrl(x.url, r.site.origin)}</ExtLink>
                   {x.error && <span className="block text-[10px] text-red-600 dark:text-red-400 truncate">{x.error}</span>}
+                  {x.reverified && <span className="block text-[10px] text-muted-foreground truncate" title={x.reverified}>{x.reverified}</span>}
                 </td>
                 <td className="px-2 py-1.5 text-muted-foreground">{x.kind}{x.compression ? ` · ${x.compression}` : ''}</td>
                 <td className="px-2 py-1.5"><StatusPill status={x.status} error={x.error} /></td>

@@ -22,6 +22,59 @@ export interface AuditOptions {
   pageSpeed?: boolean;
   pageSpeedKey?: string;
   keyword?: string;
+  mode?: 'crawl' | 'sitemap' | 'list';
+  urls?: string[];
+  subfolderOnly?: boolean;
+  ignoreParams?: string[];
+  retryErrors?: boolean;
+  headers?: Record<string, string>;
+  authUser?: string;
+  authPass?: string;
+  disabledChecks?: string[];
+  thresholds?: Thresholds;
+  customSearch?: SearchRule[];
+  extract?: ExtractRule[];
+  verify?: VerifyOptions;
+  reverifyBroken?: boolean;
+}
+
+export interface Thresholds {
+  titleMin?: number; titleMax?: number; descMin?: number; descMax?: number; thinWords?: number; slowTtfbMs?: number;
+  slowLoadMs?: number; largeHtmlKb?: number; largeImageKb?: number; maxDom?: number; deepClicks?: number;
+}
+export interface SearchRule { name: string; pattern: string; regex?: boolean; absent?: boolean; inText?: boolean }
+export interface ExtractRule { name: string; regex: string }
+export interface VerifyOptions {
+  w3c?: boolean; w3cPages?: number; observatory?: boolean; safeBrowsing?: boolean; rdap?: boolean;
+  wayback?: boolean; tranco?: boolean; greenWeb?: boolean; sslLabs?: boolean;
+}
+
+export interface CheckDef { id: string; category: string; severity: Severity; title: string; why: string; fix: string; site?: boolean; asset?: boolean }
+
+export interface VerifyCheck { status: 'ok' | 'error' | 'skipped'; error?: string; reportUrl?: string; ms: number }
+export interface W3CPage { url: string; errors: number; warnings: number; error?: string; messages?: { type: string; message: string; line?: number; extract?: string }[] }
+export interface ThirdParty {
+  w3c?: VerifyCheck & { pages: W3CPage[] };
+  observatory?: VerifyCheck & { grade?: string; score: number; testsPassed: number; testsFailed: number; testsTotal: number };
+  safeBrowsing?: VerifyCheck & { checked: number; matches: { url: string; threatType: string; own: boolean }[] };
+  rdap?: VerifyCheck & { domain: string; registrar?: string; registered?: string; expires?: string; updated?: string; ageYears: number; daysLeft: number; statuses?: string[]; nameservers?: string[]; dnssec: boolean };
+  wayback?: VerifyCheck & { firstCapture?: string; lastCapture?: string; lastUrl?: string };
+  tranco?: VerifyCheck & { domain: string; rank: number; date?: string; best?: number };
+  greenWeb?: VerifyCheck & { green: boolean; hostedBy?: string; hostUrl?: string };
+  sslLabs?: VerifyCheck & { grade?: string; endpoints?: { ip: string; grade?: string; hasWarnings: boolean; message?: string }[] };
+}
+
+export interface SearchResult { rule: SearchRule; matched: number; checked: number; urls: string[]; counts?: Record<string, number> }
+
+export interface IssueDiff {
+  id: string; title: string; severity: Severity; category: string; site?: boolean; before: number; after: number;
+  newCount: number; fixedCount: number; new: string[]; fixed: string[];
+}
+export interface AuditRef { id: string; createdAt: string; score: number; grade: string; pages: number; errors: number; warnings: number; notices: number }
+export interface Comparison {
+  base: AuditRef; current: AuditRef; scoreDelta: number; categories: Record<string, [number, number]>; issues: IssueDiff[];
+  addedCount: number; removedCount: number; added: string[]; removed: string[]; statusChanges: { url: string; from: number; to: number }[];
+  newIssues: number; fixedIssues: number; notCompared: string[];
 }
 
 export interface Progress {
@@ -107,6 +160,9 @@ export interface PageRow {
   schema?: string[];
   issues: string[];
   isHtml: boolean;
+  retried?: boolean;
+  custom?: Record<string, number>;
+  extracted?: Record<string, string[]>;
 }
 
 export interface TLSInfo {
@@ -137,6 +193,7 @@ export interface SiteInfo {
   tls?: TLSInfo; securityHeaders: HeaderCheck[]; securityGrade: string; dns?: DNSInfo; httpsRedirect?: ProbeResult;
   wwwCheck?: ProbeResult; soft404?: ProbeResult; llmsTxt?: ProbeResult; securityTxt?: ProbeResult; favicon?: ProbeResult;
   robots?: RobotsInfo; sitemaps: SitemapInfo[]; sitemapUrls: number; tech: Tech[]; pageSpeed?: PageSpeedRun[]; homeSchema?: string[];
+  thirdParty?: ThirdParty;
 }
 
 export interface Summary {
@@ -181,6 +238,7 @@ export interface AuditReport {
   progress: Progress;
   resourceStats: Record<string, Record<string, number>>;
   edgeCount: number;
+  customSearch: SearchResult[];
 }
 
 export interface RunningAudit { id: string; status: 'queued' | 'running'; progress: Progress; options: AuditOptions; startUrl: string }
@@ -207,16 +265,18 @@ export interface PageDetail {
     mixedContent?: string[]; deprecated?: string[];
     a11y: Record<string, number>; inlinks: number; uniqueInlinks: number; linkScore: number; inSitemap: boolean; issues?: string[];
     keywordCheck?: { keyword: string; inTitle: boolean; inDescription: boolean; inH1: boolean; inUrl: boolean; inFirst100: boolean; occurrences: number };
+    custom?: Record<string, number>; extracted?: Record<string, string[]>; retried?: boolean;
   };
   inlinks: { from: string; to: string; anchor: string; nofollow: boolean }[];
   issues: IssueResult[];
   chain?: RedirectChain | null;
 }
 
-export interface LinkRow { from: string; to: string; anchor: string; nofollow: boolean; internal: boolean; status: number; error?: string; redirectTo?: string }
+export interface LinkRow { from: string; to: string; anchor: string; nofollow: boolean; internal: boolean; status: number; error?: string; redirectTo?: string; reverified?: string }
 export interface ResourceRow {
   url: string; kind: string; status: number; error?: string; contentType?: string; size: number; cacheControl?: string;
   compression?: string; redirectTo?: string; internal: boolean; timeMs: number; foundOn: string[] | null; foundOnCount: number;
+  reverified?: string;
 }
 export interface Paged<T> { total: number; offset: number; limit: number; rows: T[] }
 
@@ -246,7 +306,9 @@ export const auditApi = {
     authFetch(`${root()}/audits/${id}/links?${qs(p)}`).then(r => parse<Paged<LinkRow>>(r)),
   resources: (id: string, p: { kind?: string; filter?: string; q?: string; offset?: number; limit?: number }) =>
     authFetch(`${root()}/audits/${id}/resources?${qs(p)}`).then(r => parse<Paged<ResourceRow>>(r)),
-  export: async (id: string, type: string, format: 'csv' | 'json') => {
+  checks: () => authFetch(`${root()}/checks`).then(r => parse<{ checks: CheckDef[]; categories: Category[] }>(r)),
+  compare: (id: string, base?: string) => authFetch(`${root()}/audits/${id}/compare?${qs({ base })}`).then(r => parse<Comparison>(r)),
+  export: async (id: string, type: string, format: 'csv' | 'json' | 'html') => {
     const res = await authFetch(`${root()}/audits/${id}/export?${qs({ type, format })}`);
     if (!res.ok) await parse(res);
     const cd = res.headers.get('content-disposition') || '';

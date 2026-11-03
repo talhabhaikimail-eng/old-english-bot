@@ -10,7 +10,9 @@ const PHASES = [
   { id: 'site', label: 'Site checks' },
   { id: 'crawl', label: 'Crawling' },
   { id: 'resources', label: 'Assets & links' },
+  { id: 'reverify', label: 'Re-check broken' },
   { id: 'pagespeed', label: 'Lighthouse' },
+  { id: 'verify', label: '3rd-party verify' },
   { id: 'analyze', label: 'Analysis' },
 ];
 
@@ -41,7 +43,7 @@ export function Running({ id, url, initial, maxPages, onDone }: { id: string; ur
   const phaseIdx = PHASES.findIndex(x => x.id === p.phase);
   const crawlPct = maxPages ? Math.min(100, (p.crawled / Math.max(1, Math.min(maxPages, p.discovered || maxPages))) * 100) : 0;
   const resPct = p.resourcesTotal ? (p.resourcesChecked / p.resourcesTotal) * 100 : 0;
-  const pct = p.phase === 'resources' ? resPct : p.phase === 'crawl' ? crawlPct : phaseIdx > 1 ? 100 : 0;
+  const pct = p.phase === 'resources' || p.phase === 'reverify' ? resPct : p.phase === 'crawl' ? crawlPct : phaseIdx > 1 ? 100 : 0;
 
   return (
     <section className="rounded-xl border border-border bg-card p-5 space-y-5">
@@ -59,7 +61,7 @@ export function Running({ id, url, initial, maxPages, onDone }: { id: string; ur
         </Button>
       </div>
 
-      <ol className="grid grid-cols-5 gap-1.5">
+      <ol className="grid grid-cols-4 sm:grid-cols-7 gap-1.5">
         {PHASES.map((ph, i) => (
           <li key={ph.id} className="min-w-0">
             <div className={cn('h-1.5 rounded-full', i < phaseIdx ? 'bg-primary' : i === phaseIdx ? 'bg-primary/40 overflow-hidden' : 'bg-border')}>
@@ -77,8 +79,10 @@ export function Running({ id, url, initial, maxPages, onDone }: { id: string; ur
         <Stat label="Errors so far" value={p.errors.toLocaleString()} />
         <Stat label="Elapsed" value={fmtMs(p.elapsedMs)} hint={p.pagesPerSec ? `${p.pagesPerSec} pages/s` : undefined} />
       </div>
-      {p.phase === 'resources' && (
-        <p className="text-xs text-muted-foreground tabular-nums">Checked {p.resourcesChecked.toLocaleString()} of {p.resourcesTotal.toLocaleString()} images, scripts, stylesheets and external links</p>
+      {(p.phase === 'resources' || p.phase === 'reverify') && (
+        <p className="text-xs text-muted-foreground tabular-nums">
+          {p.phase === 'reverify' ? 'Re-checked' : 'Checked'} {p.resourcesChecked.toLocaleString()} of {p.resourcesTotal.toLocaleString()} {p.phase === 'reverify' ? 'broken links and assets with a browser user agent' : 'images, scripts, stylesheets and external links'}
+        </p>
       )}
       {error && <ErrorBox message={error} />}
       {p.log && p.log.length > 0 && (

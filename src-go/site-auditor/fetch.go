@@ -123,6 +123,10 @@ type Fetcher struct {
 	userAgent string
 	timeout   time.Duration
 	maxBody   int64
+	// siteHeaders (custom headers, basic auth) are only sent to URLs headerScope accepts, so
+	// credentials for the audited site never leak to external links or third-party hosts.
+	siteHeaders map[string]string
+	headerScope func(*url.URL) bool
 }
 
 func NewFetcher(userAgent string, timeout time.Duration) *Fetcher {
@@ -204,6 +208,11 @@ func (f *Fetcher) Do(ctx context.Context, rawURL string, o fetchOpts) *FetchResu
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
 	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
 	req.Header.Set("Accept-Encoding", "gzip, deflate")
+	if f.headerScope != nil && f.headerScope(u) {
+		for k, v := range f.siteHeaders {
+			req.Header.Set(k, v)
+		}
+	}
 	for k, v := range o.headers {
 		req.Header.Set(k, v)
 	}
@@ -312,4 +321,12 @@ func simplifyNetErr(err error) error {
 func isHTMLContentType(ct string) bool {
 	ct = strings.ToLower(ct)
 	return ct == "" || strings.Contains(ct, "text/html") || strings.Contains(ct, "application/xhtml")
+}
+
+func (r *FetchResult) reqURL() *url.URL {
+	u, err := url.Parse(r.URL)
+	if err != nil {
+		return &url.URL{}
+	}
+	return u
 }

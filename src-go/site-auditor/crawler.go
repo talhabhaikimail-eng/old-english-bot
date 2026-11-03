@@ -110,6 +110,7 @@ type Report struct {
 	DupContent     []DupGroup      `json:"dupContent"`
 	NearDups       []NearDup       `json:"nearDuplicates"`
 	Chains         []RedirectChain `json:"redirectChains"`
+	CustomSearch   []SearchResult  `json:"customSearch,omitempty"`
 	Truncated      bool            `json:"truncated"` // stopped at maxPages with URLs left
 	Progress       Progress        `json:"progress"`
 }
@@ -130,6 +131,11 @@ type Audit struct {
 	start    *url.URL
 	include  []*regexp.Regexp
 	exclude  []*regexp.Regexp
+	folder   string // subfolderOnly prefix
+	th       Thresholds
+	disabled map[string]bool
+	search   []compiledSearch
+	extract  []*regexp.Regexp
 	crawlGap time.Duration
 	lastReq  time.Time
 	gapMu    sync.Mutex
@@ -201,7 +207,7 @@ func (o *Options) normalize() error {
 			return fmt.Errorf("invalid pattern %q: %v", p, err)
 		}
 	}
-	return nil
+	return o.normalizeExtra()
 }
 
 func newAudit(id string, opts Options) (*Audit, error) {
@@ -240,13 +246,37 @@ func newAudit(id string, opts Options) (*Audit, error) {
 		crawlGap:  time.Duration(opts.CrawlDelayMs) * time.Millisecond,
 	}
 	a.cond = sync.NewCond(&a.mu)
+	a.th = opts.thresholds()
+	a.disabled = opts.disabledSet()
+	if opts.SubfolderOnly {
+		a.folder = folderPrefix(start)
+	}
+	for _, r := range opts.CustomSearch {
+		cs := compiledSearch{rule: r}
+		if r.Regex {
+			cs.re = regexp.MustCompile(r.Pattern)
+		} else {
+			cs.needle = strings.ToLower(r.Pattern)
+		}
+		a.search = append(a.search, cs)
+	}
+	for _, r := range opts.Extract {
+		a.extract = append(a.extract, regexp.MustCompile(r.Regex))
+	}
+	if h := opts.requestHeaders(); h != nil {
+		startHost := siteHost(start.Hostname())
+		a.fetcher.siteHeaders = h
+		a.fetcher.headerScope = func(u *url.URL) bool {
+			return siteHost(u.Hostname()) == startHost || (a.scope.root != "" && a.scope.internal(u))
+		}
+	}
 	for _, p := range opts.Include {
 		a.include = append(a.include, regexp.MustCompile(p))
 	}
 	for _, p := range opts.Exclude {
 		a.exclude = append(a.exclude, regexp.MustCompile(p))
 	}
-	a.report = &Report{ID: id, Status: "queued", Options: opts, StartURL: start.String(), Host: start.Hostname(), CreatedAt: time.Now()}
+	a.report = &Report{ID: id, Status: "queued", Options: opts.redactedCopy(), StartURL: start.String(), Host: start.Hostname(), CreatedAt: time.Now()}
 	a.progress.Phase = "queued"
 	return a, nil
 }
@@ -284,6 +314,10 @@ func phaseLabel(p string) string {
 		return "Running Lighthouse via PageSpeed Insights"
 	case "analyze":
 		return "Analysing duplicates, link graph and issues"
+	case "reverify":
+		return "Re-checking broken links with a browser user agent"
+	case "verify":
+		return "Running third-party verification (W3C, Mozilla Observatory, Safe Browsing, RDAP…)"
 	}
 	return p
 }
@@ -339,10 +373,18 @@ func (a *Audit) Run() *Report {
 	if !cancelled && (boolOr(a.opts.CheckResources, true) || boolOr(a.opts.CheckExternal, true)) {
 		a.setPhase("resources")
 		a.checkResources()
+		if a.ctx.Err() == nil && boolOr(a.opts.ReverifyBroken, true) {
+			a.setPhase("reverify")
+			a.reverifyBroken()
+		}
 	}
 	if !cancelled && a.ctx.Err() == nil && boolOr(a.opts.PageSpeed, false) {
 		a.setPhase("pagespeed")
 		a.pageSpeed()
+	}
+	if a.ctx.Err() == nil && a.verifyEnabled() {
+		a.setPhase("verify")
+		a.thirdParty()
 	}
 	a.setPhase("analyze")
 	a.analyze()
@@ -384,6 +426,9 @@ func (a *Audit) siteChecks() error {
 	}
 	final, _ := url.Parse(cur)
 	final = canonicalURL(final, false)
+	if cu, err := url.Parse(cleanURL(final.String(), a.opts.IgnoreParams)); err == nil {
+		final = cu
+	}
 	if len(site.StartRedirects) == 1 {
 		site.StartRedirects = nil
 	}
@@ -544,7 +589,7 @@ func (a *Audit) siteChecks() error {
 	}
 	for _, e := range entries {
 		if u, err := url.Parse(e.Loc); err == nil {
-			a.sitemap[canonicalURL(u, a.opts.StripQuery).String()] = true
+			a.sitemap[cleanURL(canonicalURL(u, a.opts.StripQuery).String(), a.opts.IgnoreParams)] = true
 		}
 	}
 	site.SitemapURLs = len(a.sitemap)
@@ -582,6 +627,11 @@ func (a *Audit) enqueueLocked(u string, depth int, from string, force bool) {
 	if !force && !a.allowedByPatterns(u) {
 		return
 	}
+	if !force && a.folder != "" {
+		if pu, err := url.Parse(u); err != nil || !strings.HasPrefix(pu.Path, a.folder) {
+			return
+		}
+	}
 	if nonPageExts[fileExt(u)] {
 		return
 	}
@@ -592,10 +642,35 @@ func (a *Audit) enqueueLocked(u string, depth int, from string, force bool) {
 
 func (a *Audit) crawl() {
 	a.mu.Lock()
-	a.enqueueLocked(a.start.String(), 0, "", true)
+	switch a.opts.Mode {
+	case "list":
+		skipped := 0
+		for _, raw := range a.opts.URLs {
+			u, err := normalizeStartURL(raw)
+			if err != nil || !a.scope.internal(u) {
+				skipped++
+				continue
+			}
+			a.enqueueLocked(cleanURL(u.String(), a.opts.IgnoreParams), 0, "list", true)
+		}
+		if skipped > 0 {
+			a.logLocked(fmt.Sprintf("Skipped %d listed URLs that are invalid or on another host", skipped))
+		}
+	case "sitemap":
+		a.enqueueLocked(a.start.String(), 0, "", true)
+		for _, u := range sortedKeys(a.sitemap) {
+			pu, err := url.Parse(u)
+			if err == nil && a.scope.internal(pu) {
+				a.enqueueLocked(u, 0, "sitemap", false)
+			}
+		}
+		a.logLocked(fmt.Sprintf("Sitemap mode: auditing %d sitemap URLs", len(a.queue)))
+	default:
+		a.enqueueLocked(a.start.String(), 0, "", true)
+	}
 	a.mu.Unlock()
 
-	sitemapSeeded := false
+	sitemapSeeded := a.opts.Mode != "crawl"
 	var wg sync.WaitGroup
 	for i := 0; i < a.opts.Concurrency; i++ {
 		wg.Add(1)
@@ -699,9 +774,20 @@ func (a *Audit) processPage(job crawlJob) {
 		}
 	}
 	a.throttle()
-	res := a.fetcher.Do(a.ctx, job.url, fetchOpts{readBody: true, readIf: func(h http.Header) bool {
+	fo := fetchOpts{readBody: true, readIf: func(h http.Header) bool {
 		return isHTMLContentType(h.Get("Content-Type"))
-	}})
+	}}
+	res := a.fetcher.Do(a.ctx, job.url, fo)
+	if boolOr(a.opts.RetryErrors, true) && retryable(res) && a.ctx.Err() == nil {
+		// Transient failures (timeouts, resets, 502/503/504, 429) get one more try before being reported.
+		select {
+		case <-time.After(retryDelay(res)):
+		case <-a.ctx.Done():
+		}
+		p.Retried = true
+		a.throttle()
+		res = a.fetcher.Do(a.ctx, job.url, fo)
+	}
 	p.Status = res.Status
 	p.Proto = res.Proto
 	p.Timing = Timing{DNSMs: ms(res.DNS), ConnectMs: ms(res.Connect), TLSMs: ms(res.TLS), TTFBMs: ms(res.TTFB), TotalMs: ms(res.Total)}
@@ -724,7 +810,7 @@ func (a *Audit) processPage(job crawlJob) {
 
 	if res.Status >= 300 && res.Status < 400 {
 		if loc := h.Get("Location"); loc != "" {
-			target := resolveLink(pu, loc, a.opts.StripQuery)
+			target := cleanURL(resolveLink(pu, loc, a.opts.StripQuery), a.opts.IgnoreParams)
 			p.RedirectTo = target
 			if tu, err := url.Parse(target); err == nil && target != "" && a.scope.internal(tu) {
 				a.mu.Lock()
@@ -770,6 +856,7 @@ func (a *Audit) processPage(job crawlJob) {
 			Occurrences: strings.Count(lowerText, kw)}
 		p.KeywordCheck = kc
 	}
+	a.customRules(p, res.Body, ps.text)
 
 	// Links → edges, frontier, external resources.
 	nextDepth := job.depth + 1
@@ -783,6 +870,9 @@ func (a *Audit) processPage(job crawlJob) {
 			continue
 		}
 		l.Internal = a.scope.internal(lu)
+		if l.Internal && len(a.opts.IgnoreParams) > 0 {
+			l.URL = cleanURL(l.URL, a.opts.IgnoreParams)
+		}
 		if l.Nofollow {
 			nofollow++
 		}
@@ -791,7 +881,7 @@ func (a *Audit) processPage(job crawlJob) {
 			if l.URL != job.url {
 				a.edges = append(a.edges, LinkEdge{From: job.url, To: l.URL, Anchor: l.Anchor, Nofollow: l.Nofollow})
 			}
-			if nextDepth <= a.opts.MaxDepth && !strings.Contains(p.MetaRobots+p.XRobots, "nofollow") {
+			if a.opts.Mode == "crawl" && nextDepth <= a.opts.MaxDepth && !strings.Contains(p.MetaRobots+p.XRobots, "nofollow") {
 				a.enqueueLocked(l.URL, nextDepth, job.url, false)
 			}
 		} else {
@@ -809,8 +899,8 @@ func (a *Audit) processPage(job crawlJob) {
 		if extra == "" {
 			continue
 		}
-		if eu, err := url.Parse(extra); err == nil && a.scope.internal(eu) {
-			a.enqueueLocked(canonicalURL(eu, a.opts.StripQuery).String(), nextDepth, job.url, true)
+		if eu, err := url.Parse(extra); err == nil && a.scope.internal(eu) && a.opts.Mode == "crawl" {
+			a.enqueueLocked(cleanURL(canonicalURL(eu, a.opts.StripQuery).String(), a.opts.IgnoreParams), nextDepth, job.url, true)
 		}
 	}
 	if boolOr(a.opts.CheckResources, true) {
@@ -910,15 +1000,17 @@ func (a *Audit) checkResources() {
 	wg.Wait()
 }
 
-func (a *Audit) checkResource(r *Resource) {
+func (a *Audit) checkResource(r *Resource) { a.checkResourceWith(a.fetcher, r) }
+
+func (a *Audit) checkResourceWith(f *Fetcher, r *Resource) {
 	cur := r.URL
 	var res *FetchResult
 	for hop := 0; hop < 5; hop++ {
 		method := http.MethodHead
-		res = a.fetcher.Do(a.ctx, cur, fetchOpts{method: method})
+		res = f.Do(a.ctx, cur, fetchOpts{method: method})
 		// Plenty of servers mishandle HEAD; retry with GET before calling the resource broken.
 		if res.Err != nil || res.Status == 405 || res.Status == 403 || res.Status == 404 || res.Status == 501 || res.Status == 400 || (r.Kind == "image" && res.Header != nil && res.Header.Get("Content-Length") == "" && res.Status == 200) {
-			res = a.fetcher.Do(a.ctx, cur, fetchOpts{method: http.MethodGet, readBody: r.Kind == "image", headers: map[string]string{"Accept": "*/*"}})
+			res = f.Do(a.ctx, cur, fetchOpts{method: http.MethodGet, readBody: r.Kind == "image", headers: map[string]string{"Accept": "*/*"}})
 		}
 		if res.Err == nil && res.Status >= 300 && res.Status < 400 {
 			if loc := res.Header.Get("Location"); loc != "" {

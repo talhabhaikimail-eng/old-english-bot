@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ArrowLeft, Download, ExternalLink, FileJson, FileSpreadsheet, Loader2, RotateCcw, AlertTriangle } from 'lucide-react';
+import { ArrowLeft, Download, ExternalLink, FileJson, FileSpreadsheet, FileText, Loader2, RotateCcw, AlertTriangle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { downloadBlob } from '../devtools/shared';
@@ -13,6 +13,9 @@ import { ContentTab } from './tabs/Content';
 import { SiteHealthTab } from './tabs/SiteHealth';
 import { PerformanceTab } from './tabs/Performance';
 import { PageDrawer } from './PageDrawer';
+import { VerificationTab } from './tabs/Verification';
+import { CustomSearchTab } from './tabs/CustomSearch';
+import { ChangesTab } from './tabs/Changes';
 
 export const TABS = [
   { id: 'overview', label: 'Overview' },
@@ -22,6 +25,9 @@ export const TABS = [
   { id: 'content', label: 'Content & duplicates' },
   { id: 'performance', label: 'Performance' },
   { id: 'site', label: 'Security & site' },
+  { id: 'verification', label: 'Verification' },
+  { id: 'custom', label: 'Custom search' },
+  { id: 'changes', label: 'Changes' },
 ] as const;
 export type TabId = typeof TABS[number]['id'];
 
@@ -45,7 +51,9 @@ export function Report({ report, tab, onTab, onBack, onRerun, filter }: {
   const ctx: ReportCtx = { report, openPage: setPageUrl, goTo: onTab };
   const issueCount = report.issues.reduce((n, i) => n + (i.site ? 1 : i.count), 0);
 
-  const doExport = async (type: string, format: 'csv' | 'json') => {
+  const hasCustom = (report.customSearch?.length || 0) + (report.options.extract?.length || 0) > 0;
+  const tabs = TABS.filter(t => t.id !== 'custom' || hasCustom);
+  const doExport = async (type: string, format: 'csv' | 'json' | 'html') => {
     setExporting(type + format);
     try {
       const { blob, name } = await auditApi.export(report.id, type, format);
@@ -77,8 +85,12 @@ export function Report({ report, tab, onTab, onBack, onRerun, filter }: {
           {exportOpen && (
             <>
               <div className="fixed inset-0 z-30" onClick={() => setExportOpen(false)} />
-              <div className="absolute right-0 top-9 z-40 w-56 rounded-md border border-border bg-popover shadow-lg p-1 text-xs">
-                {[['pages', 'All pages'], ['issues', 'Issues (one row per URL)'], ['links', 'All links'], ['resources', 'Assets & external links'], ['images', 'Images']].map(([t, l]) => (
+              <div className="absolute right-0 top-9 z-40 w-60 rounded-md border border-border bg-popover shadow-lg p-1 text-xs">
+                <button onClick={() => doExport('report', 'html')} className="w-full flex items-center gap-2 px-2 py-1.5 rounded hover:bg-secondary text-left cursor-pointer">
+                  {exporting === 'reporthtml' ? <Loader2 className="size-3.5 animate-spin" /> : <FileText className="size-3.5 text-primary" />} Client report (HTML, printable)
+                </button>
+                <div className="border-t border-border my-1" />
+                {[['pages', 'All pages'], ['issues', 'Issues (one row per URL)'], ['links', 'All links'], ['resources', 'Assets & external links'], ['images', 'Images'], ...(report.customSearch?.length ? [['custom', 'Custom search matches']] : [])].map(([t, l]) => (
                   <button key={t} onClick={() => doExport(t, 'csv')} className="w-full flex items-center gap-2 px-2 py-1.5 rounded hover:bg-secondary text-left cursor-pointer">
                     {exporting === t + 'csv' ? <Loader2 className="size-3.5 animate-spin" /> : <FileSpreadsheet className="size-3.5 text-primary" />} {l} (CSV)
                   </button>
@@ -104,7 +116,7 @@ export function Report({ report, tab, onTab, onBack, onRerun, filter }: {
       )}
 
       <nav className="flex gap-1 overflow-x-auto border-b border-border -mx-1 px-1">
-        {TABS.map(t => (
+        {tabs.map(t => (
           <button key={t.id} onClick={() => onTab(t.id)}
             className={cn('h-9 px-3 text-xs font-medium whitespace-nowrap border-b-2 -mb-px cursor-pointer transition-colors',
               tab === t.id ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground')}>
@@ -124,6 +136,9 @@ export function Report({ report, tab, onTab, onBack, onRerun, filter }: {
           {tab === 'content' && <ContentTab ctx={ctx} />}
           {tab === 'performance' && <PerformanceTab ctx={ctx} />}
           {tab === 'site' && <SiteHealthTab ctx={ctx} />}
+          {tab === 'verification' && <VerificationTab ctx={ctx} />}
+          {tab === 'custom' && <CustomSearchTab ctx={ctx} />}
+          {tab === 'changes' && <ChangesTab ctx={ctx} />}
         </>
       )}
 
