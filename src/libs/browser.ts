@@ -26,6 +26,33 @@ const browserInstances = new Map<string, {
   targetUrl?: string;
 }>();
 
+/** Google's sign-in page that lands on YouTube (the one `ytp login` opens). */
+const YOUTUBE_SIGN_IN_URL =
+  'https://accounts.google.com/ServiceLogin?service=youtube&passive=true&continue=' +
+  'https%3A%2F%2Fwww.youtube.com%2Fsignin%3Faction_handle_signin%3Dtrue%26next%3D%252F';
+
+/** The general browser is running without a DevTools port, for signing in to Google. */
+let signInBrowser = false;
+
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+/**
+ * Start the browser for signing in to YouTube. Google refuses sign-in in a browser that was
+ * started with a DevTools port, so this one runs without it (and without the automatic
+ * sign-in, which needs that port). It uses the same profile as the general browser: once the
+ * user has signed in, exportYouTubeCookies() restarts the browser with the port and reads the
+ * session, the same two steps `ytp login` takes on a desktop.
+ */
+export async function startYouTubeSignIn(): Promise<{ url?: string; username?: string; password?: string; error?: string }> {
+  if (Array.from(browserInstances.values()).some(b => !b.targetUrl)) {
+    await stopBrowser();
+    await sleep(3000);
+  }
+  const result = await startBrowserInstance(undefined, true);
+  signInBrowser = !result.error;
+  return result;
+}
+
 /**
  * Start a general-purpose browser (no specific URL)
  */
@@ -85,7 +112,7 @@ export async function startCustomBrowser(targetUrl: string): Promise<{
 /**
  * Internal function to start a browser instance
  */
-async function startBrowserInstance(targetUrl?: string): Promise<{
+async function startBrowserInstance(targetUrl?: string, plain = false): Promise<{
   url?: string;
   username?: string;
   password?: string;
@@ -145,12 +172,14 @@ async function startBrowserInstance(targetUrl?: string): Promise<{
       '-e', `PASSWORD=${password}`,
       '-e', `PUID=${process.getuid ? process.getuid() : 1000}`,
       '-e', `PGID=${process.getgid ? process.getgid() : 1000}`,
-      '-e', 'CHROME_CLI=--remote-debugging-port=9222 --no-sandbox --disable-dev-shm-usage --remote-allow-origins=*',
+      '-e', plain
+        ? 'CHROME_CLI=--no-sandbox --disable-dev-shm-usage'
+        : 'CHROME_CLI=--remote-debugging-port=9222 --no-sandbox --disable-dev-shm-usage --remote-allow-origins=*',
     ];
 
     // Add custom URL if provided
-    if (targetUrl) {
-      dockerCmd.push('-e', `CUSTOM_URL=${targetUrl}`);
+    if (targetUrl || plain) {
+      dockerCmd.push('-e', `CUSTOM_URL=${targetUrl || YOUTUBE_SIGN_IN_URL}`);
     }
 
     dockerCmd.push('lscr.io/linuxserver/chromium:latest');
@@ -162,7 +191,7 @@ async function startBrowserInstance(targetUrl?: string): Promise<{
     // Start socat sidecar: shares Chrome container's network namespace
     // and forwards port 9223 → 127.0.0.1:9222 (Chrome CDP loopback).
     const socatName = `${containerName}-cdp-proxy`;
-    try {
+    if (!plain) try {
       // Remove any leftover socat container
       await execAsync(`docker rm -f ${socatName}`).catch(() => { });
       await execFileAsync('docker', [
@@ -200,7 +229,7 @@ async function startBrowserInstance(targetUrl?: string): Promise<{
       }
 
       (async () => {
-        const signedIn = await signIntoGoogle(cdpPort);
+        const signedIn = !plain && await signIntoGoogle(cdpPort);
         if (signedIn) {
           const cookieResult = await exportYouTubeCookies();
           console.log(`[Auto] Cookie export: ${cookieResult.message}`);
@@ -261,7 +290,7 @@ async function startBrowserInstance(targetUrl?: string): Promise<{
 
           // Kick off Google sign-in then auto-export YouTube cookies on success
           (async () => {
-            const signedIn = await signIntoGoogle(cdpPort);
+            const signedIn = !plain && await signIntoGoogle(cdpPort);
             if (signedIn) {
               console.log('[Auto] Google sign-in succeeded — exporting YouTube cookies...');
               const cookieResult = await exportYouTubeCookies();
@@ -317,7 +346,7 @@ async function startBrowserInstance(targetUrl?: string): Promise<{
 
             // Kick off Google sign-in then auto-export YouTube cookies on success
             (async () => {
-              const signedIn = await signIntoGoogle(cdpPort);
+              const signedIn = !plain && await signIntoGoogle(cdpPort);
               if (signedIn) {
                 console.log('[Auto] Google sign-in succeeded — exporting YouTube cookies...');
                 const cookieResult = await exportYouTubeCookies();
@@ -371,12 +400,34 @@ async function startBrowserInstance(targetUrl?: string): Promise<{
 export async function exportYouTubeCookies(
   domain = '.youtube.com',
 ): Promise<{ success: boolean; message: string; cookiesPath?: string }> {
-  const instance =
+  const current = () =>
     Array.from(browserInstances.values()).find(b => !b.targetUrl) ??
     Array.from(browserInstances.values())[0];
+  let instance = current();
 
   if (!instance) {
     return { success: false, message: 'No browser container is running. Start the browser first.' };
+  }
+
+  // The sign-in browser has no DevTools port: start it again with one. The profile is the
+  // same, so the session the user just signed in to is still there.
+  if (signInBrowser) {
+    signInBrowser = false;
+    await stopBrowser();
+    await sleep(3000);
+    const restarted = await startBrowserInstance();
+    instance = current();
+    if (restarted.error || !instance) {
+      return { success: false, message: `Could not restart the browser to read the session: ${restarted.error || 'it did not start'}` };
+    }
+    let ready = false;
+    for (let i = 0; i < 60 && !ready; i++) {
+      ready = await fetch(`http://127.0.0.1:${instance.cdpPort}/json/version`).then(r => r.ok, () => false);
+      if (!ready) await sleep(1000);
+    }
+    if (!ready) {
+      return { success: false, message: 'The browser restarted but its DevTools port did not come up. Try Export cookies again in a moment.' };
+    }
   }
 
   const { containerName } = instance;
@@ -587,6 +638,7 @@ export async function stopBrowser(sessionId?: string): Promise<{ success: boolea
       await execAsync(`docker rm -f ${general.containerName}-cdp-proxy`).catch(() => { });
       await execAsync(`docker stop ${general.containerName}`);
       browserInstances.delete('general');
+      signInBrowser = false;
       return { success: true, message: 'General browser stopped' };
     }
   } catch (err) {

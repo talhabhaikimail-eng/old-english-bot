@@ -53,6 +53,8 @@ export default function YoutubePanel() {
   // Cookie export state
   const [cookieExporting, setCookieExporting] = useState(false);
   const [cookieResult, setCookieResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [signInStarting, setSignInStarting] = useState(false);
+  const [signIn, setSignIn] = useState<{ url?: string; username?: string; password?: string } | null>(null);
 
   useEffect(() => {
     return () => {
@@ -61,6 +63,21 @@ export default function YoutubePanel() {
       }
     };
   }, []);
+
+  const startSignIn = async () => {
+    setSignInStarting(true);
+    setSignIn(null);
+    setCookieResult(null);
+    try {
+      const result = await api.startYtSignIn();
+      if (result.error) setCookieResult({ success: false, message: result.error });
+      else setSignIn(result);
+    } catch (e) {
+      setCookieResult({ success: false, message: (e as Error).message });
+    } finally {
+      setSignInStarting(false);
+    }
+  };
 
   const exportCookies = async () => {
     setCookieExporting(true);
@@ -157,9 +174,17 @@ export default function YoutubePanel() {
           <div>
             <CardTitle className="flex items-center gap-2"><Cookie className="size-4 text-muted-foreground" />Cookie exporter</CardTitle>
             <CardDescription className="text-xs text-muted-foreground mt-0.5">
-              Export authenticated browser cookies for yt-dlp to download restricted content.
+              Sign in to YouTube in the remote browser, then export the session for the downloader. It is kept in R2 for later runs.
             </CardDescription>
           </div>
+          <Button
+            onClick={startSignIn}
+            disabled={signInStarting || cookieExporting}
+            variant="outline"
+            size="sm"
+          >
+            {signInStarting ? 'Opening browser...' : 'Sign in to YouTube'}
+          </Button>
           <Button
             onClick={exportCookies}
             disabled={cookieExporting}
@@ -169,6 +194,16 @@ export default function YoutubePanel() {
             {cookieExporting ? 'Exporting...' : 'Export cookies'}
           </Button>
         </div>
+        {signIn?.url && (
+          <div className="text-xs px-3 py-2 rounded-md border border-border space-y-1">
+            <div>
+              Open <a className="underline" href={signIn.url} target="_blank" rel="noreferrer">{signIn.url}</a>
+              {signIn.username ? <> (user <code>{signIn.username}</code>, password <code>{signIn.password}</code>)</> : null}
+              , sign in to Google there and wait until YouTube has loaded. Then press Export cookies.
+            </div>
+            <div className="text-muted-foreground">The browser restarts once during the export; that is expected.</div>
+          </div>
+        )}
         {cookieResult && (
           <div className={`text-xs px-3 py-2 rounded-md border ${cookieResult.success ? 'bg-primary/10 text-primary border-primary/30' : 'bg-destructive/10 text-destructive border-destructive/30'}`}>
             {cookieResult.message}

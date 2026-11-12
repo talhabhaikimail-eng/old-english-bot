@@ -8,13 +8,15 @@
  *  /api/ytp/resolve?url=…                            →  /api/resolve   (formats, timing)
  *  /api/ytp/download?url=…&height=720 | &audio=1 | &f=b|bv|ba|ITAG  →  /api/download
  *  /api/ytp/s/<key>?range=a-b                        →  /s/<key>       (byte-range proxy)
- *  POST /api/ytp/login   export the YouTube session of the dashboard's remote browser (sign in
- *                        there first) with `ytp login --cdp`, and save it to R2
+ *  POST /api/ytp/login/start   open the remote browser on Google's sign-in page, without a
+ *                              DevTools port (Google refuses sign-in when there is one)
+ *  POST /api/ytp/login         after signing in there: restart that browser with the port, export
+ *                              its YouTube session with `ytp login --cdp`, and save it to R2
  */
 
 import http from 'http';
 import type { IncomingMessage, ServerResponse } from 'http';
-import { exportYouTubeCookies, getYouTubeCookiesPath } from './browser';
+import { exportYouTubeCookies, getYouTubeCookiesPath, startYouTubeSignIn } from './browser';
 
 const PREFIX = '/api/ytp/';
 const target = () => new URL(process.env.YTP_URL || 'http://127.0.0.1:8084');
@@ -31,6 +33,18 @@ let cookiesWritten = false;
 export function handleYtpRequest(req: IncomingMessage, res: ServerResponse): boolean {
   const url = new URL(req.url || '/', 'http://localhost');
   if (!url.pathname.startsWith(PREFIX)) return false;
+  if (req.method === 'POST' && url.pathname === PREFIX + 'login/start') {
+    startYouTubeSignIn()
+      .then(result => {
+        res.writeHead(result.error ? 500 : 200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(result));
+      })
+      .catch(e => {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: (e as Error).message }));
+      });
+    return true;
+  }
   if (req.method === 'POST' && url.pathname === PREFIX + 'login') {
     exportYouTubeCookies()
       .then(result => {

@@ -500,6 +500,9 @@ export const api = {
   androidStatus: () => post<{ running: boolean; uptime?: string; deviceInfo?: string; webUrl?: string }>('/api/android/status', {}),
   androidStop: () => post<{ success: boolean; message: string }>('/api/android/stop', {}),
 
+  startYtSignIn: () =>
+    post<{ url?: string; username?: string; password?: string; error?: string }>('/api/ytp/login/start', {}),
+
   exportYtCookies: () =>
     post<{ success: boolean; message: string; cookiesPath?: string }>('/api/browser/export-cookies', {}),
 
