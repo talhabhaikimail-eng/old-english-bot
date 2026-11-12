@@ -7,7 +7,8 @@ package main
 //	GET /api/download?url=URL&height=720     best video up to that height merged with the best
 //	                                         audio (needs ffmpeg on PATH); mp4, or webm when the
 //	                                         height only exists as VP9
-//	GET /api/download?url=URL&audio=1        best audio only
+//	GET /api/download?url=URL&audio=1        best audio only, as m4a when there is one (plays
+//	                                         everywhere); ext=webm asks for Opus instead
 //
 // Add cookie_first=1 to use the logged-in tv client first. Errors are JSON: {"error": "..."}.
 
@@ -66,6 +67,22 @@ func registerAPI(mux *http.ServeMux, cookies func() string) {
 		if err != nil {
 			sendJSON(w, 404, jmap{"error": err.Error()})
 			return
+		}
+		if q.Get("audio") == "1" {
+			// Same track (language), in the container that was asked for.
+			want := map[string]bool{"mp4": true, "m4a": true}
+			if q.Get("ext") == "webm" {
+				want = map[string]bool{"webm": true}
+			}
+			var best *Format
+			for i, c := range info.Formats {
+				if c.Kind == "audio" && !c.DRC && want[c.Ext] && sameLang(c.Lang, f.Lang) && (best == nil || c.Bitrate > best.Bitrate) {
+					best = &info.Formats[i]
+				}
+			}
+			if best != nil {
+				f = *best
+			}
 		}
 		sendFormat(w, r, f, name)
 	})
@@ -215,10 +232,13 @@ func sendMerged(w http.ResponseWriter, r *http.Request, info *Info, height int, 
 	if video.Ext == "webm" {
 		ext = "webm"
 	}
-	wantAudio := map[string]string{"mp4": "m4a", "webm": "webm"}[ext]
+	wantAudio := map[string]bool{"m4a": true, "mp4": true}
+	if ext == "webm" {
+		wantAudio = map[string]bool{"webm": true}
+	}
 	var best *Format
 	for i, f := range info.Formats {
-		if f.Kind == "audio" && !f.DRC && f.Ext == wantAudio && sameLang(f.Lang, audio.Lang) && (best == nil || f.Bitrate > best.Bitrate) {
+		if f.Kind == "audio" && !f.DRC && wantAudio[f.Ext] && sameLang(f.Lang, audio.Lang) && (best == nil || f.Bitrate > best.Bitrate) {
 			best = &info.Formats[i]
 		}
 	}

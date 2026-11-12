@@ -220,6 +220,73 @@ function buildYtdlpBaseFlags(): Record<string, unknown> {
   return flags;
 }
 
+/** Which ytp download a quality option stands for. */
+function ytpQuery(quality: YouTubeQualityOption): string {
+  if (quality.audioOnly) return 'audio=1';
+  if (quality.key === 'video-only') return 'f=bv';
+  // "720p", "1080p60" …: that height, merged with the best audio. Anything else: up to 1080p.
+  const height = /^(\d{3,4})p/.exec(quality.key)?.[1] || '1080';
+  return `height=${height}`;
+}
+
+/**
+ * Downloads through the ytp service's /api/download. Throws when the service is not running
+ * or YouTube refused, so the caller can fall back to yt-dlp.
+ */
+function downloadViaYtp(
+  url: string,
+  quality: YouTubeQualityOption,
+  onProgress?: YtProgressCallback,
+): Promise<YouTubeDownloadResult> {
+  const base = process.env.YTP_URL || 'http://127.0.0.1:8084';
+  const target = `${base}/api/download?url=${encodeURIComponent(url)}&${ytpQuery(quality)}`;
+  return new Promise((resolve, reject) => {
+    const req = http.get(target, res => {
+      const chunks: Buffer[] = [];
+      const total = parseInt(String(res.headers['content-length'] || '0'), 10);
+      let got = 0;
+      let lastShown = 0;
+      res.on('data', (c: Buffer) => {
+        chunks.push(c);
+        got += c.length;
+        const pct = total > 0 ? Math.floor((got / total) * 100) : 0;
+        if (res.statusCode === 200 && pct >= lastShown + 5) {
+          lastShown = pct;
+          onProgress?.(`📥 *Downloading ${quality.key}*\n${buildProgressBar(pct, 10)} ${pct}%\n`).catch(() => {});
+        }
+      });
+      res.on('error', reject);
+      res.on('end', () => {
+        const buffer = Buffer.concat(chunks);
+        if (res.statusCode !== 200) {
+          let why = `HTTP ${res.statusCode}`;
+          try { why = JSON.parse(buffer.toString('utf8')).error || why; } catch { /* not JSON */ }
+          return reject(new Error(why));
+        }
+        if (total > 0 && got < total) return reject(new Error('the download stopped before the end'));
+        const disposition = String(res.headers['content-disposition'] || '');
+        const named = /filename\*=UTF-8''([^;]+)/.exec(disposition)?.[1];
+        const full = named ? decodeURIComponent(named) : 'youtube_video.mp4';
+        const dot = full.lastIndexOf('.');
+        const title = dot > 0 ? full.slice(0, dot) : full;
+        // YouTube's m4a audio is announced as mp4; keep the name players expect.
+        const ext = quality.audioOnly && full.slice(dot + 1) === 'mp4' ? 'm4a' : full.slice(dot + 1) || 'mp4';
+        resolve({
+          buffer,
+          mediaType: quality.audioOnly ? 'document' : 'video',
+          mimetype: String(res.headers['content-type'] || (quality.audioOnly ? 'audio/mp4' : 'video/mp4')),
+          caption: `🎬 *${title}*\n_${quality.key}_`,
+          filename: `${title.replace(/[^\w\s-]/g, '').trim() || 'youtube_video'}.${ext}`,
+        });
+      });
+    });
+    // A merged download says nothing until both streams are fetched and joined.
+    req.setTimeout(30 * 60_000, () => req.destroy(new Error('ytp timed out')));
+    req.on('error', reject);
+    onProgress?.(`📥 *Downloading ${quality.label}*`).catch(() => {});
+  });
+}
+
 /**
  * Fetches video metadata and builds a list of quality options from yt-dlp.
  *
@@ -406,6 +473,14 @@ export async function downloadYouTubeVideo(
   onProgress?: YtProgressCallback,
 ): Promise<YouTubeDownloadResult> {
   await onProgress?.(`⚙️ *Starting download: ${quality.label}*`);
+
+  // First choice: the ytp service (src-go/ytp), which uses the signed-in YouTube session and
+  // gets past the "confirm you're not a bot" check that stops yt-dlp on server addresses.
+  try {
+    return await downloadViaYtp(url, quality, onProgress);
+  } catch (err: any) {
+    console.warn(`[youtube-dl] ytp download failed (${err?.message || err}), falling back to yt-dlp.`);
+  }
 
   // Build format string: "videoId+audioId" or just "audioId" for audio-only
   const formatStr = quality.audioOnly
