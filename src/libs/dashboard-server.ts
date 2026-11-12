@@ -54,6 +54,7 @@ import { generateAndPostBlog, generateCommunityBlog } from './blog-generator-ser
 import { handlePortfolioRequest } from './portfolio-api';
 import { handleToolsRequest } from './tools';
 import { handleSiteAuditRequest } from './site-audit-proxy';
+import { handleYtpRequest } from './ytp-proxy';
 import { handleExtractorRequest } from './extractor';
 import {
   listCourses,
@@ -671,6 +672,9 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
 
   // ── SEO Site Auditor (Go service) ────────────────────────────────────────────
   if (handleSiteAuditRequest(req, res)) return;
+
+  // ── YouTube resolver and downloader (Go service) ─────────────────────────────
+  if (handleYtpRequest(req, res)) return;
 
   // ── AI web extractor (NuExtract, installed on demand) ───────────────────────
   if (pathname.startsWith('/api/extract/') && await handleExtractorRequest(req, res)) return;

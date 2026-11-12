@@ -6,6 +6,7 @@ import * as path from 'path';
 
 import { sessionManager } from './session-manager';
 import { signIntoGoogle } from './google-signin';
+import { saveYouTubeSessionToR2 } from './r2-sync';
 
 const execAsync = util.promisify(exec);
 const execFileAsync = util.promisify(execFile);
@@ -381,6 +382,23 @@ export async function exportYouTubeCookies(
   const { containerName } = instance;
   const cookiesPath = path.join(process.cwd(), 'browser_data', 'youtube-cookies.txt');
 
+  // First choice: the ytp CLI's own sign-in export (`ytp login --cdp`), which checks that the
+  // browser really is signed in to YouTube and writes exactly the cookies its resolver uses.
+  const ytp = path.join(process.cwd(), process.platform === 'win32' ? 'ytp.exe' : 'ytp');
+  if (fs.existsSync(ytp)) {
+    try {
+      const { stderr } = await execFileAsync(ytp, ['login', '--cdp', `127.0.0.1:${instance.cdpPort}`, '-c', cookiesPath], { timeout: 30_000 });
+      const saved = await saveYouTubeSessionToR2(cookiesPath);
+      return { success: true, message: `${(stderr || '').trim() || 'YouTube session exported.'} ${saved.message}`, cookiesPath };
+    } catch (e: any) {
+      const why = String(e?.stderr || e?.message || e).trim();
+      if (why.includes('not signed in')) {
+        return { success: false, message: 'The browser is not signed in to YouTube. Sign in to Google there, open youtube.com once, then export again.' };
+      }
+      console.warn(`[Cookies] ytp login --cdp failed (${why}), trying the in-container export.`);
+    }
+  }
+
   // Inline Python script executed inside the container.
   // Connects to Chrome CDP on 127.0.0.1:9222 (loopback — always reachable from inside).
   // Uses only stdlib: socket for raw WebSocket frames, urllib for the HTTP JSON endpoint.
@@ -499,9 +517,10 @@ export async function exportYouTubeCookies(
     }
 
     const cookieCount = parseInt(stdout.trim(), 10) || 0;
+    const saved = await saveYouTubeSessionToR2(cookiesPath);
     return {
       success: true,
-      message: `Exported ${cookieCount} YouTube cookies to ${cookiesPath}`,
+      message: `Exported ${cookieCount} YouTube cookies to ${cookiesPath}. ${saved.message}`,
       cookiesPath,
     };
   } catch (err) {
@@ -517,7 +536,9 @@ export function getYouTubeCookiesPath(): string | undefined {
   const dir = path.join(process.cwd(), 'browser_data');
   const p = path.join(dir, 'youtube-cookies.txt');
 
-  if (process.env.YOUTUBE_COOKIES) {
+  // A session file already there (exported from the browser sign-in, or restored from R2 at
+  // startup) is newer than the YOUTUBE_COOKIES secret: the secret only fills in when there is none.
+  if (process.env.YOUTUBE_COOKIES && !fs.existsSync(p)) {
     try {
       if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });

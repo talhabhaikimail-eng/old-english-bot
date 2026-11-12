@@ -73,6 +73,38 @@ export async function saveStateToR2(): Promise<{ success: boolean; message: stri
   }
 }
 
+/** Where the YouTube session (cookies file) is kept in the bucket. */
+export const YOUTUBE_SESSION_KEY = 'ytp/youtube-cookies.txt';
+
+/**
+ * Saves the YouTube session (browser_data/youtube-cookies.txt) to R2, so the next run starts
+ * signed in. The bridge workflow restores it before the downloader service starts.
+ */
+export async function saveYouTubeSessionToR2(cookiesPath: string): Promise<{ success: boolean; message: string }> {
+  const { R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME, R2_ACCOUNT_ID } = process.env;
+  if (!R2_ACCESS_KEY_ID || !R2_SECRET_ACCESS_KEY || !R2_BUCKET_NAME || !R2_ACCOUNT_ID) {
+    return { success: false, message: 'R2 is not configured, the session was kept on this machine only.' };
+  }
+  try {
+    const s3Client = new S3Client({
+      region: 'auto',
+      endpoint: `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+      credentials: { accessKeyId: R2_ACCESS_KEY_ID, secretAccessKey: R2_SECRET_ACCESS_KEY },
+    });
+    await s3Client.send(new PutObjectCommand({
+      Bucket: R2_BUCKET_NAME,
+      Key: YOUTUBE_SESSION_KEY,
+      Body: readFileSync(cookiesPath),
+      ContentType: 'text/plain',
+    }));
+    console.log('[R2-Sync] YouTube session saved to R2.');
+    return { success: true, message: 'Session saved to Cloudflare R2.' };
+  } catch (err: any) {
+    console.error('[R2-Sync] Failed to save the YouTube session to R2:', err?.message || err);
+    return { success: false, message: `Could not save the session to R2: ${err?.message || err}` };
+  }
+}
+
 export async function saveLiveUrlToR2(url: string): Promise<boolean> {
   const {
     R2_ACCESS_KEY_ID,

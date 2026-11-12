@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ytp test player</title>
+<style>
+  :root { --bg:#0f1115; --panel:#171a21; --line:#262b36; --fg:#e6e8ee; --dim:#8b93a7; --acc:#4f8cff; --ok:#3ecf8e; --bad:#ff5d5d; --warn:#f5b84b; }
+  * { box-sizing:border-box }
+  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif }
+  main { max-width:980px; margin:0 auto; padding:16px }
+  h1 { font-size:16px; margin:0 0 12px; font-weight:600 } h1 span { color:var(--dim); font-weight:400 }
+  form { display:flex; gap:8px; flex-wrap:wrap }
+  input[type=text] { flex:1 1 320px; min-width:0; padding:10px 12px; border-radius:8px; border:1px solid var(--line); background:var(--panel); color:var(--fg); font-size:14px }
+  button { padding:10px 16px; border:0; border-radius:8px; background:var(--acc); color:#fff; font-weight:600; cursor:pointer }
+  button:disabled { opacity:.5; cursor:default }
+  .opts { display:flex; gap:14px; flex-wrap:wrap; margin:10px 0 14px; color:var(--dim); font-size:13px; align-items:center }
+  select { background:var(--panel); color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:4px 6px }
+  video { width:100%; aspect-ratio:16/9; background:#000; border-radius:10px; display:block }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:12px }
+  @media (max-width:720px) { .grid { grid-template-columns:1fr } }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px }
+  .card h2 { font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--dim); margin:0 0 8px; font-weight:600 }
+  .bar { display:flex; height:10px; border-radius:5px; overflow:hidden; background:var(--line); margin:6px 0 10px }
+  .bar i { display:block; height:100% }
+  table { width:100%; border-collapse:collapse; font-size:13px; font-variant-numeric:tabular-nums }
+  td, th { padding:4px 6px; text-align:left; border-bottom:1px solid var(--line) } th { color:var(--dim); font-weight:500 }
+  td.n { text-align:right }
+  .big { font-size:28px; font-weight:700; font-variant-numeric:tabular-nums } .big small { font-size:13px; color:var(--dim); font-weight:400 }
+  .ok { color:var(--ok) } .bad { color:var(--bad) } .warn { color:var(--warn) } .dim { color:var(--dim) }
+  .legend { display:flex; gap:10px; flex-wrap:wrap; font-size:12px; color:var(--dim) } .legend b { display:inline-block; width:9px; height:9px; border-radius:2px; margin-right:4px; vertical-align:0 }
+  #log { font:12px/1.4 ui-monospace,Consolas,monospace; color:var(--dim); max-height:160px; overflow:auto; white-space:pre-wrap }
+</style>
+</head>
+<body>
+<main>
+  <h1>ytp test player <span>· native &lt;video&gt; + MediaSource, cookies from server</span></h1>
+  <form id="f">
+    <input id="url" type="text" placeholder="Paste a YouTube link or video id" autocomplete="off" autofocus>
+    <button id="go">Play</button>
+  </form>
+  <div class="opts">
+    <label>Max quality <select id="maxh"><option>360</option><option>480</option><option selected>720</option><option>1080</option><option>1440</option><option>2160</option></select></label>
+    <label>Video codec <select id="codec"><option value="avc1" selected>H.264 (hw everywhere)</option><option value="vp09">VP9</option><option value="av01">AV1</option></select></label>
+    <label><input type="checkbox" id="ck"> cookie client first</label>
+    <span id="session">cookies: not checked yet (tick "cookie client first" to test)</span>
+  </div>
+
+  <video id="v" controls playsinline></video>
+
+  <div class="grid">
+    <div class="card">
+      <h2>Time to first frame</h2>
+      <div class="big" id="ttff">–</div>
+      <div class="bar" id="bar"></div>
+      <div class="legend"><span><b style="background:#4f8cff"></b>resolve</span><span><b style="background:#b07cff"></b>first bytes</span><span><b style="background:#3ecf8e"></b>decode → frame</span></div>
+      <table id="steps" style="margin-top:8px"></table>
+    </div>
+    <div class="card">
+      <h2>Now playing</h2>
+      <div id="meta" class="dim">Nothing yet.</div>
+      <h2 style="margin-top:12px">Log</h2>
+      <div id="log"></div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:12px">
+    <h2>History</h2>
+    <table><thead><tr><th>video</th><th>client</th><th>format</th><th class="n">resolve</th><th class="n">first frame</th></tr></thead><tbody id="hist"></tbody></table>
+  </div>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const v = $('v');
+let session = 0;
+const log = m => { $('log').textContent += m + '\n'; $('log').scrollTop = 1e9; };
+const ms = x => x == null ? '–' : (x >= 1000 ? (x / 1000).toFixed(2) + ' s' : Math.round(x) + ' ms');
+
+function pickFormats(fmts, maxh, codec) {
+  const ok = f => window.MediaSource && MediaSource.isTypeSupported(`${f.kind}/${f.ext}; codecs="${f.codecs}"`);
+  const vids = fmts.filter(f => f.kind === 'video' && f.height <= maxh && ok(f));
+  const score = f => [f.codecs.startsWith(codec) ? 1 : 0, f.height, f.bitrate];
+  vids.sort((a, b) => { const x = score(a), y = score(b); for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return y[i] - x[i]; return 0; });
+  const vid = vids[0];
+  const auds = fmts.filter(f => f.kind === 'audio' && !f.drc && ok(f));
+  // match container when possible (mp4+mp4 / webm+webm), else highest bitrate
+  auds.sort((a, b) => ((b.ext === vid?.ext) - (a.ext === vid?.ext)) || (b.bitrate - a.bitrate));
+  return [vid, auds[0]];
+}
+
+// Feed one stream into a SourceBuffer with sequential byte ranges.
+async function feed(ms_, f, my, marks, label) {
+  const sb = ms_.addSourceBuffer(`${f.kind}/${f.ext}; codecs="${f.codecs}"`);
+  const wait = () => new Promise(r => sb.addEventListener('updateend', r, { once: true }));
+  // small first chunk = fast start (audio needs far fewer bytes than video for the same seconds)
+  let pos = 0, chunk = f.kind === 'audio' ? 64 * 1024 : 256 * 1024;
+  while (pos < f.size && my === session) {
+    // keep ~45s buffered ahead, no more
+    const b = sb.buffered; const ahead = b.length ? b.end(b.length - 1) - v.currentTime : 0;
+    if (ahead > 45) { await new Promise(r => setTimeout(r, 500)); continue; }
+    const end = Math.min(pos + chunk, f.size) - 1;
+    const t = performance.now();
+    const r = await fetch(`${f.src}?range=${pos}-${end}`);
+    if (!r.ok) throw new Error(`${label}: HTTP ${r.status} ${await r.text()}`);
+    const buf = await r.arrayBuffer();
+    if (!marks[label + '_bytes']) { marks[label + '_bytes'] = performance.now(); log(`${label}: first ${buf.byteLength >> 10} KiB in ${ms(performance.now() - t)} via ${r.headers.get('X-Upstream')}`); }
+    if (my !== session) return;
+    try { sb.appendBuffer(buf); await wait(); }
+    catch (e) {
+      if (e.name === 'QuotaExceededError' && v.currentTime > 30) { sb.remove(0, v.currentTime - 20); await wait(); sb.appendBuffer(buf); await wait(); }
+      else throw new Error(`${label}: append failed ${e}`);
+    }
+    pos += buf.byteLength; chunk = 2 * 1024 * 1024;
+  }
+  return sb;
+}
+
+function render(marks, timing) {
+  const t0 = marks.click;
+  const res = marks.resolved - t0, bytes = Math.max(marks.video_bytes || 0, marks.audio_bytes || 0) - marks.resolved, dec = marks.frame - Math.max(marks.video_bytes || 0, marks.audio_bytes || 0);
+  const tot = marks.frame - t0;
+  $('ttff').innerHTML = `${ms(tot)} <small>click → first frame</small>`;
+  $('ttff').className = 'big ' + (tot < 2000 ? 'ok' : tot < 4000 ? 'warn' : 'bad');
+  $('bar').innerHTML = [[res, '#4f8cff'], [bytes, '#b07cff'], [dec, '#3ecf8e']].map(([x, c]) => `<i style="width:${100 * x / tot}%;background:${c}"></i>`).join('');
+  const rows = [['resolve (browser→server→YouTube)', res], ...Object.entries(timing || {}).filter(([, x]) => typeof x === 'number').map(([k, x]) => ['&nbsp;&nbsp;↳ ' + k.replace('_', ' '), x * 1000]),
+                ['first media bytes', bytes], ['decode → first frame', dec]];
+  $('steps').innerHTML = rows.map(([k, x]) => `<tr><td>${k}</td><td class="n">${ms(x)}</td></tr>`).join('');
+}
+
+$('f').onsubmit = async e => {
+  e.preventDefault();
+  const url = $('url').value.trim(); if (!url) return;
+  const my = ++session, marks = { click: performance.now() };
+  $('log').textContent = ''; $('ttff').textContent = '…'; $('bar').innerHTML = ''; $('steps').innerHTML = '';
+  v.pause(); v.removeAttribute('src'); v.load();
+  try {
+    const r = await fetch(`/api/resolve?url=${encodeURIComponent(url)}&cookie_first=${$('ck').checked ? 1 : 0}`);
+    const info = await r.json(); marks.resolved = performance.now();
+    log(`resolved in ${ms(marks.resolved - marks.click)} · ${(info.tried || []).join(' | ')}`);
+    const li = info.timing && info.timing.logged_in;
+    if (li !== undefined) $('session').innerHTML = li ? '<span class="ok">cookies: logged in</span>' : '<span class="bad">cookies: NOT logged in — re-export cookies.txt</span>';
+    if (info.error) { $('ttff').innerHTML = `<span class="bad">${info.error}</span>`; return; }
+    const [vf, af] = pickFormats(info.formats, +$('maxh').value, $('codec').value);
+    if (!vf || !af) { log('no MSE-compatible video/audio pair'); return; }
+    info.title = info.title || info.id; info.author = info.author || '';
+    $('meta').innerHTML = `<b>${info.title}</b><br><span class="dim">${info.author} · ${info.duration}s · via <b>${info.client}</b></span><br>
+      video itag ${vf.itag} ${vf.res} ${vf.codecs} · audio itag ${af.itag} ${af.codecs}`;
+
+    const msrc = new MediaSource();
+    v.src = URL.createObjectURL(msrc);
+    await new Promise(r => msrc.addEventListener('sourceopen', r, { once: true }));
+    msrc.duration = info.duration || 0;
+    const firstFrame = new Promise(res => {
+      if (v.requestVideoFrameCallback) v.requestVideoFrameCallback(() => res());
+      v.addEventListener('playing', () => res(), { once: true });  // rVFC doesn't fire in hidden tabs
+    });
+    v.play().catch(() => { v.muted = true; v.play(); log('autoplay blocked → muted'); });
+    const feeds = Promise.all([feed(msrc, vf, my, marks, 'video'), feed(msrc, af, my, marks, 'audio')]);
+    await Promise.race([firstFrame, feeds.then(() => { throw new Error('stream ended before first frame'); })]);
+    if (my !== session) return;
+    marks.frame = performance.now();
+    render(marks, info.timing);
+    $('hist').insertAdjacentHTML('afterbegin', `<tr><td>${info.title?.slice(0, 40)}</td><td>${info.client}</td><td>${vf.res} ${vf.codecs.split('.')[0]}</td>
+      <td class="n">${ms(marks.resolved - marks.click)}</td><td class="n"><b>${ms(marks.frame - marks.click)}</b></td></tr>`);
+    await feeds; if (my === session && msrc.readyState === 'open') msrc.endOfStream();
+  } catch (err) { if (my === session) { log('error: ' + (err.message || err)); $('ttff').innerHTML = '<span class="bad">failed</span>'; } }
+};
+</script>
+</body>
+</html>

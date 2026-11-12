@@ -73,3 +73,4 @@ src/scripts/tools-tests/fixtures/docs-gen/
 data/site-audits/
 src-go/site-auditor/data/
 /site-auditor
+/ytp
