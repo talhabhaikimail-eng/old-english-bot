@@ -112,7 +112,7 @@ export async function startCustomBrowser(targetUrl: string): Promise<{
 /**
  * Internal function to start a browser instance
  */
-async function startBrowserInstance(targetUrl?: string, plain = false): Promise<{
+async function startBrowserInstance(targetUrl?: string, plain = false, noAutoSignIn = false): Promise<{
   url?: string;
   username?: string;
   password?: string;
@@ -229,7 +229,7 @@ async function startBrowserInstance(targetUrl?: string, plain = false): Promise<
       }
 
       (async () => {
-        const signedIn = !plain && await signIntoGoogle(cdpPort);
+        const signedIn = !plain && !noAutoSignIn && await signIntoGoogle(cdpPort);
         if (signedIn) {
           const cookieResult = await exportYouTubeCookies();
           console.log(`[Auto] Cookie export: ${cookieResult.message}`);
@@ -290,7 +290,7 @@ async function startBrowserInstance(targetUrl?: string, plain = false): Promise<
 
           // Kick off Google sign-in then auto-export YouTube cookies on success
           (async () => {
-            const signedIn = !plain && await signIntoGoogle(cdpPort);
+            const signedIn = !plain && !noAutoSignIn && await signIntoGoogle(cdpPort);
             if (signedIn) {
               console.log('[Auto] Google sign-in succeeded — exporting YouTube cookies...');
               const cookieResult = await exportYouTubeCookies();
@@ -346,7 +346,7 @@ async function startBrowserInstance(targetUrl?: string, plain = false): Promise<
 
             // Kick off Google sign-in then auto-export YouTube cookies on success
             (async () => {
-              const signedIn = !plain && await signIntoGoogle(cdpPort);
+              const signedIn = !plain && !noAutoSignIn && await signIntoGoogle(cdpPort);
               if (signedIn) {
                 console.log('[Auto] Google sign-in succeeded — exporting YouTube cookies...');
                 const cookieResult = await exportYouTubeCookies();
@@ -399,6 +399,12 @@ async function startBrowserInstance(targetUrl?: string, plain = false): Promise<
  */
 export async function exportYouTubeCookies(
   domain = '.youtube.com',
+  /**
+   * Afterwards remove the Google and YouTube cookies from the browser (no sign-out request).
+   * A browser that stays signed in keeps rotating the session, and Google then stops accepting
+   * the exported copy: the reason a saved session used to die within hours.
+   */
+  detach = false,
 ): Promise<{ success: boolean; message: string; cookiesPath?: string }> {
   const current = () =>
     Array.from(browserInstances.values()).find(b => !b.targetUrl) ??
@@ -415,7 +421,7 @@ export async function exportYouTubeCookies(
     signInBrowser = false;
     await stopBrowser();
     await sleep(3000);
-    const restarted = await startBrowserInstance();
+    const restarted = await startBrowserInstance(undefined, false, true);
     instance = current();
     if (restarted.error || !instance) {
       return { success: false, message: `Could not restart the browser to read the session: ${restarted.error || 'it did not start'}` };
@@ -438,9 +444,13 @@ export async function exportYouTubeCookies(
   const ytp = path.join(process.cwd(), process.platform === 'win32' ? 'ytp.exe' : 'ytp');
   if (fs.existsSync(ytp)) {
     try {
-      const { stderr } = await execFileAsync(ytp, ['login', '--cdp', `127.0.0.1:${instance.cdpPort}`, '-c', cookiesPath], { timeout: 30_000 });
+      const args = ['login', '--cdp', `127.0.0.1:${instance.cdpPort}`, '-c', cookiesPath];
+      if (detach) args.push('--detach');
+      const { stderr } = await execFileAsync(ytp, args, { timeout: 30_000 });
       const saved = await saveYouTubeSessionToR2(cookiesPath);
-      return { success: true, message: `${(stderr || '').trim() || 'YouTube session exported.'} ${saved.message}`, cookiesPath };
+      const said = (stderr || '').trim().split('\n')[0] || 'YouTube session exported.';
+      const note = detach ? ' The remote browser was signed out locally so it cannot rotate the session away; that is expected.' : '';
+      return { success: true, message: `${said}. ${saved.message}${note}`, cookiesPath };
     } catch (e: any) {
       const why = String(e?.stderr || e?.message || e).trim();
       if (why.includes('not signed in')) {

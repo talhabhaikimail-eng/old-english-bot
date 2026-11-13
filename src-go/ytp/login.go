@@ -163,7 +163,12 @@ func exportCookies(exe, profile, out string) error {
 
 // exportRunning writes the YouTube cookies of a browser that is already running with a DevTools port
 // (addr is HOST:PORT), for servers where the sign-in happens in a remote browser. The browser is left open.
-func exportRunning(addr, out string) error {
+//
+// A browser that stays signed in keeps rotating the session's cookies, and Google then stops accepting
+// the exported copies (the reason the desktop flow closes its window). With detach the browser's own
+// Google and YouTube cookies are removed after the export - locally, with no sign-out request, so the
+// session itself stays valid and only the exported file holds it.
+func exportRunning(addr, out string, detach bool) error {
 	b, err := fetch("GET", "http://"+addr+"/json/version", nil, nil, 10*time.Second)
 	if err != nil {
 		return fmt.Errorf("devtools at %s: %w", addr, err)
@@ -196,6 +201,50 @@ func exportRunning(addr, out string) error {
 		return err
 	}
 	fmt.Fprintf(os.Stderr, "wrote %d youtube cookies to %s\n", n, out)
+	if detach {
+		if err := forgetGoogle(ws); err != nil {
+			return fmt.Errorf("the session was exported, but the browser still holds it (%w): close that browser", err)
+		}
+		fmt.Fprintln(os.Stderr, "the browser no longer holds the session")
+	}
+	return nil
+}
+
+// forgetGoogle drops the browser's Google and YouTube cookies and keeps every other site's.
+func forgetGoogle(ws *wsConn) error {
+	res, err := ws.call("Storage.getCookies", nil)
+	if err != nil {
+		return err
+	}
+	var all struct{ Cookies []map[string]any }
+	if err := json.Unmarshal(res, &all); err != nil {
+		return err
+	}
+	var keep []map[string]any
+	for _, c := range all.Cookies {
+		d, _ := c["domain"].(string)
+		if strings.Contains(d, "google") || strings.Contains(d, "youtube") {
+			continue
+		}
+		k := map[string]any{}
+		for _, f := range []string{"name", "value", "domain", "path", "secure", "httpOnly", "sameSite"} {
+			if v, ok := c[f]; ok {
+				k[f] = v
+			}
+		}
+		if e, _ := c["expires"].(float64); e > 0 {
+			k["expires"] = e
+		}
+		keep = append(keep, k)
+	}
+	if _, err := ws.call("Storage.clearCookies", nil); err != nil {
+		return err
+	}
+	if len(keep) > 0 {
+		if _, err := ws.call("Storage.setCookies", map[string]any{"cookies": keep}); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

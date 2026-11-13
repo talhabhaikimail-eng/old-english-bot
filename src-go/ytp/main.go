@@ -38,13 +38,15 @@ const usage = `ytp - fast YouTube stream URL resolver
 
 usage: ytp URL [-f b|bv|ba|ITAG] [-g] [-o FILE] [-j] [-C] [--client ios|tv|android_vr] [-c COOKIES] [-v]
        ytp serve [-p PORT] [-c COOKIES] [-v]
-       ytp login [--refresh] [--cdp HOST:PORT] [-c COOKIES]
+       ytp login [--refresh] [--cdp HOST:PORT [--detach]] [-c COOKIES]
 
   login            open Chrome/Edge (own profile), sign in to Google there, the YouTube cookies are
                    written to COOKIES. Later runs re-export the stored session without a window.
                    --refresh: never open a window (fail if the session has expired).
                    --cdp HOST:PORT: export from a browser that is already running with a DevTools
                    port (a remote browser on a server) instead of starting one.
+                   --detach: afterwards remove the Google and YouTube cookies from that browser
+                   (without signing out), so it cannot rotate the exported session away.
 
   -f, --format     b (best muxed, default) | bv | ba | <itag>
   -g, --get-url    print the selected stream URL only
@@ -78,7 +80,7 @@ func main() {
 	alias := map[string]string{"-f": "format", "--format": "format", "-o": "output", "--output": "output",
 		"-c": "cookies", "--cookies": "cookies", "--client": "client", "-p": "port", "--port": "port", "--cdp": "cdp"}
 	balias := map[string]string{"-g": "get-url", "--get-url": "get-url", "-j": "json", "--json": "json",
-		"-C": "cookie-first", "--cookie-first": "cookie-first", "-v": "verbose", "--verbose": "verbose", "--refresh": "refresh"}
+		"-C": "cookie-first", "--cookie-first": "cookie-first", "-v": "verbose", "--verbose": "verbose", "--refresh": "refresh", "--detach": "detach"}
 	args := os.Args[1:]
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -118,7 +120,7 @@ func main() {
 
 	if pos[0] == "login" {
 		if addr := opt["cdp"]; addr != "" {
-			if err := exportRunning(addr, cookiePath); err != nil {
+			if err := exportRunning(addr, cookiePath, bools["detach"]); err != nil {
 				die("login: %v", err)
 			}
 			return

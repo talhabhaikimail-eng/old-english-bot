@@ -1608,7 +1608,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
   // ── POST /api/browser/export-cookies ──────────────────────────────────
   if (method === 'POST' && url === '/api/browser/export-cookies') {
     try {
-      const result = await exportYouTubeCookies();
+      const result = await exportYouTubeCookies('.youtube.com', true);
       json(res, result, result.success ? 200 : 500);
     } catch (e) { err(res, (e as Error).message); }
     return;

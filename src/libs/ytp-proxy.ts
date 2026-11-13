@@ -46,7 +46,7 @@ export function handleYtpRequest(req: IncomingMessage, res: ServerResponse): boo
     return true;
   }
   if (req.method === 'POST' && url.pathname === PREFIX + 'login') {
-    exportYouTubeCookies()
+    exportYouTubeCookies('.youtube.com', true)
       .then(result => {
         res.writeHead(result.success ? 200 : 409, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ success: result.success, message: result.message }));
