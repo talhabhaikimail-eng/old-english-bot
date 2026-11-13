@@ -154,6 +154,7 @@ func newMux(cookies func() string) *http.ServeMux {
 		proxy(w, r, s)
 	})
 	registerAPI(mux, cookies)
+	registerPlaylist(mux, cookies)
 	return mux
 }
 

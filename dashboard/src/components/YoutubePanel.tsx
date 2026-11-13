@@ -1,12 +1,13 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { api, YtSearchResult, YtQuality, YtJob, YtStorage, YtpInfo, YtpApiKey } from '../api';
+import { marked } from 'marked';
+import { api, YtSearchResult, YtQuality, YtJob, YtStorage, YtpInfo, YtpApiKey, YtpPlaylist } from '../api';
 import { Button } from '@/components/ui/button';
 import { Card, CardTitle, CardDescription } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import {
-  ArrowLeft, Check, Copy, Download, ExternalLink, Eye, EyeOff, KeyRound, Loader2, Music,
+  ArrowLeft, BookOpen, Check, Copy, Download, ExternalLink, Eye, EyeOff, KeyRound, ListVideo, Loader2, Music,
   Radio, Search, ShieldCheck, ShieldAlert, Trash2, Video,
 } from 'lucide-react';
 
@@ -53,6 +54,7 @@ function codecName(codec: string) {
   return codec;
 }
 
+const YT_LIST = /[?&]list=([\w-]+)/;
 const YT_URL = /(?:youtube\.com\/(?:watch\?.*v=|shorts\/|live\/|embed\/)|youtu\.be\/)([\w-]{11})/;
 
 function videoQuality(height: number, label: string, size: number): YtQuality {
@@ -99,7 +101,7 @@ function JobRow({ job, compact = false }: { job: YtJob; compact?: boolean }) {
           <Badge variant={job.status === 'failed' ? 'destructive' : job.status === 'completed' ? 'default' : 'secondary'}>{job.status}</Badge>
         </div>
         <p className="text-xs text-muted-foreground truncate">
-          {compact ? '' : `${job.label || job.qualityKey} · `}{job.sizeBytes ? `${fmtSize(job.sizeBytes)} · ` : ''}{job.message}
+          {compact ? '' : `${job.label || job.qualityKey} · `}{!compact && job.playlistTitle ? `${job.playlistTitle} · ` : ''}{job.sizeBytes ? `${fmtSize(job.sizeBytes)} · ` : ''}{job.message}
         </p>
         {running && (
           <div className="w-full bg-secondary h-1.5 rounded-full overflow-hidden">
@@ -130,6 +132,14 @@ export default function YoutubePanel() {
   const [hint, setHint] = useState<YtSearchResult | null>(null);
   const [info, setInfo] = useState<YtpInfo | null>(null);
   const [loadingInfo, setLoadingInfo] = useState(false);
+  // The playlist being looked at.
+  const [playlist, setPlaylist] = useState<YtpPlaylist | null>(null);
+  const [playlistUrl, setPlaylistUrl] = useState<string | null>(null);
+  const [loadingList, setLoadingList] = useState(false);
+  const [listChoice, setListChoice] = useState('1080');
+  const [listStarting, setListStarting] = useState(false);
+  const [listNote, setListNote] = useState<string | null>(null);
+  const [docs, setDocs] = useState<string | null>(null);
   const [liveMinutes, setLiveMinutes] = useState(10);
   const [liveHeight, setLiveHeight] = useState(720);
 
@@ -180,6 +190,7 @@ export default function YoutubePanel() {
     checkHealth();
     refreshJobs();
     api.ytpKeys().then(r => setKeys(r.keys)).catch(e => setKeyError((e as Error).message));
+    api.ytpDocs().then(async md => setDocs(await marked.parse(md, { gfm: true }))).catch(() => setDocs(null));
   }, [checkHealth, refreshJobs]);
 
   const busy = jobs.some(j => j.status === 'pending' || j.status === 'downloading');
@@ -205,11 +216,40 @@ export default function YoutubePanel() {
     }
   };
 
+  const openPlaylist = async (url: string) => {
+    setPlaylistUrl(url); setPlaylist(null); setWatchUrl(null); setInfo(null); setError(null); setListNote(null);
+    setLoadingList(true); setTab('browse');
+    try { setPlaylist(await api.ytpPlaylist(url)); }
+    catch (e) { setError((e as Error).message); }
+    finally { setLoadingList(false); }
+  };
+
+  const downloadPlaylist = async () => {
+    if (!playlistUrl || !playlist) return;
+    setListStarting(true); setError(null); setListNote(null);
+    try {
+      const what: Record<string, string | number> =
+        listChoice === 'm4a' ? { audio: 1 } : listChoice === 'opus' ? { audio: 1, ext: 'webm' } : { height: Number(listChoice) };
+      const { playlist: started } = await api.ytpStartPlaylist(playlistUrl, what);
+      setListNote(started.queued < started.count
+        ? `Queued ${started.queued} of ${started.count} videos; the rest did not fit on the disk.`
+        : `Queued all ${started.queued} videos. Two download at a time.`);
+      await refreshJobs();
+      setTab('downloads');
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setListStarting(false);
+    }
+  };
+
   const submit = async () => {
     const text = query.trim();
     if (!text) return;
-    if (YT_URL.test(text)) { open(text); return; }
-    setSearching(true); setError(null); setWatchUrl(null); setInfo(null); setTab('browse');
+    // A playlist link; a video that sits in a playlist opens as the video.
+    if (YT_LIST.test(text) && (!YT_URL.test(text) || /\/playlist\?/.test(text))) { openPlaylist(text); return; }
+    if (YT_URL.test(text)) { setPlaylistUrl(YT_LIST.test(text) ? text : null); setPlaylist(null); open(text); return; }
+    setSearching(true); setError(null); setWatchUrl(null); setInfo(null); setPlaylist(null); setPlaylistUrl(null); setTab('browse');
     try { setResults((await api.ytSearchMany(text, 24)).results); }
     catch (e) { setError((e as Error).message); }
     finally { setSearching(false); }
@@ -340,14 +380,67 @@ export default function YoutubePanel() {
 
         {/* ------------------------------------------------ Browse */}
         <TabsContent value="browse" className="space-y-4 mt-3">
-          {!watchUrl && results.length === 0 && !searching && (
+          {!watchUrl && !playlistUrl && results.length === 0 && !searching && (
             <Card className="border border-dashed border-border bg-card p-8 text-center text-muted-foreground">
-              Search for something, or paste a link, to watch it here and download it in any quality up to 4K, as music, or record a live stream.
+              Search for something, or paste a video or playlist link, to watch it here and download it in any quality up to 4K, as music, a whole playlist at once, or record a live stream.
             </Card>
           )}
 
+          {/* Playlist */}
+          {!watchUrl && playlistUrl && (
+            <div className="space-y-3">
+              <Button onClick={() => { setPlaylistUrl(null); setPlaylist(null); setError(null); }} variant="ghost" size="sm">
+                <ArrowLeft /> {results.length ? 'Back to results' : 'Close'}
+              </Button>
+              {loadingList && <p className="text-xs text-muted-foreground flex items-center gap-2"><Loader2 className="size-3.5 animate-spin" /> Reading the playlist…</p>}
+              {playlist && (
+                <>
+                  <Card className="border border-border bg-card p-4 space-y-3">
+                    <div className="flex items-start gap-3">
+                      <ListVideo className="size-5 text-muted-foreground mt-0.5" />
+                      <div className="flex-1 min-w-0">
+                        <h2 className="text-base font-semibold text-foreground leading-snug">{playlist.title || 'Playlist'}</h2>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          {playlist.count} videos · {fmtDuration(playlist.videos.reduce((n, v) => n + v.duration, 0))} in total
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {[['2160', '4K'], ['1440', '1440p'], ['1080', '1080p'], ['720', '720p'], ['480', '480p'], ['360', '360p'], ['m4a', 'Music · M4A'], ['opus', 'Music · Opus']].map(([value, label]) => (
+                        <Button key={value} size="sm" variant="outline" onClick={() => setListChoice(value)}
+                          className={listChoice === value ? 'bg-primary/10 text-primary border-primary/40' : 'text-muted-foreground'}>
+                          {label}
+                        </Button>
+                      ))}
+                    </div>
+                    <Button onClick={downloadPlaylist} disabled={listStarting} className="w-full sm:w-auto">
+                      {listStarting ? <><Loader2 className="animate-spin" /> Queuing…</> : <><Download /> Download all {playlist.count}</>}
+                    </Button>
+                    <p className="text-[11px] text-muted-foreground">
+                      Each video becomes its own download, two at a time. A video without the chosen height gets the best one below it. Files are kept for three hours and the oldest are removed when the disk share is full, so save them as they finish.
+                    </p>
+                    {listNote && <p className="text-xs text-primary">{listNote}</p>}
+                  </Card>
+                  <div className="border border-border rounded-lg divide-y divide-border overflow-hidden bg-card">
+                    {playlist.videos.map((v, i) => (
+                      <button key={v.id} type="button" onClick={() => open(v.url)} className="w-full flex items-center gap-3 px-3 py-2 text-left hover:bg-secondary/50">
+                        <span className="w-7 text-xs text-muted-foreground tabular-nums text-right">{i + 1}</span>
+                        <img src={v.thumbnail} alt="" loading="lazy" className="w-24 aspect-video object-cover rounded border border-border bg-secondary flex-shrink-0" />
+                        <span className="flex-1 min-w-0">
+                          <span className="block text-sm text-foreground truncate">{v.title}</span>
+                          <span className="block text-xs text-muted-foreground truncate">{v.author}</span>
+                        </span>
+                        <span className="text-xs text-muted-foreground tabular-nums">{fmtDuration(v.duration)}</span>
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
           {/* Results grid */}
-          {!watchUrl && results.length > 0 && (
+          {!watchUrl && !playlistUrl && results.length > 0 && (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
               {results.map(v => (
                 <button key={v.videoId} type="button" onClick={() => open(v.url, v)} className="text-left group">
@@ -367,8 +460,13 @@ export default function YoutubePanel() {
           {watchUrl && (
             <div className="space-y-3">
               <Button onClick={() => { setWatchUrl(null); setInfo(null); setError(null); }} variant="ghost" size="sm">
-                <ArrowLeft /> {results.length ? 'Back to results' : 'Close'}
+                <ArrowLeft /> {playlist ? 'Back to the playlist' : results.length ? 'Back to results' : 'Close'}
               </Button>
+              {playlistUrl && !playlist && (
+                <Button onClick={() => openPlaylist(playlistUrl)} variant="outline" size="sm" className="ml-2">
+                  <ListVideo /> This video is in a playlist: open it
+                </Button>
+              )}
               <div className="grid grid-cols-1 xl:grid-cols-5 gap-4">
                 {/* Player */}
                 <div className="xl:col-span-3 space-y-3">
@@ -559,29 +657,33 @@ export default function YoutubePanel() {
           </Card>
 
           <Card className="border border-border bg-card p-4 space-y-3">
-            <CardTitle>How to call it</CardTitle>
-            <CardDescription className="text-xs text-muted-foreground">
-              Send the key as <code>Authorization: Bearer KEY</code>, as <code>X-API-Key: KEY</code>, or as <code>?key=KEY</code> in the address.
-            </CardDescription>
-            {[
-              ['Search', `curl -H "Authorization: Bearer ${sampleKey}" "${origin}/api/ytp/search?q=lofi&limit=10"`],
-              ['Qualities of a video', `curl -H "Authorization: Bearer ${sampleKey}" "${origin}/api/ytp/info?url=https://youtu.be/VIDEO_ID"`],
-              ['Download in 4K (or the best below it)', `curl -L -OJ -H "Authorization: Bearer ${sampleKey}" "${origin}/api/ytp/download?url=https://youtu.be/VIDEO_ID&height=2160"`],
-              ['Download as music (m4a)', `curl -L -OJ -H "Authorization: Bearer ${sampleKey}" "${origin}/api/ytp/download?url=https://youtu.be/VIDEO_ID&audio=1"`],
-              ['Record 10 minutes of a live stream', `curl -L -OJ -H "Authorization: Bearer ${sampleKey}" "${origin}/api/ytp/record?url=https://youtu.be/VIDEO_ID&minutes=10&height=720"`],
-              ['Link that works in a browser', `${origin}/api/ytp/download?url=https://youtu.be/VIDEO_ID&height=1080&key=${sampleKey}`],
-            ].map(([what, cmd]) => (
-              <div key={what} className="space-y-1">
-                <p className="text-xs font-medium text-foreground">{what}</p>
-                <div className="flex items-start gap-2">
-                  <code className="flex-1 text-[11px] bg-secondary rounded px-2 py-1.5 font-mono break-all">{cmd}</code>
-                  <CopyButton text={cmd} />
-                </div>
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <CardTitle className="flex items-center gap-2"><BookOpen className="size-4 text-muted-foreground" /> Documentation</CardTitle>
+              <div className="flex gap-2">
+                <CopyButton text={`${origin}/api/ytp/docs?key=${sampleKey}`} label="Copy docs link" />
               </div>
-            ))}
-            <p className="text-[11px] text-muted-foreground">
-              Other options: <code>&amp;audio=1&amp;ext=webm</code> for Opus, <code>&amp;f=ITAG</code> for one exact stream (see <code>/api/ytp/resolve</code>), <code>&amp;id=NAME</code> with <code>/api/ytp/progress?id=NAME</code> to follow a download. Errors come back as JSON with an <code>error</code> field.
-            </p>
+            </div>
+            <CardDescription className="text-xs text-muted-foreground">
+              The same text is served at <code>{origin}/api/ytp/docs</code> (Markdown), so a program or an AI assistant can read it with a key.
+            </CardDescription>
+            {docs === null
+              ? <p className="text-xs text-muted-foreground">The documentation could not be loaded.</p>
+              : (
+                <div
+                  className="text-[13px] leading-relaxed text-foreground space-y-3 break-words
+                    [&_h1]:text-lg [&_h1]:font-semibold [&_h1]:mt-2
+                    [&_h2]:text-base [&_h2]:font-semibold [&_h2]:mt-6 [&_h2]:pt-4 [&_h2]:border-t [&_h2]:border-border
+                    [&_h3]:text-sm [&_h3]:font-semibold [&_h3]:mt-4
+                    [&_p]:text-muted-foreground [&_li]:text-muted-foreground [&_ul]:list-disc [&_ul]:pl-5 [&_ul]:space-y-1
+                    [&_strong]:text-foreground
+                    [&_code]:font-mono [&_code]:text-[12px] [&_code]:bg-secondary [&_code]:rounded [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-foreground
+                    [&_pre]:bg-secondary [&_pre]:rounded-md [&_pre]:p-3 [&_pre]:overflow-x-auto [&_pre_code]:bg-transparent [&_pre_code]:p-0
+                    [&_table]:w-full [&_table]:text-xs [&_table]:border [&_table]:border-border [&_table]:rounded-md
+                    [&_th]:text-left [&_th]:font-medium [&_th]:px-2 [&_th]:py-1.5 [&_th]:border-b [&_th]:border-border [&_th]:text-foreground
+                    [&_td]:px-2 [&_td]:py-1.5 [&_td]:border-b [&_td]:border-border [&_td]:align-top [&_td]:text-muted-foreground"
+                  dangerouslySetInnerHTML={{ __html: docs.replace(/YOUR_KEY/g, sampleKey) }}
+                />
+              )}
           </Card>
         </TabsContent>
 

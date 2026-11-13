@@ -15,6 +15,12 @@
  *  GET /api/ytp/download?url=…&f=b|bv|ba|ITAG        one specific format
  *  GET /api/ytp/record?url=…&minutes=5&height=720    record a live stream from now
  *  GET /api/ytp/progress?id=…                        progress of a download started with &id=…
+ *  GET /api/ytp/playlist?url=…                       the videos of a playlist
+ *  POST /api/ytp/jobs?url=…&height=…                 start a download job (a playlist link: one per video)
+ *  GET /api/ytp/jobs, /api/ytp/jobs/ID               list jobs, follow one; DELETE removes one
+ *  GET /api/ytp/files/ID                             the finished file of a job (supports Range)
+ *  GET /api/ytp/docs                                 the full documentation (Markdown)
+ *  (jobs, files and docs are answered by dashboard-server, where the jobs live)
  *  GET /api/ytp/s/<key>?range=a-b                    byte-range proxy for /resolve's formats
  *
  * Dashboard only:
@@ -36,7 +42,9 @@ const PREFIX = '/api/ytp/';
 const target = () => new URL(process.env.YTP_URL || 'http://127.0.0.1:8084');
 
 /** What an access key may call. Keys and sign-in stay with the dashboard login. */
-const PUBLIC = /^\/api\/ytp\/(health|search|info|resolve|download|record|progress|s\/[\w-]+)$/;
+const PUBLIC = /^\/api\/ytp\/(health|search|info|resolve|download|record|progress|playlist|docs|s\/[\w-]+|jobs|jobs\/[a-z0-9]+|files\/[a-z0-9]+)$/;
+/** Of those, the ones a key may also POST to or DELETE. */
+const PUBLIC_WRITE = /^\/api\/ytp\/(jobs|jobs\/[a-z0-9]+)$/;
 
 /** Headers worth passing through in each direction (no cookies or dashboard credentials). */
 const REQ_HEADERS = ['accept', 'range', 'if-range'];
@@ -66,7 +74,9 @@ function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
  * which case it does not need the dashboard login.
  */
 export async function ytpPublicAccess(req: IncomingMessage, pathname: string): Promise<boolean> {
-  if (!PUBLIC.test(pathname) || (req.method !== 'GET' && req.method !== 'HEAD')) return false;
+  if (!PUBLIC.test(pathname)) return false;
+  const reads = req.method === 'GET' || req.method === 'HEAD';
+  if (!reads && !((req.method === 'POST' || req.method === 'DELETE') && PUBLIC_WRITE.test(pathname))) return false;
   const auth = req.headers['authorization'];
   const header = req.headers['x-api-key'];
   let key = typeof header === 'string' ? header : '';
@@ -140,6 +150,8 @@ export function handleYtpRequest(req: IncomingMessage, res: ServerResponse): boo
 
   // The signed-in client is what works from a server address, so it goes first unless the
   // caller says otherwise.
+  // Putting files on this machine is for the server's own jobs, never for a caller.
+  url.searchParams.delete('save');
   if (/^(info|resolve|download|record)$/.test(route) && !url.searchParams.has('cookie_first')) {
     url.searchParams.set('cookie_first', '1');
   }

@@ -231,11 +231,35 @@ function buildYtdlpBaseFlags(): Record<string, unknown> {
 function ytpRequest(quality: YouTubeQualityOption): string {
   const live = /^live:(\d+):(\d+(?:\.\d+)?)$/.exec(quality.key);
   if (live) return `record?height=${live[1]}&minutes=${live[2]}`;
+  const itag = /^itag:(\d+)$/.exec(quality.key);
+  if (itag) return `download?f=${itag[1]}`;
   if (quality.key === 'audio-opus') return 'download?audio=1&ext=webm';
+  if (quality.key === 'audio-best') return 'download?f=ba';
   if (quality.audioOnly) return 'download?audio=1';
   if (quality.key === 'video-only') return 'download?f=bv';
   const height = /^(\d{3,4})p/.exec(quality.key)?.[1] || '1080';
   return `download?height=${height}`;
+}
+
+const ytpBase = () => process.env.YTP_URL || 'http://127.0.0.1:8084';
+
+/** GET a JSON answer from the ytp service (path starts with "/api/…"). Throws its error text. */
+export function ytpJson<T = any>(pathAndQuery: string, timeoutMs = 60_000): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const req = http.get(ytpBase() + pathAndQuery, res => {
+      const chunks: Buffer[] = [];
+      res.on('data', c => chunks.push(c));
+      res.on('error', reject);
+      res.on('end', () => {
+        let data: any;
+        try { data = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { return reject(new Error(`HTTP ${res.statusCode}`)); }
+        if (res.statusCode !== 200) return reject(new Error(data?.error || `HTTP ${res.statusCode}`));
+        resolve(data as T);
+      });
+    });
+    req.setTimeout(timeoutMs, () => req.destroy(new Error('ytp timed out')));
+    req.on('error', e => reject(new Error((e as NodeJS.ErrnoException).code === 'ECONNREFUSED' ? 'the YouTube downloader service is not running' : e.message)));
+  });
 }
 
 /** A file fetched through the ytp service. */
@@ -249,9 +273,10 @@ export interface YtpFile {
 }
 
 /**
- * Downloads through the ytp service into a file in `dir` (nothing is held in memory, so 4K
- * files are fine). Throws when the service is not running or YouTube refused, so the caller can
- * fall back to yt-dlp. `onProgress` gets a percentage and what is happening.
+ * Downloads through the ytp service into a file in `dir`. The service writes the file there
+ * itself (joined while it downloads), so nothing is copied or held in memory and 4K files are
+ * fine. Throws when the service is not running or YouTube refused, so the caller can fall back
+ * to yt-dlp. `onProgress` gets a percentage, what is happening, and the speed.
  */
 export function downloadViaYtpToFile(
   url: string,
@@ -259,13 +284,11 @@ export function downloadViaYtpToFile(
   dir: string,
   onProgress?: (percent: number, stage: string, bytesPerSecond?: number) => void,
 ): Promise<YtpFile> {
-  const base = process.env.YTP_URL || 'http://127.0.0.1:8084';
+  const base = ytpBase();
   const id = Math.random().toString(36).slice(2, 12);
-  const target = `${base}/api/${ytpRequest(quality)}&cookie_first=1&id=${id}&url=${encodeURIComponent(url)}`;
-  const tmpPath = path.join(dir, `ytp_${id}.part`);
+  const target = `${base}/api/${ytpRequest(quality)}&cookie_first=1&id=${id}&save=${encodeURIComponent(path.resolve(dir))}&url=${encodeURIComponent(url)}`;
   return new Promise((resolve, reject) => {
-    // While the service fetches and joins the streams it sends nothing; it reports how far
-    // it has got separately.
+    // The request answers only when the file is ready; how far it has got is asked separately.
     let last = { done: 0, at: Date.now() };
     let speed = 0;
     const poll = setInterval(() => {
@@ -287,50 +310,32 @@ export function downloadViaYtpToFile(
         });
       }).on('error', () => { /* the download request reports real failures */ });
     }, 1000);
-    const fail = (e: Error) => {
-      clearInterval(poll);
-      fs.promises.unlink(tmpPath).catch(() => {});
-      reject(e);
-    };
+    const fail = (e: Error) => { clearInterval(poll); reject(e); };
     const req = http.get(target, res => {
-      if (res.statusCode !== 200) {
-        const chunks: Buffer[] = [];
-        res.on('data', c => chunks.push(c));
-        res.on('end', () => {
-          let why = `HTTP ${res.statusCode}`;
-          try { why = JSON.parse(Buffer.concat(chunks).toString('utf8')).error || why; } catch { /* not JSON */ }
-          fail(new Error(why));
-        });
-        return;
-      }
-      const total = parseInt(String(res.headers['content-length'] || '0'), 10);
-      let got = 0;
-      const out = fs.createWriteStream(tmpPath);
-      res.on('data', (c: Buffer) => { got += c.length; });
+      const chunks: Buffer[] = [];
+      res.on('data', c => chunks.push(c));
       res.on('error', fail);
-      out.on('error', fail);
-      res.pipe(out);
-      out.on('finish', () => {
+      res.on('end', () => {
         clearInterval(poll);
-        if (total > 0 && got < total) return fail(new Error('the download stopped before the end'));
-        const disposition = String(res.headers['content-disposition'] || '');
-        const named = /filename\*=UTF-8''([^;]+)/.exec(disposition)?.[1];
-        const full = named ? decodeURIComponent(named) : 'youtube_video.mp4';
+        let data: any;
+        try { data = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { return reject(new Error(`HTTP ${res.statusCode}`)); }
+        if (res.statusCode !== 200 || !data.saved) return reject(new Error(data?.error || `HTTP ${res.statusCode}`));
+        const full = String(data.filename || 'youtube_video.mp4');
         const dot = full.lastIndexOf('.');
         const title = dot > 0 ? full.slice(0, dot) : full;
         // YouTube's m4a audio is announced as mp4; keep the name players expect.
         const given = dot > 0 ? full.slice(dot + 1) : 'mp4';
         const ext = quality.audioOnly && given === 'mp4' ? 'm4a' : given;
         resolve({
-          filePath: tmpPath,
+          filePath: String(data.saved),
           filename: `${title}.${ext}`,
           title,
           ext,
-          mimetype: String(res.headers['content-type'] || (quality.audioOnly ? 'audio/mp4' : 'video/mp4')),
+          mimetype: String(data.type || (quality.audioOnly ? 'audio/mp4' : 'video/mp4')),
         });
       });
     });
-    // Recordings and large merges take as long as they take.
+    // Recordings and large files take as long as they take.
     req.setTimeout(3 * 60 * 60_000, () => req.destroy(new Error('ytp timed out')));
     req.on('error', fail);
   });

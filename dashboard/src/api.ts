@@ -208,8 +208,12 @@ export interface YtpInfo {
   thumbnail: string; video: YtpVideoOption[]; audio: YtpAudioOption[];
 }
 export interface YtpApiKey { id: string; name: string; key: string; createdAt: string; lastUsedAt?: string; uses: number }
+export interface YtpPlaylistVideo { id: string; url: string; title: string; author: string; duration: number; thumbnail: string }
+export interface YtpPlaylist { id: string; title: string; url: string; count: number; videos: YtpPlaylistVideo[] }
 export interface YtStorage { used: number; budget: number; free: number }
-export interface YtJob extends YtDownloadJob { label?: string; thumbnail?: string; sizeBytes?: number; createdAt?: number }
+export interface YtJob extends YtDownloadJob {
+  label?: string; thumbnail?: string; sizeBytes?: number; createdAt?: number; playlistId?: string; playlistTitle?: string;
+}
 export interface ReceivedEmail {
   id: string;
   from: { name?: string; address: string };
@@ -510,6 +514,14 @@ export const api = {
     post<{ results: YtSearchResult[] }>('/api/youtube/search', { query, limit }),
   ytpHealth: () => getJson<{ ok: boolean; cookies: boolean }>('/api/ytp/health'),
   ytpInfo: (url: string) => getJson<YtpInfo>(`/api/ytp/info?url=${encodeURIComponent(url)}`),
+  ytpPlaylist: (url: string) => getJson<YtpPlaylist>(`/api/ytp/playlist?url=${encodeURIComponent(url)}`),
+  /** One download job per video of a playlist; `what` is {height} or {audio: 1, ext?}. */
+  ytpStartPlaylist: (url: string, what: Record<string, string | number>) =>
+    post<{ playlist: { id: string; title: string; count: number; queued: number } }>('/api/ytp/jobs', { url, playlist: 1, ...what }),
+  ytpDocs: () => authFetch(`${BASE}/api/ytp/docs`).then(r => {
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return r.text();
+  }),
   ytpKeys: () => getJson<{ keys: YtpApiKey[] }>('/api/ytp/keys'),
   ytpCreateKey: (name: string) => post<{ key: YtpApiKey }>('/api/ytp/keys', { name }),
   ytpDeleteKey: (id: string) =>

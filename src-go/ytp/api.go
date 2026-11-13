@@ -16,12 +16,16 @@ package main
 //	GET /api/progress?id=ID                  how far a download or recording that was started with
 //	                                         &id=ID has got: {"stage","done","total"}
 //
+// For a caller on the same machine, &save=DIR on download and record puts the finished file in
+// DIR and answers {"saved": path, "filename", "type", "size"} instead of sending the bytes.
+//
 // Add cookie_first=1 to use the logged-in tv client first. Errors are JSON: {"error": "..."}.
 
 import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -69,6 +73,7 @@ func track(id string) (*progress, func()) {
 }
 
 func registerAPI(mux *http.ServeMux, cookies func() string) {
+	registerFeeds(mux)
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		sendJSON(w, 200, jmap{"ok": true, "cookies": cookies() != ""})
 	})
@@ -432,7 +437,44 @@ func pieces(f Format, size int64, alive func() bool, use func([]byte) error) err
 	return failed
 }
 
-// sendFormat streams one format as it is fetched.
+// workDir makes the folder a download is put together in: inside the caller's folder when the
+// file is to be saved there (&save=DIR, so the finished file only has to be renamed), else in
+// the system's temporary folder.
+func workDir(r *http.Request) (string, error) {
+	if save := r.URL.Query().Get("save"); save != "" {
+		return os.MkdirTemp(save, ".ytp-")
+	}
+	return os.MkdirTemp("", "ytp-dl-")
+}
+
+// deliver hands over a finished file: sent as the answer, or, with &save=DIR (for a caller on
+// this machine), moved into DIR and described as JSON {"saved","filename","type","size"}.
+func deliver(w http.ResponseWriter, r *http.Request, path, name, ext, mime string) {
+	save := r.URL.Query().Get("save")
+	if save == "" {
+		fh, err := os.Open(path)
+		if err != nil {
+			sendJSON(w, 500, jmap{"error": err.Error()})
+			return
+		}
+		defer fh.Close()
+		attachment(w, name, ext, mime)
+		http.ServeContent(w, r, "", time.Now(), fh)
+		return
+	}
+	dest := filepath.Join(save, "ytp_"+token()+"."+ext)
+	if err := os.Rename(path, dest); err != nil {
+		sendJSON(w, 500, jmap{"error": "could not move the file into place: " + err.Error()})
+		return
+	}
+	size := int64(0)
+	if st, err := os.Stat(dest); err == nil {
+		size = st.Size()
+	}
+	sendJSON(w, 200, jmap{"saved": dest, "filename": name + "." + ext, "type": mime, "size": size})
+}
+
+// sendFormat streams one format as it is fetched (or saves it, with &save=DIR).
 func sendFormat(w http.ResponseWriter, r *http.Request, f Format, name string, p *progress) {
 	size, err := lengthOf(f)
 	if err != nil {
@@ -441,8 +483,24 @@ func sendFormat(w http.ResponseWriter, r *http.Request, f Format, name string, p
 	}
 	p.total.Store(size)
 	p.stage.Store("downloading")
+	alive := func() bool { return r.Context().Err() == nil }
+	if r.URL.Query().Get("save") != "" {
+		dir, err := workDir(r)
+		if err != nil {
+			sendJSON(w, 500, jmap{"error": err.Error()})
+			return
+		}
+		defer os.RemoveAll(dir)
+		path := filepath.Join(dir, "f."+f.Ext)
+		if err := toFile(f, size, path, alive, p); err != nil {
+			sendJSON(w, 502, jmap{"error": "download: " + err.Error()})
+			return
+		}
+		deliver(w, r, path, name, f.Ext, mimeOf(f))
+		return
+	}
 	started := false
-	err = pieces(f, size, func() bool { return r.Context().Err() == nil }, func(data []byte) error {
+	err = pieces(f, size, alive, func(data []byte) error {
 		if !started {
 			attachment(w, name, f.Ext, mimeOf(f))
 			w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
@@ -473,29 +531,100 @@ func toFile(f Format, size int64, path string, alive func() bool, p *progress) e
 	})
 }
 
-// join puts a video and an audio file in one container with ffmpeg, without re-encoding.
-func join(r *http.Request, ffmpeg, vPath, aPath, out string) error {
-	args := []string{"-y", "-loglevel", "error", "-i", vPath, "-i", aPath, "-map", "0:v:0", "-map", "1:a:0", "-c", "copy"}
-	if strings.HasSuffix(out, ".mp4") {
-		args = append(args, "-movflags", "+faststart")
-	}
-	cmd := exec.CommandContext(r.Context(), ffmpeg, append(args, out)...)
+// join puts a video and an audio input (files or addresses) in one container with ffmpeg,
+// without re-encoding. The file is written once: no second pass to move the index to the
+// front, which only matters for playing a file while it is still being fetched.
+func join(r *http.Request, ffmpeg string, inputs []string, out string) error {
+	args := []string{"-y", "-loglevel", "error"}
+	args = append(args, inputs...)
+	args = append(args, "-map", "0:v:0", "-map", "1:a:0", "-c", "copy", out)
+	cmd := exec.CommandContext(r.Context(), ffmpeg, args...)
 	if msg, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("ffmpeg: %s", strings.TrimSpace(string(msg)))
 	}
 	return nil
 }
 
-func sendFile(w http.ResponseWriter, r *http.Request, path, name, ext string) {
-	fh, err := os.Open(path)
-	if err != nil {
-		sendJSON(w, 500, jmap{"error": err.Error()})
-		return
+// A feed is one stream on its way to ffmpeg: ffmpeg reads it from this server
+// (/internal/feed/TOKEN) while the pieces arrive from YouTube, so a merged download is joined
+// as it is fetched instead of being written to disk first and copied again.
+type feed struct {
+	f     Format
+	size  int64
+	alive func() bool
+	p     *progress
+	done  chan error
+}
+
+var (
+	feedsMu sync.Mutex
+	feeds   = map[string]*feed{}
+)
+
+func registerFeeds(mux *http.ServeMux) {
+	mux.HandleFunc("/internal/feed/", func(w http.ResponseWriter, r *http.Request) {
+		key := strings.TrimPrefix(r.URL.Path, "/internal/feed/")
+		feedsMu.Lock()
+		fd := feeds[key]
+		delete(feeds, key) // read once, from the start
+		feedsMu.Unlock()
+		if fd == nil {
+			http.Error(w, "unknown feed", 404)
+			return
+		}
+		w.Header().Set("Content-Type", mimeOf(fd.f))
+		w.Header().Set("Content-Length", strconv.FormatInt(fd.size, 10))
+		fd.done <- pieces(fd.f, fd.size, func() bool { return fd.alive() && r.Context().Err() == nil }, func(data []byte) error {
+			_, err := w.Write(data)
+			fd.p.done.Add(int64(len(data)))
+			return err
+		})
+	})
+}
+
+// joinWhileFetching feeds both streams to ffmpeg as they download. An error means nothing
+// usable was written.
+func joinWhileFetching(r *http.Request, ffmpeg string, video, audio Format, vSize, aSize int64, out string, p *progress) error {
+	local, _ := r.Context().Value(http.LocalAddrContextKey).(net.Addr)
+	if local == nil {
+		return errors.New("this server's own address is unknown")
 	}
-	defer fh.Close()
-	mime := map[string]string{"mp4": "video/mp4", "webm": "video/webm", "mkv": "video/x-matroska"}[ext]
-	attachment(w, name, ext, mime)
-	http.ServeContent(w, r, "", time.Now(), fh)
+	alive := func() bool { return r.Context().Err() == nil }
+	var inputs []string
+	var fds []*feed
+	for _, in := range []struct {
+		f    Format
+		size int64
+	}{{video, vSize}, {audio, aSize}} {
+		fd := &feed{f: in.f, size: in.size, alive: alive, p: p, done: make(chan error, 1)}
+		key := token()
+		feedsMu.Lock()
+		feeds[key] = fd
+		feedsMu.Unlock()
+		defer func() {
+			feedsMu.Lock()
+			delete(feeds, key)
+			feedsMu.Unlock()
+		}()
+		fds = append(fds, fd)
+		// Not seekable: ffmpeg reads straight through, which YouTube's files allow (their index is
+		// at the front).
+		inputs = append(inputs, "-seekable", "0", "-i", "http://"+local.String()+"/internal/feed/"+key)
+	}
+	if err := join(r, ffmpeg, inputs, out); err != nil {
+		return err
+	}
+	for _, fd := range fds {
+		select {
+		case err := <-fd.done:
+			if err != nil {
+				return fmt.Errorf("download: %w", err)
+			}
+		default:
+			return errors.New("ffmpeg did not read a stream to the end")
+		}
+	}
+	return nil
 }
 
 // sendMerged downloads the best video up to `height` and the best audio, joins them with
@@ -521,34 +650,46 @@ func sendMerged(w http.ResponseWriter, r *http.Request, info *Info, height int, 
 		sendJSON(w, 502, jmap{"error": err.Error()})
 		return
 	}
-	dir, err := os.MkdirTemp("", "ytp-dl-")
+	dir, err := workDir(r)
 	if err != nil {
 		sendJSON(w, 500, jmap{"error": err.Error()})
 		return
 	}
 	defer os.RemoveAll(dir)
-	vPath, aPath, out := filepath.Join(dir, "v."+video.Ext), filepath.Join(dir, "a."+audio.Ext), filepath.Join(dir, "out."+ext)
+	out := filepath.Join(dir, "out."+ext)
+	mime := map[string]string{"mp4": "video/mp4", "webm": "video/webm", "mkv": "video/x-matroska"}[ext]
 	p.total.Store(vSize + aSize)
 	p.stage.Store("downloading")
 	alive := func() bool { return r.Context().Err() == nil }
-	errs := make(chan error, 2)
-	go func() { errs <- toFile(video, vSize, vPath, alive, p) }()
-	go func() { errs <- toFile(audio, aSize, aPath, alive, p) }()
-	for i := 0; i < 2; i++ {
-		if err := <-errs; err != nil {
-			sendJSON(w, 502, jmap{"error": "download: " + err.Error()})
-			return
+
+	// Joined as it downloads: the file is written to disk once.
+	err = joinWhileFetching(r, ffmpeg, video, audio, vSize, aSize, out, p)
+	if err != nil && alive() {
+		// The careful way: both streams to disk, then joined.
+		fmt.Fprintf(os.Stderr, "joining while fetching failed (%v), using files\n", err)
+		os.Remove(out)
+		p.done.Store(0)
+		vPath, aPath := filepath.Join(dir, "v."+video.Ext), filepath.Join(dir, "a."+audio.Ext)
+		errs := make(chan error, 2)
+		go func() { errs <- toFile(video, vSize, vPath, alive, p) }()
+		go func() { errs <- toFile(audio, aSize, aPath, alive, p) }()
+		for i := 0; i < 2; i++ {
+			if e := <-errs; e != nil {
+				sendJSON(w, 502, jmap{"error": "download: " + e.Error()})
+				return
+			}
 		}
+		p.stage.Store("merging")
+		err = join(r, ffmpeg, []string{"-i", vPath, "-i", aPath}, out)
+		os.Remove(vPath)
+		os.Remove(aPath)
 	}
-	p.stage.Store("merging")
-	if err := join(r, ffmpeg, vPath, aPath, out); err != nil {
+	if err != nil {
 		sendJSON(w, 500, jmap{"error": err.Error()})
 		return
 	}
-	os.Remove(vPath)
-	os.Remove(aPath)
 	p.stage.Store("sending")
-	sendFile(w, r, out, name, ext)
+	deliver(w, r, out, name, ext, mime)
 }
 
 // sendRecording records a live stream from now for `length`: YouTube serves live video as
@@ -594,7 +735,7 @@ func sendRecording(w http.ResponseWriter, r *http.Request, info *Info, height in
 		sendJSON(w, 502, jmap{"error": fmt.Sprintf("could not find the live edge (%v)", err)})
 		return
 	}
-	dir, err := os.MkdirTemp("", "ytp-live-")
+	dir, err := workDir(r)
 	if err != nil {
 		sendJSON(w, 500, jmap{"error": err.Error()})
 		return
@@ -649,14 +790,15 @@ func sendRecording(w http.ResponseWriter, r *http.Request, info *Info, height in
 		}
 	}
 	p.stage.Store("merging")
-	if err := join(r, ffmpeg, vPath, aPath, out); err != nil {
+	err = join(r, ffmpeg, []string{"-i", vPath, "-i", aPath}, out)
+	os.Remove(vPath)
+	os.Remove(aPath)
+	if err != nil {
 		sendJSON(w, 500, jmap{"error": err.Error()})
 		return
 	}
-	os.Remove(vPath)
-	os.Remove(aPath)
 	p.stage.Store("sending")
-	sendFile(w, r, out, name+" (live "+t0.UTC().Format("2006-01-02 15.04")+")", "mp4")
+	deliver(w, r, out, name+" (live "+t0.UTC().Format("2006-01-02 15.04")+")", "mp4", "video/mp4")
 }
 
 func sameLang(a, b *string) bool {

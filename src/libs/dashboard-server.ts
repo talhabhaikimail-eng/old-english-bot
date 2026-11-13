@@ -37,7 +37,7 @@ import { startVSCode } from './vscode';
 import { startBrowser } from './browser';
 import { exportYouTubeCookies } from './browser';
 import { detectAndDownload } from './downloader';
-import { searchYouTube, getYouTubeInfo, downloadYouTubeVideo, downloadViaYtpToFile } from './youtube-dl';
+import { searchYouTube, getYouTubeInfo, downloadYouTubeVideo, downloadViaYtpToFile, ytpJson } from './youtube-dl';
 import { searchMovies } from './movie-search';
 import type { YouTubeQualityOption } from './youtube-dl';
 import { browserPool, searchViaPool, searchDuckViaPool, searchIndeedViaPool } from './browser-pool';
@@ -55,6 +55,7 @@ import { handlePortfolioRequest } from './portfolio-api';
 import { handleToolsRequest } from './tools';
 import { handleSiteAuditRequest } from './site-audit-proxy';
 import { handleYtpRequest, ytpPublicAccess } from './ytp-proxy';
+import { YTP_DOCS } from './ytp-docs';
 import { handleExtractorRequest } from './extractor';
 import {
   listCourses,
@@ -187,6 +188,9 @@ export interface DownloadJob {
   label?: string;
   thumbnail?: string;
   sizeBytes?: number;
+  /** The playlist this job came from, when it was started for one. */
+  playlistId?: string;
+  playlistTitle?: string;
   createdAt: number;
 }
 
@@ -198,6 +202,8 @@ const downloadJobs: Record<string, DownloadJob> = {};
 // download needs room, the oldest finished files go first.
 
 const DOWNLOADS_SHARE = 0.5;
+/** Finished files are kept this long so they can be fetched. */
+const DOWNLOAD_KEEP_MS = 3 * 60 * 60 * 1000;
 
 interface DownloadStorage {
   /** Bytes held by finished downloads and ones in progress. */
@@ -241,7 +247,7 @@ function downloadStorage(): DownloadStorage {
 /** Forget a deleted file in the job that produced it, so the list no longer offers it. */
 function markFileRemoved(name: string): void {
   for (const job of Object.values(downloadJobs)) {
-    if (job.downloadUrl?.endsWith(`name=${encodeURIComponent(name)}`)) {
+    if (jobFileName(job) === name) {
       job.downloadUrl = undefined;
       job.message = 'Removed to make room for newer downloads';
     }
@@ -284,10 +290,336 @@ function makeRoomForDownload(needed: number): string | null {
   return null;
 }
 
+/** At most this many downloads run at once; the rest wait their turn (playlists queue up). */
+const MAX_RUNNING_DOWNLOADS = 2;
+let runningDownloads = 0;
+const waitingDownloads: (() => void)[] = [];
+
+function downloadSlot(): Promise<void> {
+  if (runningDownloads < MAX_RUNNING_DOWNLOADS) { runningDownloads++; return Promise.resolve(); }
+  return new Promise(resolve => waitingDownloads.push(() => { runningDownloads++; resolve(); }));
+}
+
+function releaseDownloadSlot(): void {
+  runningDownloads--;
+  waitingDownloads.shift()?.();
+}
+
+/** What a request may ask of a video, as the quality option the downloader understands. */
+function qualityFromParams(get: (name: string) => string | undefined): YouTubeQualityOption | { error: string } {
+  const number = (name: string) => { const n = Number(get(name)); return Number.isFinite(n) && n > 0 ? n : 0; };
+  const height = number('height');
+  if (get('minutes') !== undefined) {
+    const minutes = number('minutes');
+    if (!minutes || minutes > 120) return { error: 'minutes must be between 0 and 120' };
+    const h = Math.min(height || 720, 1080);
+    return { key: `live:${h}:${minutes}`, label: `Live recording · ${h}p · ${minutes} min`, sizeBytes: null, audioOnly: false, formatId: 'best' };
+  }
+  if (get('audio') === '1' || get('audio') === 'true') {
+    return get('ext') === 'webm'
+      ? { key: 'audio-opus', label: 'Audio · Opus', sizeBytes: null, audioOnly: true, formatId: 'bestaudio[ext=webm]/bestaudio' }
+      : { key: 'audio-only', label: 'Audio · M4A', sizeBytes: null, audioOnly: true, formatId: 'bestaudio[ext=m4a]/bestaudio' };
+  }
+  const f = get('f');
+  if (f === 'bv') return { key: 'video-only', label: 'Best video, no sound', sizeBytes: null, audioOnly: false, formatId: 'bestvideo' };
+  if (f === 'ba') return { key: 'audio-best', label: 'Best audio', sizeBytes: null, audioOnly: true, formatId: 'bestaudio' };
+  if (f && /^\d+$/.test(f)) return { key: `itag:${f}`, label: `Stream ${f}`, sizeBytes: null, audioOnly: false, formatId: f };
+  if (f && f !== 'b') return { error: 'f must be bv, ba or an itag number' };
+  const h = height || 1080;
+  return {
+    key: `${h}p`, label: `Video up to ${h}p`, sizeBytes: null, audioOnly: false,
+    formatId: `bestvideo[height<=${h}][ext=mp4]/bestvideo[height<=${h}]`, audioFormatId: 'bestaudio[ext=m4a]/bestaudio',
+  };
+}
+
+/**
+ * Create a download job and queue it. Returns the job, or an error when there is no room for it
+ * on the disk.
+ */
+function startYoutubeJob(
+  videoUrl: string,
+  quality: YouTubeQualityOption,
+  meta: { title?: string; thumbnail?: string; playlistId?: string; playlistTitle?: string } = {},
+): DownloadJob | { refused: string } {
+  cleanupOldJobs();
+  // Keep downloads inside their share of the disk: oldest files make way, and what cannot fit
+  // is refused before it starts. (A size that is not known yet is checked when the job runs.)
+  const noRoom = makeRoomForDownload(Number(quality.sizeBytes) || 0);
+  if (noRoom) return { refused: noRoom };
+
+  const jobId = Math.random().toString(36).substring(2, 15);
+  const job: DownloadJob = {
+    id: jobId,
+    url: videoUrl,
+    qualityKey: quality.key,
+    status: 'pending',
+    progress: 0,
+    message: runningDownloads >= MAX_RUNNING_DOWNLOADS ? 'Waiting for its turn…' : 'Job initialized',
+    label: quality.label,
+    title: meta.title,
+    thumbnail: meta.thumbnail,
+    playlistId: meta.playlistId,
+    playlistTitle: meta.playlistTitle,
+    createdAt: Date.now(),
+  };
+  downloadJobs[jobId] = job;
+  runYoutubeJob(job, quality).catch(e => console.error(`[Download Job ${jobId}]`, e));
+  return job;
+}
+
+async function runYoutubeJob(job: DownloadJob, qOption: YouTubeQualityOption): Promise<void> {
+  const jobId = job.id;
+  const videoUrl = job.url;
+  await downloadSlot();
+  try {
+    if (!downloadJobs[jobId]) return; // deleted while it waited
+    job.status = 'downloading';
+    job.message = 'Starting download...';
+    const downloadsDir = downloadsFolder();
+
+    // A job that came without a size (public API, playlists): ask what the video offers, so the
+    // disk check is real and the list shows a title.
+    if (!qOption.sizeBytes && !qOption.key.startsWith('live:')) {
+      try {
+        const info = await ytpJson(`/api/info?cookie_first=1&url=${encodeURIComponent(videoUrl)}`);
+        if (!job.title && info.title) job.title = info.title;
+        if (!job.thumbnail && info.thumbnail) job.thumbnail = info.thumbnail;
+        if (info.live) throw new Error('This is a live stream: record it with minutes=N instead.');
+        const height = /^(\d{3,4})p/.exec(qOption.key)?.[1];
+        const pick = height
+          ? (info.video || []).find((v: any) => v.height <= Number(height))
+          : qOption.audioOnly ? (info.audio || []).find((a: any) => (qOption.key === 'audio-opus') === (a.ext === 'webm')) : undefined;
+        if (pick?.size) {
+          const noRoom = makeRoomForDownload(pick.size);
+          if (noRoom) throw new Error(noRoom);
+          if (height && pick.height) job.label = `${pick.height}p · .${pick.ext}`;
+        }
+      } catch (infoErr) {
+        const why = (infoErr as Error).message;
+        // Only what makes the download pointless stops it here; the download itself reports the rest.
+        if (/live stream|Not enough|larger than/.test(why)) throw infoErr;
+      }
+    }
+
+    // First choice: the ytp service, which writes the file into the downloads folder itself.
+    try {
+      const file = await downloadViaYtpToFile(videoUrl, qOption, downloadsDir, (pct, stage, speed) => {
+        job.progress = pct;
+        job.message = stage === 'recording' ? `Recording the live stream… ${pct}%`
+          : stage === 'merging' ? 'Joining video and audio…'
+          : stage === 'sending' ? 'Finishing…'
+          : `Downloading… ${pct}%${speed ? ` · ${(speed / 1e6).toFixed(1)} MB/s` : ''}`;
+      });
+      const safe = `${jobId}_${file.filename.replace(/[^a-zA-Z0-9_.-]/g, '_')}`;
+      const { renameSync, statSync } = require('fs');
+      renameSync(file.filePath, join(downloadsDir, safe));
+      job.sizeBytes = statSync(join(downloadsDir, safe)).size;
+      makeRoomForDownload(0);
+      job.status = 'completed';
+      job.progress = 100;
+      job.message = 'Download complete!';
+      job.title = file.filename;
+      job.downloadUrl = `/api/youtube/files?name=${encodeURIComponent(safe)}`;
+      return;
+    } catch (ytpErr) {
+      if (qOption.key.startsWith('live:') || qOption.key.startsWith('itag:')) throw ytpErr;
+      console.warn(`[Download Job ${jobId}] ytp failed (${(ytpErr as Error).message}), falling back to yt-dlp`);
+      job.message = 'Trying the fallback downloader…';
+    }
+
+    const result = await downloadYouTubeVideo(videoUrl, qOption, async (statusStr) => {
+      job.message = statusStr;
+      const pctMatch = statusStr.match(/(\d+)%/);
+      if (pctMatch) {
+        job.progress = parseInt(pctMatch[1], 10);
+      }
+    });
+
+    const safeFilename = `${jobId}_${result.filename.replace(/[^a-zA-Z0-9_.-]/g, '_')}`;
+    writeFileSync(join(downloadsDir, safeFilename), result.buffer);
+    job.sizeBytes = result.buffer.length;
+    job.status = 'completed';
+    job.progress = 100;
+    job.message = 'Download complete!';
+    job.title = result.filename;
+    job.downloadUrl = `/api/youtube/files?name=${encodeURIComponent(safeFilename)}`;
+  } catch (jobErr) {
+    console.error(`[Download Job ${jobId}] error:`, jobErr);
+    job.status = 'failed';
+    job.message = `Failed: ${(jobErr as Error).message}`;
+    job.error = (jobErr as Error).message;
+  } finally {
+    releaseDownloadSlot();
+  }
+}
+
+/** The file a finished job left in the downloads folder, if it is still there. */
+function jobFileName(job: DownloadJob): string | null {
+  if (!job.downloadUrl) return null;
+  try { return new URL(job.downloadUrl, 'http://localhost').searchParams.get('name'); } catch { return null; }
+}
+
+/** Send a file from the downloads folder under the video's real title. Supports Range. */
+function sendDownloadedFile(req: IncomingMessage, res: ServerResponse, name: string): void {
+  const filePath = join(downloadsFolder(), name);
+  if (!existsSync(filePath)) return err(res, 'File not found', 404);
+  const ext = name.split('.').pop() || '';
+  const mimeType = ({ m4a: 'audio/mp4', webm: 'video/webm', mkv: 'video/x-matroska', opus: 'audio/ogg' } as Record<string, string>)[ext] || 'video/mp4';
+
+  // The file on disk has a safe, job-prefixed name; the caller gets the video's real title.
+  const job = Object.values(downloadJobs).find(j => jobFileName(j) === name);
+  const nice = (job?.title || name.replace(/^[a-z0-9]+_/, '')).replace(/[\\/:*?"<>|\r\n]/g, ' ').trim() || name;
+  const ascii = nice.replace(/[^\x20-\x7e]/g, '_').replace(/"/g, "'");
+  const { createReadStream, statSync } = require('fs');
+  const size: number = statSync(filePath).size;
+  const headers: Record<string, string> = {
+    'Content-Type': mimeType,
+    'Content-Disposition': `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(nice)}`,
+    'Accept-Ranges': 'bytes',
+    'Access-Control-Allow-Origin': '*',
+  };
+  // "bytes=START-" or "bytes=START-END": what an interrupted download asks for to continue.
+  const range = /^bytes=(\d+)-(\d*)$/.exec(String(req.headers['range'] || ''));
+  if (range) {
+    const start = Number(range[1]);
+    const end = range[2] ? Math.min(Number(range[2]), size - 1) : size - 1;
+    if (start >= size || start > end) {
+      res.writeHead(416, { 'Content-Range': `bytes */${size}` });
+      res.end();
+      return;
+    }
+    res.writeHead(206, { ...headers, 'Content-Range': `bytes ${start}-${end}/${size}`, 'Content-Length': String(end - start + 1) });
+    if (req.method === 'HEAD') { res.end(); return; }
+    createReadStream(filePath, { start, end }).pipe(res);
+    return;
+  }
+  res.writeHead(200, { ...headers, 'Content-Length': String(size) });
+  if (req.method === 'HEAD') { res.end(); return; }
+  createReadStream(filePath).pipe(res);
+}
+
+/** A job as the public API shows it. */
+function publicJob(job: DownloadJob, base: string) {
+  const ready = job.status === 'completed' && !!jobFileName(job);
+  return {
+    id: job.id,
+    status: job.status,
+    progress: job.progress,
+    message: job.message,
+    url: job.url,
+    title: job.title || null,
+    quality: job.label || job.qualityKey,
+    size: job.sizeBytes || null,
+    playlist: job.playlistId ? { id: job.playlistId, title: job.playlistTitle || null } : undefined,
+    error: job.error,
+    status_url: `${base}/api/ytp/jobs/${job.id}`,
+    file_url: ready ? `${base}/api/ytp/files/${job.id}` : null,
+    created_at: new Date(job.createdAt).toISOString(),
+    expires_at: new Date(job.createdAt + DOWNLOAD_KEEP_MS).toISOString(),
+  };
+}
+
+/**
+ * The job side of the downloader API (/api/ytp/jobs, /api/ytp/files, /api/ytp/docs). The other
+ * /api/ytp routes are forwarded to the Go service by ytp-proxy. Returns false for those.
+ */
+async function handleYtpJobs(req: IncomingMessage, res: ServerResponse, pathname: string): Promise<boolean> {
+  const method = req.method || 'GET';
+  const host = String(req.headers['x-forwarded-host'] || req.headers['host'] || 'localhost');
+  const proto = String(req.headers['x-forwarded-proto'] || (/^(localhost|127\.|\[::1\])/.test(host) ? 'http' : 'https')).split(',')[0];
+  const base = `${proto}://${host}`;
+  const query = new URL(req.url || '/', 'http://localhost').searchParams;
+
+  if (pathname === '/api/ytp/docs') {
+    const text = YTP_DOCS.replace(/\{\{BASE\}\}/g, base);
+    res.writeHead(200, { 'Content-Type': 'text/markdown; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+    res.end(text);
+    return true;
+  }
+
+  const file = /^\/api\/ytp\/files\/([a-z0-9]+)$/.exec(pathname);
+  if (file) {
+    const job = downloadJobs[file[1]];
+    const name = job && jobFileName(job);
+    if (!name) { err(res, job ? 'The file is not ready, or was removed' : 'No such job', 404); return true; }
+    sendDownloadedFile(req, res, name);
+    return true;
+  }
+
+  const one = /^\/api\/ytp\/jobs\/([a-z0-9]+)$/.exec(pathname);
+  if (one) {
+    const job = downloadJobs[one[1]];
+    if (!job) { err(res, 'No such job (jobs do not survive a restart, and are removed after three hours)', 404); return true; }
+    if (method === 'DELETE') {
+      if (job.status === 'pending' || job.status === 'downloading') { err(res, 'The job is still running', 409); return true; }
+      const name = jobFileName(job);
+      if (name) { try { require('fs').unlinkSync(join(downloadsFolder(), name)); } catch { /* already gone */ } }
+      delete downloadJobs[job.id];
+      json(res, { success: true });
+      return true;
+    }
+    json(res, publicJob(job, base));
+    return true;
+  }
+
+  if (pathname !== '/api/ytp/jobs') return false;
+
+  let body: Record<string, unknown> = {};
+  if (method === 'POST') body = await parseJsonBody(req);
+  const get = (name: string): string | undefined => {
+    const v = query.get(name) ?? body[name];
+    return v === undefined || v === null || v === '' ? undefined : String(v);
+  };
+  const target = get('url');
+
+  // Without a link: the list.
+  if (!target) {
+    if (method === 'POST') { err(res, 'url is required', 400); return true; }
+    cleanupOldJobs();
+    json(res, {
+      jobs: Object.values(downloadJobs).sort((a, b) => b.createdAt - a.createdAt).map(j => publicJob(j, base)),
+      storage: downloadStorage(),
+    });
+    return true;
+  }
+
+  const quality = qualityFromParams(get);
+  if ('error' in quality) { err(res, quality.error, 400); return true; }
+
+  // A playlist link (or playlist=1 on a link that has both a video and a list): one job per video.
+  const hasList = /[?&]list=/.test(target) || /^(PL|UU|LL|FL|OL|WL)[\w-]{10,}$/.test(target);
+  const hasVideo = /[?&]v=|youtu\.be\/|\/shorts\/|\/live\//.test(target);
+  if (hasList && (!hasVideo || get('playlist') === '1' || get('playlist') === 'true')) {
+    if (quality.key.startsWith('live:')) { err(res, 'A playlist cannot be recorded as a live stream', 400); return true; }
+    let list: { id: string; title: string; count: number; videos: { id: string; url: string; title: string; thumbnail: string }[] };
+    try {
+      list = await ytpJson(`/api/playlist?url=${encodeURIComponent(target)}`, 120_000);
+    } catch (e) { err(res, (e as Error).message, 502); return true; }
+    const limit = Math.min(Math.max(Number(get('limit')) || list.videos.length, 1), 500);
+    const start = Math.max(Number(get('start')) || 1, 1);
+    const chosen = list.videos.slice(start - 1, start - 1 + limit);
+    const jobs: DownloadJob[] = [];
+    for (const v of chosen) {
+      const started = startYoutubeJob(v.url, { ...quality }, { title: v.title, thumbnail: v.thumbnail, playlistId: list.id, playlistTitle: list.title });
+      if ('refused' in started) break;
+      jobs.push(started);
+    }
+    json(res, {
+      playlist: { id: list.id, title: list.title, count: list.count, queued: jobs.length },
+      jobs: jobs.map(j => publicJob(j, base)),
+    }, 202);
+    return true;
+  }
+
+  const started = startYoutubeJob(target, quality);
+  if ('refused' in started) { err(res, started.refused, 507); return true; }
+  json(res, publicJob(started, base), 202);
+  return true;
+}
+
 function cleanupOldJobs(): void {
   const now = Date.now();
-  // Finished files are kept for three hours so they can be saved from the downloads list.
-  const ONE_HOUR = 3 * 60 * 60 * 1000;
+  const ONE_HOUR = DOWNLOAD_KEEP_MS;
   const downloadsDir = join(__dirname, '..', '..', 'downloads');
 
   for (const [id, job] of Object.entries(downloadJobs)) {
@@ -773,6 +1105,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
   if (handleSiteAuditRequest(req, res)) return;
 
   // ── YouTube resolver and downloader (Go service) ─────────────────────────────
+  if (pathname.startsWith('/api/ytp/') && await handleYtpJobs(req, res, pathname)) return;
   if (handleYtpRequest(req, res)) return;
 
   // ── AI web extractor (NuExtract, installed on demand) ───────────────────────
@@ -1344,101 +1677,15 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
       const body = await parseJsonBody(req);
       const videoUrl = body['url'] as string;
       if (!videoUrl) return err(res, 'url is required', 400);
-      const quality = body['quality'] as YouTubeQualityOption | undefined;
-
-      cleanupOldJobs();
-
-      // Keep downloads inside their share of the disk: oldest files make way, and what cannot
-      // fit is refused before it starts.
-      const noRoom = makeRoomForDownload(Number(quality?.sizeBytes) || 0);
-      if (noRoom) return err(res, noRoom, 507);
-
-      const jobId = Math.random().toString(36).substring(2, 15);
-      const job: DownloadJob = {
-        id: jobId,
-        url: videoUrl,
-        qualityKey: quality?.key || 'default',
-        status: 'pending',
-        progress: 0,
-        message: 'Job initialized',
-        label: quality?.label,
+      const quality = (body['quality'] as YouTubeQualityOption | undefined) || {
+        key: '1080p', label: 'Video up to 1080p', sizeBytes: null, audioOnly: false, formatId: 'best[ext=mp4]/best',
+      };
+      const started = startYoutubeJob(videoUrl, quality, {
         title: typeof body['title'] === 'string' ? (body['title'] as string) : undefined,
         thumbnail: typeof body['thumbnail'] === 'string' ? (body['thumbnail'] as string) : undefined,
-        createdAt: Date.now(),
-      };
-      downloadJobs[jobId] = job;
-
-      // Start download in background
-      (async () => {
-        try {
-          job.status = 'downloading';
-          job.message = 'Starting download...';
-
-          const qOption = quality || {
-            key: 'audio-video',
-            label: '🎬 Audio + Video (Best Pre-merged)',
-            sizeBytes: null,
-            audioOnly: false,
-            formatId: 'best[ext=mp4]/best'
-          };
-
-          const downloadsDir = join(__dirname, '..', '..', 'downloads');
-          if (!existsSync(downloadsDir)) {
-            mkdirSync(downloadsDir, { recursive: true });
-          }
-
-          // First choice: the ytp service, straight into a file (no size limit from memory).
-          try {
-            const file = await downloadViaYtpToFile(videoUrl, qOption, downloadsDir, (pct, stage, speed) => {
-              job.progress = pct;
-              job.message = stage === 'recording' ? `Recording the live stream… ${pct}%`
-                : stage === 'merging' ? 'Joining video and audio…'
-                : stage === 'sending' ? 'Finishing…'
-                : `Downloading… ${pct}%${speed ? ` · ${(speed / 1e6).toFixed(1)} MB/s` : ''}`;
-            });
-            const safe = `${jobId}_${file.filename.replace(/[^a-zA-Z0-9_.-]/g, '_')}`;
-            const { renameSync, statSync } = require('fs');
-            renameSync(file.filePath, join(downloadsDir, safe));
-            job.sizeBytes = statSync(join(downloadsDir, safe)).size;
-            makeRoomForDownload(0);
-            job.status = 'completed';
-            job.progress = 100;
-            job.message = 'Download complete!';
-            job.title = file.filename;
-            job.downloadUrl = `/api/youtube/files?name=${encodeURIComponent(safe)}`;
-            return;
-          } catch (ytpErr) {
-            if (qOption.key.startsWith('live:')) throw ytpErr;
-            console.warn(`[Download Job ${jobId}] ytp failed (${(ytpErr as Error).message}), falling back to yt-dlp`);
-            job.message = 'Trying the fallback downloader…';
-          }
-
-          const result = await downloadYouTubeVideo(videoUrl, qOption, async (statusStr) => {
-            job.message = statusStr;
-            const pctMatch = statusStr.match(/(\d+)%/);
-            if (pctMatch) {
-              job.progress = parseInt(pctMatch[1], 10);
-            }
-          });
-
-          const safeFilename = `${jobId}_${result.filename.replace(/[^a-zA-Z0-9_.-]/g, '_')}`;
-          const filePath = join(downloadsDir, safeFilename);
-          writeFileSync(filePath, result.buffer);
-
-          job.status = 'completed';
-          job.progress = 100;
-          job.message = 'Download complete!';
-          job.title = result.filename;
-          job.downloadUrl = `/api/youtube/files?name=${encodeURIComponent(safeFilename)}`;
-        } catch (jobErr) {
-          console.error(`[Download Job ${jobId}] error:`, jobErr);
-          job.status = 'failed';
-          job.message = `Failed: ${(jobErr as Error).message}`;
-          job.error = (jobErr as Error).message;
-        }
-      })();
-
-      json(res, { jobId });
+      });
+      if ('refused' in started) return err(res, started.refused, 507);
+      json(res, { jobId: started.id });
     } catch (e) {
       err(res, (e as Error).message);
     }
@@ -1467,36 +1714,12 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
 
   // ── GET /api/youtube/files ─────────────────────────────────────────────────
   if (method === 'GET' && url.startsWith('/api/youtube/files')) {
-    const params = new URL(url, 'http://localhost').searchParams;
-    const name = params.get('name');
+    const name = new URL(url, 'http://localhost').searchParams.get('name');
     if (!name) return err(res, 'name is required', 400);
-
     if (name.includes('..') || name.includes('/') || name.includes('\\')) {
       return err(res, 'Invalid file name', 400);
     }
-
-    const downloadsDir = join(__dirname, '..', '..', 'downloads');
-    const filePath = join(downloadsDir, name);
-    if (!existsSync(filePath)) {
-      return err(res, 'File not found', 404);
-    }
-
-    const ext = name.split('.').pop() || '';
-    const mimeType = ({ m4a: 'audio/mp4', webm: 'video/webm', mkv: 'video/x-matroska', opus: 'audio/ogg' } as Record<string, string>)[ext] || 'video/mp4';
-
-    // The file on disk has a safe, job-prefixed name; the browser gets the video's real title.
-    const job = Object.values(downloadJobs).find(j => j.downloadUrl?.endsWith(`name=${encodeURIComponent(name)}`));
-    const nice = (job?.title || name.replace(/^[a-z0-9]+_/, '')).replace(/[\\/:*?"<>|\r\n]/g, ' ').trim() || name;
-    const ascii = nice.replace(/[^\x20-\x7e]/g, '_').replace(/"/g, "'");
-    const { createReadStream, statSync } = require('fs');
-    res.writeHead(200, {
-      'Content-Type': mimeType,
-      'Content-Length': String(statSync(filePath).size),
-      'Content-Disposition': `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(nice)}`,
-      'Access-Control-Allow-Origin': '*',
-    });
-
-    createReadStream(filePath).pipe(res);
+    sendDownloadedFile(req, res, name);
     return;
   }
 
