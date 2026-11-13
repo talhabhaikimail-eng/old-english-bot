@@ -1386,13 +1386,18 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
     const ext = name.split('.').pop() || '';
     const mimeType = ({ m4a: 'audio/mp4', webm: 'video/webm', mkv: 'video/x-matroska', opus: 'audio/ogg' } as Record<string, string>)[ext] || 'video/mp4';
 
+    // The file on disk has a safe, job-prefixed name; the browser gets the video's real title.
+    const job = Object.values(downloadJobs).find(j => j.downloadUrl?.endsWith(`name=${encodeURIComponent(name)}`));
+    const nice = (job?.title || name.replace(/^[a-z0-9]+_/, '')).replace(/[\\/:*?"<>|\r\n]/g, ' ').trim() || name;
+    const ascii = nice.replace(/[^\x20-\x7e]/g, '_').replace(/"/g, "'");
+    const { createReadStream, statSync } = require('fs');
     res.writeHead(200, {
       'Content-Type': mimeType,
-      'Content-Disposition': `attachment; filename="${encodeURIComponent(name.replace(/^\w+_/, ''))}"`,
+      'Content-Length': String(statSync(filePath).size),
+      'Content-Disposition': `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(nice)}`,
       'Access-Control-Allow-Origin': '*',
     });
 
-    const { createReadStream } = require('fs');
     createReadStream(filePath).pipe(res);
     return;
   }
