@@ -84,6 +84,38 @@ function CopyButton({ text, label = 'Copy' }: { text: string; label?: string }) 
   );
 }
 
+/** One download: what it is, how far it has got, and the file once it is ready. */
+function JobRow({ job, compact = false }: { job: YtJob; compact?: boolean }) {
+  const running = job.status === 'pending' || job.status === 'downloading';
+  return (
+    <div className={`flex gap-3 items-center ${compact ? '' : 'border border-border bg-card rounded-lg p-3'}`}>
+      {!compact && (job.thumbnail
+        ? <img src={job.thumbnail} alt="" className="w-24 aspect-video object-cover rounded-md border border-border bg-secondary flex-shrink-0" />
+        : <div className="w-24 aspect-video rounded-md border border-border bg-secondary flex-shrink-0" />)}
+      <div className="flex-1 min-w-0 space-y-1.5">
+        <div className="flex items-center gap-2">
+          <p className="text-sm font-medium text-foreground truncate flex-1">{compact ? (job.label || job.qualityKey) : (job.title || job.url)}</p>
+          {running && <span className="text-xs tabular-nums text-muted-foreground">{job.progress}%</span>}
+          <Badge variant={job.status === 'failed' ? 'destructive' : job.status === 'completed' ? 'default' : 'secondary'}>{job.status}</Badge>
+        </div>
+        <p className="text-xs text-muted-foreground truncate">
+          {compact ? '' : `${job.label || job.qualityKey} · `}{job.sizeBytes ? `${fmtSize(job.sizeBytes)} · ` : ''}{job.message}
+        </p>
+        {running && (
+          <div className="w-full bg-secondary h-1.5 rounded-full overflow-hidden">
+            <div className="h-full bg-primary rounded-full transition-all duration-300" style={{ width: `${Math.max(job.progress, 2)}%` }} />
+          </div>
+        )}
+      </div>
+      {job.status === 'completed' && job.downloadUrl && (
+        <a href={job.downloadUrl} download={job.title || 'download'}>
+          <Button size="sm"><Download /> Save</Button>
+        </a>
+      )}
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------- panel
 
 export default function YoutubePanel() {
@@ -186,9 +218,14 @@ export default function YoutubePanel() {
     setError(null);
     try {
       const title = info?.title || hint?.title;
-      const { jobId } = await api.ytStartJob(watchUrl, quality, title, info?.thumbnail || hint?.thumbnail);
+      const thumbnail = info?.thumbnail || hint?.thumbnail;
+      const { jobId } = await api.ytStartJob(watchUrl, quality, title, thumbnail);
       mine.current.add(jobId);
-      await refreshJobs();
+      setJobs(list => [{
+        id: jobId, url: watchUrl, qualityKey: quality.key, status: 'pending', progress: 0,
+        message: 'Starting…', label: quality.label, title, thumbnail, createdAt: Date.now(),
+      }, ...list.filter(j => j.id !== jobId)]);
+      refreshJobs();
     } catch (e) {
       setError((e as Error).message);
     }
@@ -248,6 +285,15 @@ export default function YoutubePanel() {
   const title = info?.title || hint?.title || '';
   const author = info?.author || hint?.author || '';
   const active = jobs.filter(j => j.status === 'pending' || j.status === 'downloading').length;
+  const here = jobs.filter(j => j.url === watchUrl);
+  /** The running download of this video in this quality, if there is one. */
+  const running = (key: string) => here.find(j => j.qualityKey === key && (j.status === 'pending' || j.status === 'downloading'));
+  const rowButton = (quality: YtQuality) => {
+    const job = running(quality.key);
+    return job
+      ? <Button size="sm" variant="outline" disabled className="tabular-nums"><Loader2 className="animate-spin" /> {job.progress}%</Button>
+      : <Button size="sm" variant="outline" onClick={() => start(quality)} title="Download"><Download /></Button>;
+  };
   const signedIn = !!health?.cookies;
 
   return (
@@ -355,6 +401,15 @@ export default function YoutubePanel() {
 
                 {/* Download options */}
                 <Card className="xl:col-span-2 border border-border bg-card p-4 space-y-4 self-start">
+                  {here.length > 0 && (
+                    <div className="space-y-3 border border-primary/30 bg-primary/5 rounded-md p-3">
+                      <div className="flex items-center justify-between">
+                        <CardTitle className="flex items-center gap-2"><Download className="size-4 text-muted-foreground" /> Downloads of this video</CardTitle>
+                        <button type="button" className="text-xs text-muted-foreground hover:text-foreground underline" onClick={() => setTab('downloads')}>All downloads</button>
+                      </div>
+                      {here.map(j => <JobRow key={j.id} job={j} compact />)}
+                    </div>
+                  )}
                   {loadingInfo && <p className="text-xs text-muted-foreground flex items-center gap-2"><Loader2 className="size-3.5 animate-spin" /> Reading the available qualities…</p>}
 
                   {info?.live && (
@@ -403,7 +458,7 @@ export default function YoutubePanel() {
                                 {name && <Badge variant="secondary">{name}</Badge>}
                                 <div className="flex-1 text-xs text-muted-foreground truncate">{codecName(v.codec)} · .{v.ext}</div>
                                 <div className="text-xs text-muted-foreground tabular-nums">{fmtSize(v.size)}</div>
-                                <Button size="sm" variant="outline" onClick={() => start(videoQuality(v.height, label, v.size))}><Download /></Button>
+                                {rowButton(videoQuality(v.height, label, v.size))}
                               </div>
                             );
                           })}
@@ -422,7 +477,7 @@ export default function YoutubePanel() {
                                   {a.kbps} kbps · {a.ext === 'webm' ? 'best quality, .webm' : 'plays everywhere'}
                                 </div>
                                 <div className="text-xs text-muted-foreground tabular-nums">{fmtSize(a.size)}</div>
-                                <Button size="sm" variant="outline" onClick={() => start(audioQuality(a.ext, label, a.size))}><Download /></Button>
+                                {rowButton(audioQuality(a.ext, label, a.size))}
                               </div>
                             );
                           })}
@@ -446,32 +501,7 @@ export default function YoutubePanel() {
               Nothing downloaded yet. Finished files stay here for three hours.
             </Card>
           )}
-          {jobs.map(j => (
-            <Card key={j.id} className="border border-border bg-card p-3 flex gap-3 items-center">
-              {j.thumbnail
-                ? <img src={j.thumbnail} alt="" className="w-24 aspect-video object-cover rounded-md border border-border bg-secondary flex-shrink-0" />
-                : <div className="w-24 aspect-video rounded-md border border-border bg-secondary flex-shrink-0" />}
-              <div className="flex-1 min-w-0 space-y-1.5">
-                <div className="flex items-center gap-2">
-                  <p className="text-sm font-medium text-foreground truncate flex-1">{j.title || j.url}</p>
-                  <Badge variant={j.status === 'failed' ? 'destructive' : j.status === 'completed' ? 'default' : 'secondary'}>{j.status}</Badge>
-                </div>
-                <p className="text-xs text-muted-foreground truncate">
-                  {j.label || j.qualityKey}{j.sizeBytes ? ` · ${fmtSize(j.sizeBytes)}` : ''} · {j.message}
-                </p>
-                {(j.status === 'pending' || j.status === 'downloading') && (
-                  <div className="w-full bg-secondary h-1.5 rounded-full overflow-hidden">
-                    <div className="h-full bg-primary rounded-full transition-all duration-300" style={{ width: `${j.progress}%` }} />
-                  </div>
-                )}
-              </div>
-              {j.status === 'completed' && j.downloadUrl && (
-                <a href={j.downloadUrl} download={j.title || 'download'}>
-                  <Button size="sm"><Download /> Save</Button>
-                </a>
-              )}
-            </Card>
-          ))}
+          {jobs.map(j => <JobRow key={j.id} job={j} />)}
         </TabsContent>
 
         {/* ------------------------------------------------ API access */}
