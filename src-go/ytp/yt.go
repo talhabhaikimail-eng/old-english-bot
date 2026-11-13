@@ -43,6 +43,11 @@ var clients = map[string]client{
 	"tv": {7, map[string]any{"clientName": "TVHTML5", "clientVersion": "5.20260707", "deviceMake": "Samsung", "deviceModel": "UKS9800",
 		"osName": "Tizen", "osVersion": "2.4.0"},
 		"Mozilla/5.0 (SMART-TV; Linux; Tizen 2.4.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/2.4.0 TV Safari/538.1", true, true},
+	// The mobile website, signed in. Since 2026-11-13 the tv client answers many videos with
+	// DRM-only formats (and 60 s previews with the ad flag); this one still hands out every format
+	// in full to a logged-in session.
+	"mweb": {2, map[string]any{"clientName": "MWEB", "clientVersion": "2.20251105.01.00"},
+		"Mozilla/5.0 (iPad; CPU OS 16_7_10 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1,gzip(gfe)", true, true},
 	"android_vr": {28, map[string]any{"clientName": "ANDROID_VR", "clientVersion": "1.65.10", "deviceMake": "Oculus", "deviceModel": "Quest 3",
 		"androidSdkVersion": 32, "osName": "Android", "osVersion": "12L"},
 		"com.google.android.apps.youtube.vr.oculus/1.65.10 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip", false, false},
@@ -607,6 +612,24 @@ func resolve(vid, cookie string, order []string) *Info { return resolveOpt(vid, 
 
 // resolveOpt is resolve with the preview check switchable (see extract).
 func resolveOpt(vid, cookie string, order []string, probe bool) *Info {
+	// With a session, the mobile-web client goes in ahead of tv wherever tv was asked for (see
+	// the note on it in `clients`); callers that name one client only keep their choice.
+	if cookie != "" && len(order) > 1 {
+		has := false
+		for _, cl := range order {
+			has = has || cl == "mweb"
+		}
+		if !has {
+			var with []string
+			for _, cl := range order {
+				if cl == "tv" {
+					with = append(with, "mweb")
+				}
+				with = append(with, cl)
+			}
+			order = with
+		}
+	}
 	var use []string
 	for _, cl := range order {
 		if cookie != "" || !clients[cl].cookies {

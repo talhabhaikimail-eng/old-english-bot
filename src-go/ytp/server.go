@@ -155,6 +155,7 @@ func newMux(cookies func() string) *http.ServeMux {
 	})
 	registerAPI(mux, cookies)
 	registerPlaylist(mux, cookies)
+	registerDebug(mux, cookies)
 	return mux
 }
 

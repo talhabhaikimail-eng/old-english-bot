@@ -618,7 +618,7 @@ async function handleYtpJobs(req: IncomingMessage, res: ServerResponse, pathname
     let list: { id: string; title: string; count: number; videos: { id: string; url: string; title: string; thumbnail: string }[] };
     try {
       list = await ytpJson(`/api/playlist?url=${encodeURIComponent(target)}`, 120_000);
-    } catch (e) { err(res, (e as Error).message, 502); return true; }
+    } catch (e) { err(res, (e as Error).message, 500); return true; }
     const limit = Math.min(Math.max(Number(get('limit')) || list.videos.length, 1), 500);
     const start = Math.max(Number(get('start')) || 1, 1);
     const chosen = list.videos.slice(start - 1, start - 1 + limit);

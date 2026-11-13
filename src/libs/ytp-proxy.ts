@@ -42,7 +42,7 @@ const PREFIX = '/api/ytp/';
 const target = () => new URL(process.env.YTP_URL || 'http://127.0.0.1:8084');
 
 /** What an access key may call. Keys and sign-in stay with the dashboard login. */
-const PUBLIC = /^\/api\/ytp\/(health|search|info|resolve|download|record|progress|playlist|docs|s\/[\w-]+|jobs|jobs\/[a-z0-9]+|files\/[a-z0-9]+)$/;
+const PUBLIC = /^\/api\/ytp\/(health|search|info|resolve|debug|download|record|progress|playlist|docs|s\/[\w-]+|jobs|jobs\/[a-z0-9]+|files\/[a-z0-9]+)$/;
 /** Of those, the ones a key may also POST to or DELETE. */
 const PUBLIC_WRITE = /^\/api\/ytp\/(jobs|jobs\/[a-z0-9]+)$/;
 
@@ -137,7 +137,7 @@ export function handleYtpRequest(req: IncomingMessage, res: ServerResponse): boo
     const limit = Math.min(Math.max(parseInt(url.searchParams.get('limit') || '20', 10) || 20, 1), 50);
     searchYouTube(q, limit)
       .then(results => send(res, 200, { results }))
-      .catch(e => send(res, 502, { error: (e as Error).message }));
+      .catch(e => send(res, 500, { error: (e as Error).message }));
     return true;
   }
 
@@ -152,7 +152,7 @@ export function handleYtpRequest(req: IncomingMessage, res: ServerResponse): boo
   // caller says otherwise.
   // Putting files on this machine is for the server's own jobs, never for a caller.
   url.searchParams.delete('save');
-  if (/^(info|resolve|download|record)$/.test(route) && !url.searchParams.has('cookie_first')) {
+  if (/^(info|resolve|debug|download|record)$/.test(route) && !url.searchParams.has('cookie_first')) {
     url.searchParams.set('cookie_first', '1');
   }
   url.searchParams.delete('key');
@@ -179,14 +179,17 @@ export function handleYtpRequest(req: IncomingMessage, res: ServerResponse): boo
       const v = up.headers[h];
       if (typeof v === 'string') out[h] = v;
     }
-    res.writeHead(up.statusCode || 502, out);
+    // Cloudflare swaps the body of a 502 or 504 for its own error page, which would hide the
+    // reason (for example "YouTube refused this video"): those go out as 500.
+    const status = up.statusCode || 500;
+    res.writeHead(status === 502 || status === 504 ? 500 : status, out);
     up.pipe(res);
   });
   upstream.on('timeout', () => upstream.destroy(new Error('ytp timed out')));
   upstream.on('error', e => {
     if (res.headersSent) { res.end(); return; }
     const offline = (e as NodeJS.ErrnoException).code === 'ECONNREFUSED';
-    send(res, offline ? 503 : 502, {
+    send(res, offline ? 503 : 500, {
       error: offline
         ? 'YouTube downloader service is not running (start src-go/ytp with `ytp serve -p 8084`)'
         : `YouTube downloader error: ${e.message}`,
