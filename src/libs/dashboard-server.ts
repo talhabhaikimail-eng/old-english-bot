@@ -37,7 +37,7 @@ import { startVSCode } from './vscode';
 import { startBrowser } from './browser';
 import { exportYouTubeCookies } from './browser';
 import { detectAndDownload } from './downloader';
-import { searchYouTube, getYouTubeInfo, downloadYouTubeVideo } from './youtube-dl';
+import { searchYouTube, getYouTubeInfo, downloadYouTubeVideo, downloadViaYtpToFile } from './youtube-dl';
 import { searchMovies } from './movie-search';
 import type { YouTubeQualityOption } from './youtube-dl';
 import { browserPool, searchViaPool, searchDuckViaPool, searchIndeedViaPool } from './browser-pool';
@@ -54,7 +54,7 @@ import { generateAndPostBlog, generateCommunityBlog } from './blog-generator-ser
 import { handlePortfolioRequest } from './portfolio-api';
 import { handleToolsRequest } from './tools';
 import { handleSiteAuditRequest } from './site-audit-proxy';
-import { handleYtpRequest } from './ytp-proxy';
+import { handleYtpRequest, ytpPublicAccess } from './ytp-proxy';
 import { handleExtractorRequest } from './extractor';
 import {
   listCourses,
@@ -183,6 +183,10 @@ export interface DownloadJob {
   downloadUrl?: string;
   error?: string;
   title?: string;
+  /** What was asked for, for the downloads list. */
+  label?: string;
+  thumbnail?: string;
+  sizeBytes?: number;
   createdAt: number;
 }
 
@@ -190,7 +194,8 @@ const downloadJobs: Record<string, DownloadJob> = {};
 
 function cleanupOldJobs(): void {
   const now = Date.now();
-  const ONE_HOUR = 60 * 60 * 1000;
+  // Finished files are kept for three hours so they can be saved from the downloads list.
+  const ONE_HOUR = 3 * 60 * 60 * 1000;
   const downloadsDir = join(__dirname, '..', '..', 'downloads');
 
   for (const [id, job] of Object.entries(downloadJobs)) {
@@ -602,7 +607,9 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
       !pathname.startsWith('/api/agent/') &&
       // proxy session URLs carry their own random capability token; only session creation needs dashboard auth
       !(pathname.startsWith('/api/web-proxy/') && pathname !== '/api/web-proxy/session') &&
-      !pathname.startsWith('/api/portfolio')) {
+      !pathname.startsWith('/api/portfolio') &&
+      // the public YouTube downloader API accepts a secret access key instead of the login
+      !(pathname.startsWith('/api/ytp/') && await ytpPublicAccess(req, pathname))) {
     if (!usernameEnv || !passwordEnv) {
       console.error('❌ Server authentication credentials not configured in environment (DASHBOARD_USERNAME/PASSWORD).');
       err(res, 'Server authentication not configured', 500);
@@ -1257,6 +1264,9 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
         status: 'pending',
         progress: 0,
         message: 'Job initialized',
+        label: quality?.label,
+        title: typeof body['title'] === 'string' ? (body['title'] as string) : undefined,
+        thumbnail: typeof body['thumbnail'] === 'string' ? (body['thumbnail'] as string) : undefined,
         createdAt: Date.now(),
       };
       downloadJobs[jobId] = job;
@@ -1275,6 +1285,36 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
             formatId: 'best[ext=mp4]/best'
           };
 
+          const downloadsDir = join(__dirname, '..', '..', 'downloads');
+          if (!existsSync(downloadsDir)) {
+            mkdirSync(downloadsDir, { recursive: true });
+          }
+
+          // First choice: the ytp service, straight into a file (no size limit from memory).
+          try {
+            const file = await downloadViaYtpToFile(videoUrl, qOption, downloadsDir, (pct, stage) => {
+              job.progress = pct;
+              job.message = stage === 'recording' ? `Recording the live stream… ${pct}%`
+                : stage === 'merging' ? 'Joining video and audio…'
+                : stage === 'sending' ? 'Finishing…'
+                : `Downloading… ${pct}%`;
+            });
+            const safe = `${jobId}_${file.filename.replace(/[^a-zA-Z0-9_.-]/g, '_')}`;
+            const { renameSync, statSync } = require('fs');
+            renameSync(file.filePath, join(downloadsDir, safe));
+            job.sizeBytes = statSync(join(downloadsDir, safe)).size;
+            job.status = 'completed';
+            job.progress = 100;
+            job.message = 'Download complete!';
+            job.title = file.filename;
+            job.downloadUrl = `/api/youtube/files?name=${encodeURIComponent(safe)}`;
+            return;
+          } catch (ytpErr) {
+            if (qOption.key.startsWith('live:')) throw ytpErr;
+            console.warn(`[Download Job ${jobId}] ytp failed (${(ytpErr as Error).message}), falling back to yt-dlp`);
+            job.message = 'Trying the fallback downloader…';
+          }
+
           const result = await downloadYouTubeVideo(videoUrl, qOption, async (statusStr) => {
             job.message = statusStr;
             const pctMatch = statusStr.match(/(\d+)%/);
@@ -1282,11 +1322,6 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
               job.progress = parseInt(pctMatch[1], 10);
             }
           });
-
-          const downloadsDir = join(__dirname, '..', '..', 'downloads');
-          if (!existsSync(downloadsDir)) {
-            mkdirSync(downloadsDir, { recursive: true });
-          }
 
           const safeFilename = `${jobId}_${result.filename.replace(/[^a-zA-Z0-9_.-]/g, '_')}`;
           const filePath = join(downloadsDir, safeFilename);
@@ -1309,6 +1344,13 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
     } catch (e) {
       err(res, (e as Error).message);
     }
+    return;
+  }
+
+  // ── GET /api/youtube/jobs ──────────────────────────────────────────────────
+  if (method === 'GET' && pathname === '/api/youtube/jobs') {
+    cleanupOldJobs();
+    json(res, { jobs: Object.values(downloadJobs).sort((a, b) => b.createdAt - a.createdAt) });
     return;
   }
 
@@ -1342,7 +1384,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
     }
 
     const ext = name.split('.').pop() || '';
-    const mimeType = ext === 'm4a' ? 'audio/mp4' : 'video/mp4';
+    const mimeType = ({ m4a: 'audio/mp4', webm: 'video/webm', mkv: 'video/x-matroska', opus: 'audio/ogg' } as Record<string, string>)[ext] || 'video/mp4';
 
     res.writeHead(200, {
       'Content-Type': mimeType,

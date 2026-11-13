@@ -1,25 +1,42 @@
 /**
  * @file ytp-proxy.ts
- * @description Forwards /api/ytp/* to the Go YouTube resolver and downloader (src-go/ytp,
- * started as `ytp serve`), which listens on loopback only. Dashboard authentication happens
- * in dashboard-server before requests reach here, so the Go service itself needs no auth.
+ * @description The YouTube downloader API: forwards /api/ytp/* to the Go resolver and downloader
+ * (src-go/ytp, started as `ytp serve`), which listens on loopback only.
  *
- *  /api/ytp/health                                   →  /health
- *  /api/ytp/resolve?url=…                            →  /api/resolve   (formats, timing)
- *  /api/ytp/download?url=…&height=720 | &audio=1 | &f=b|bv|ba|ITAG  →  /api/download
- *  /api/ytp/s/<key>?range=a-b                        →  /s/<key>       (byte-range proxy)
- *  POST /api/ytp/login/start   open the remote browser on Google's sign-in page, without a
- *                              DevTools port (Google refuses sign-in when there is one)
- *  POST /api/ytp/login         after signing in there: restart that browser with the port, export
- *                              its YouTube session with `ytp login --cdp`, and save it to R2
+ * Public API. These need either the dashboard login or a secret access key, sent as
+ * `Authorization: Bearer KEY`, `X-API-Key: KEY` or `?key=KEY`:
+ *
+ *  GET /api/ytp/health                               is the service up, does it have a session
+ *  GET /api/ytp/search?q=…&limit=20                  search YouTube
+ *  GET /api/ytp/info?url=…                           title, live, every quality with its size
+ *  GET /api/ytp/resolve?url=…                        raw formats and stream addresses
+ *  GET /api/ytp/download?url=…&height=2160           video up to that height, merged with audio
+ *  GET /api/ytp/download?url=…&audio=1[&ext=webm]    audio only (m4a, or Opus)
+ *  GET /api/ytp/download?url=…&f=b|bv|ba|ITAG        one specific format
+ *  GET /api/ytp/record?url=…&minutes=5&height=720    record a live stream from now
+ *  GET /api/ytp/progress?id=…                        progress of a download started with &id=…
+ *  GET /api/ytp/s/<key>?range=a-b                    byte-range proxy for /resolve's formats
+ *
+ * Dashboard only:
+ *
+ *  GET|POST|DELETE /api/ytp/keys     list, create ({name}) and delete (?id=) access keys
+ *  POST /api/ytp/login/start         open the remote browser on Google's sign-in page, without a
+ *                                    DevTools port (Google refuses sign-in when there is one)
+ *  POST /api/ytp/login               after signing in there: restart that browser with the port,
+ *                                    export its YouTube session with `ytp login --cdp`, save it to R2
  */
 
 import http from 'http';
 import type { IncomingMessage, ServerResponse } from 'http';
 import { exportYouTubeCookies, getYouTubeCookiesPath, startYouTubeSignIn } from './browser';
+import { createKey, deleteKey, listKeys, verifyKey } from './ytp-keys';
+import { searchYouTube } from './youtube-dl';
 
 const PREFIX = '/api/ytp/';
 const target = () => new URL(process.env.YTP_URL || 'http://127.0.0.1:8084');
+
+/** What an access key may call. Keys and sign-in stay with the dashboard login. */
+const PUBLIC = /^\/api\/ytp\/(health|search|info|resolve|download|record|progress|s\/[\w-]+)$/;
 
 /** Headers worth passing through in each direction (no cookies or dashboard credentials). */
 const REQ_HEADERS = ['accept', 'range', 'if-range'];
@@ -28,38 +45,89 @@ const RES_HEADERS = [
   'content-range', 'accept-ranges', 'last-modified', 'x-total-size',
 ];
 
+function send(res: ServerResponse, status: number, body: unknown): void {
+  res.writeHead(status, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+  res.end(JSON.stringify(body));
+}
+
+function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
+  return new Promise(resolve => {
+    const chunks: Buffer[] = [];
+    req.on('data', c => { if (chunks.length < 64) chunks.push(c); });
+    req.on('end', () => {
+      try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}')); } catch { resolve({}); }
+    });
+    req.on('error', () => resolve({}));
+  });
+}
+
+/**
+ * True when the request is for the public downloader API and carries a valid access key, in
+ * which case it does not need the dashboard login.
+ */
+export async function ytpPublicAccess(req: IncomingMessage, pathname: string): Promise<boolean> {
+  if (!PUBLIC.test(pathname) || (req.method !== 'GET' && req.method !== 'HEAD')) return false;
+  const auth = req.headers['authorization'];
+  const header = req.headers['x-api-key'];
+  let key = typeof header === 'string' ? header : '';
+  if (!key && typeof auth === 'string' && auth.startsWith('Bearer ')) key = auth.slice(7).trim();
+  if (!key) {
+    try { key = new URL(req.url || '/', 'http://localhost').searchParams.get('key') || ''; } catch { /* no key */ }
+  }
+  return verifyKey(key);
+}
+
 let cookiesWritten = false;
 
 export function handleYtpRequest(req: IncomingMessage, res: ServerResponse): boolean {
   const url = new URL(req.url || '/', 'http://localhost');
   if (!url.pathname.startsWith(PREFIX)) return false;
-  if (req.method === 'POST' && url.pathname === PREFIX + 'login/start') {
+  const route = url.pathname.slice(PREFIX.length);
+
+  // ── access keys ──────────────────────────────────────────────────────────────
+  if (route === 'keys') {
+    (async () => {
+      if (req.method === 'GET') return send(res, 200, { keys: await listKeys() });
+      if (req.method === 'POST') {
+        const body = await readJson(req);
+        return send(res, 200, { key: await createKey(String(body.name || '')) });
+      }
+      if (req.method === 'DELETE') {
+        const ok = await deleteKey(url.searchParams.get('id') || '');
+        return send(res, ok ? 200 : 404, ok ? { success: true } : { error: 'no such key' });
+      }
+      send(res, 405, { error: 'GET, POST or DELETE' });
+    })().catch(e => send(res, 500, { error: (e as Error).message }));
+    return true;
+  }
+
+  // ── sign-in ──────────────────────────────────────────────────────────────────
+  if (req.method === 'POST' && route === 'login/start') {
     startYouTubeSignIn()
-      .then(result => {
-        res.writeHead(result.error ? 500 : 200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(result));
-      })
-      .catch(e => {
-        res.writeHead(500, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: (e as Error).message }));
-      });
+      .then(result => send(res, result.error ? 500 : 200, result))
+      .catch(e => send(res, 500, { error: (e as Error).message }));
     return true;
   }
-  if (req.method === 'POST' && url.pathname === PREFIX + 'login') {
+  if (req.method === 'POST' && route === 'login') {
     exportYouTubeCookies('.youtube.com', true)
-      .then(result => {
-        res.writeHead(result.success ? 200 : 409, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ success: result.success, message: result.message }));
-      })
-      .catch(e => {
-        res.writeHead(500, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ success: false, message: (e as Error).message }));
-      });
+      .then(result => send(res, result.success ? 200 : 409, { success: result.success, message: result.message }))
+      .catch(e => send(res, 500, { success: false, message: (e as Error).message }));
     return true;
   }
+
   if (req.method !== 'GET' && req.method !== 'HEAD') {
-    res.writeHead(405, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'GET only' }));
+    send(res, 405, { error: 'GET only' });
+    return true;
+  }
+
+  // ── search (answered here, not by the Go service) ───────────────────────────
+  if (route === 'search') {
+    const q = url.searchParams.get('q') || '';
+    if (!q) { send(res, 400, { error: 'q is required' }); return true; }
+    const limit = Math.min(Math.max(parseInt(url.searchParams.get('limit') || '20', 10) || 20, 1), 50);
+    searchYouTube(q, limit)
+      .then(results => send(res, 200, { results }))
+      .catch(e => send(res, 502, { error: (e as Error).message }));
     return true;
   }
 
@@ -70,8 +138,15 @@ export function handleYtpRequest(req: IncomingMessage, res: ServerResponse): boo
     getYouTubeCookiesPath();
   }
 
-  const rest = url.pathname.slice(PREFIX.length);
-  const path = rest === 'health' ? '/health' : rest.startsWith('s/') ? '/' + rest : '/api/' + rest;
+  // The signed-in client is what works from a server address, so it goes first unless the
+  // caller says otherwise.
+  if (/^(info|resolve|download|record)$/.test(route) && !url.searchParams.has('cookie_first')) {
+    url.searchParams.set('cookie_first', '1');
+  }
+  url.searchParams.delete('key');
+  url.searchParams.delete('token');
+  const query = url.searchParams.toString();
+  const path = (route === 'health' ? '/health' : route.startsWith('s/') ? '/' + route : '/api/' + route) + (query ? '?' + query : '');
   const base = target();
   const headers: Record<string, string> = {};
   for (const h of REQ_HEADERS) {
@@ -82,12 +157,12 @@ export function handleYtpRequest(req: IncomingMessage, res: ServerResponse): boo
     hostname: base.hostname,
     port: base.port || 80,
     method: req.method,
-    path: path + url.search,
+    path,
     headers,
-    // A merged download says nothing until both streams are fetched and joined.
-    timeout: 900_000,
+    // A merged download or a recording says nothing until the file is ready.
+    timeout: 3 * 60 * 60_000,
   }, up => {
-    const out: Record<string, string> = {};
+    const out: Record<string, string> = { 'Access-Control-Allow-Origin': '*' };
     for (const h of RES_HEADERS) {
       const v = up.headers[h];
       if (typeof v === 'string') out[h] = v;
@@ -99,12 +174,11 @@ export function handleYtpRequest(req: IncomingMessage, res: ServerResponse): boo
   upstream.on('error', e => {
     if (res.headersSent) { res.end(); return; }
     const offline = (e as NodeJS.ErrnoException).code === 'ECONNREFUSED';
-    res.writeHead(offline ? 503 : 502, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({
+    send(res, offline ? 503 : 502, {
       error: offline
         ? 'YouTube downloader service is not running (start src-go/ytp with `ytp serve -p 8084`)'
         : `YouTube downloader error: ${e.message}`,
-    }));
+    });
   });
   // Stop the download when the caller goes away.
   res.on('close', () => upstream.destroy());

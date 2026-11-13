@@ -53,6 +53,16 @@ export interface GoSystemInfo {
   r2: { lastAttempt: string; lastSuccess: string; lastError?: string; pending: boolean };
 }
 
+async function getJson<T>(path: string): Promise<T> {
+  const res = await authFetch(`${BASE}${path}`);
+  const data = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+  if (!res.ok) {
+    const e = data as { error?: string; tried?: string[] };
+    throw new Error([e.error || `HTTP ${res.status}`, ...(e.tried || [])].join(' — '));
+  }
+  return data as T;
+}
+
 async function post<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     method: 'POST',
@@ -191,6 +201,14 @@ export interface YtDownloadJob {
   error?: string;
   title?: string;
 }
+export interface YtpVideoOption { height: number; fps: number; codec: string; ext: string; size: number; bitrate: number }
+export interface YtpAudioOption { ext: string; codec: string; kbps: number; size: number }
+export interface YtpInfo {
+  id: string; title: string; author: string; duration: number; live: boolean; client: string;
+  thumbnail: string; video: YtpVideoOption[]; audio: YtpAudioOption[];
+}
+export interface YtpApiKey { id: string; name: string; key: string; createdAt: string; lastUsedAt?: string; uses: number }
+export interface YtJob extends YtDownloadJob { label?: string; thumbnail?: string; sizeBytes?: number; createdAt?: number }
 export interface ReceivedEmail {
   id: string;
   from: { name?: string; address: string };
@@ -487,6 +505,19 @@ export const api = {
     postBinary('/api/youtube/download', { url, quality }),
   ytDownloadJob: (url: string, quality?: YtQuality) =>
     post<{ jobId: string }>('/api/youtube/download-job', { url, quality }),
+  ytSearchMany: (query: string, limit = 24) =>
+    post<{ results: YtSearchResult[] }>('/api/youtube/search', { query, limit }),
+  ytpHealth: () => getJson<{ ok: boolean; cookies: boolean }>('/api/ytp/health'),
+  ytpInfo: (url: string) => getJson<YtpInfo>(`/api/ytp/info?url=${encodeURIComponent(url)}`),
+  ytpKeys: () => getJson<{ keys: YtpApiKey[] }>('/api/ytp/keys'),
+  ytpCreateKey: (name: string) => post<{ key: YtpApiKey }>('/api/ytp/keys', { name }),
+  ytpDeleteKey: (id: string) =>
+    authFetch(`${BASE}/api/ytp/keys?id=${encodeURIComponent(id)}`, { method: 'DELETE' }).then(r => {
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    }),
+  ytStartJob: (url: string, quality: YtQuality, title?: string, thumbnail?: string) =>
+    post<{ jobId: string }>('/api/youtube/download-job', { url, quality, title, thumbnail }),
+  ytJobs: () => getJson<{ jobs: YtJob[] }>('/api/youtube/jobs'),
   ytJobStatus: (jobId: string) =>
     authFetch(`${BASE}/api/youtube/job-status?id=${encodeURIComponent(jobId)}`).then(r => {
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
