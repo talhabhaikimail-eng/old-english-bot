@@ -505,6 +505,8 @@ func sendMerged(w http.ResponseWriter, r *http.Request, info *Info, height int, 
 		sendJSON(w, 500, jmap{"error": err.Error()})
 		return
 	}
+	os.Remove(vPath)
+	os.Remove(aPath)
 	p.stage.Store("sending")
 	sendFile(w, r, out, name, ext)
 }
@@ -611,6 +613,8 @@ func sendRecording(w http.ResponseWriter, r *http.Request, info *Info, height in
 		sendJSON(w, 500, jmap{"error": err.Error()})
 		return
 	}
+	os.Remove(vPath)
+	os.Remove(aPath)
 	p.stage.Store("sending")
 	sendFile(w, r, out, name+" (live "+t0.UTC().Format("2006-01-02 15.04")+")", "mp4")
 }

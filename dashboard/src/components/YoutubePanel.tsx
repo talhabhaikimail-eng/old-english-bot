@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { api, YtSearchResult, YtQuality, YtJob, YtpInfo, YtpApiKey } from '../api';
+import { api, YtSearchResult, YtQuality, YtJob, YtStorage, YtpInfo, YtpApiKey } from '../api';
 import { Button } from '@/components/ui/button';
 import { Card, CardTitle, CardDescription } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -135,6 +135,7 @@ export default function YoutubePanel() {
 
   // Downloads.
   const [jobs, setJobs] = useState<YtJob[]>([]);
+  const [storage, setStorage] = useState<YtStorage | null>(null);
   const mine = useRef<Set<string>>(new Set());
   const saved = useRef<Set<string>>(new Set());
 
@@ -157,8 +158,9 @@ export default function YoutubePanel() {
 
   const refreshJobs = useCallback(async () => {
     try {
-      const { jobs: list } = await api.ytJobs();
+      const { jobs: list, storage: room } = await api.ytJobs();
       setJobs(list);
+      if (room) setStorage(room);
       // Save what this tab started as soon as it is ready, once.
       for (const j of list) {
         if (j.status === 'completed' && j.downloadUrl && mine.current.has(j.id) && !saved.current.has(j.id)) {
@@ -496,6 +498,18 @@ export default function YoutubePanel() {
 
         {/* ------------------------------------------------ Downloads */}
         <TabsContent value="downloads" className="space-y-2 mt-3">
+          {storage && storage.budget > 0 && (
+            <Card className="border border-border bg-card p-3 space-y-1.5">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-foreground font-medium">Storage for downloads</span>
+                <span className="text-muted-foreground tabular-nums">{fmtSize(storage.used) || '0 MB'} of {fmtSize(storage.budget)} used · {fmtSize(storage.free)} free on the disk</span>
+              </div>
+              <div className="w-full bg-secondary h-1.5 rounded-full overflow-hidden">
+                <div className="h-full bg-primary rounded-full" style={{ width: `${Math.min(100, (storage.used / storage.budget) * 100)}%` }} />
+              </div>
+              <p className="text-[11px] text-muted-foreground">Downloads may use half of the free disk space. When a new one needs room, the oldest files are deleted first.</p>
+            </Card>
+          )}
           {jobs.length === 0 && (
             <Card className="border border-dashed border-border bg-card p-8 text-center text-muted-foreground">
               Nothing downloaded yet. Finished files stay here for three hours.

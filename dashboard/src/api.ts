@@ -208,6 +208,7 @@ export interface YtpInfo {
   thumbnail: string; video: YtpVideoOption[]; audio: YtpAudioOption[];
 }
 export interface YtpApiKey { id: string; name: string; key: string; createdAt: string; lastUsedAt?: string; uses: number }
+export interface YtStorage { used: number; budget: number; free: number }
 export interface YtJob extends YtDownloadJob { label?: string; thumbnail?: string; sizeBytes?: number; createdAt?: number }
 export interface ReceivedEmail {
   id: string;
@@ -517,7 +518,7 @@ export const api = {
     }),
   ytStartJob: (url: string, quality: YtQuality, title?: string, thumbnail?: string) =>
     post<{ jobId: string }>('/api/youtube/download-job', { url, quality, title, thumbnail }),
-  ytJobs: () => getJson<{ jobs: YtJob[] }>('/api/youtube/jobs'),
+  ytJobs: () => getJson<{ jobs: YtJob[]; storage?: YtStorage }>('/api/youtube/jobs'),
   ytJobStatus: (jobId: string) =>
     authFetch(`${BASE}/api/youtube/job-status?id=${encodeURIComponent(jobId)}`).then(r => {
       if (!r.ok) throw new Error(`HTTP ${r.status}`);

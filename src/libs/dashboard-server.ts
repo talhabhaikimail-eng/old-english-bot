@@ -192,6 +192,98 @@ export interface DownloadJob {
 
 const downloadJobs: Record<string, DownloadJob> = {};
 
+// ── Storage for downloads ────────────────────────────────────────────────────
+// The machine's disk is shared with everything else the bridge does, so YouTube downloads may
+// use at most half of the space that is free (counting what they already hold). When a new
+// download needs room, the oldest finished files go first.
+
+const DOWNLOADS_SHARE = 0.5;
+
+interface DownloadStorage {
+  /** Bytes held by finished downloads and ones in progress. */
+  used: number;
+  /** Bytes downloads may hold in total. */
+  budget: number;
+  /** Bytes free on the disk right now. */
+  free: number;
+}
+
+function downloadsFolder(): string {
+  const dir = join(__dirname, '..', '..', 'downloads');
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+function downloadFiles(): { name: string; path: string; size: number; mtime: number }[] {
+  const { readdirSync, statSync } = require('fs');
+  const dir = downloadsFolder();
+  const out: { name: string; path: string; size: number; mtime: number }[] = [];
+  for (const name of readdirSync(dir) as string[]) {
+    try {
+      const st = statSync(join(dir, name));
+      if (st.isFile()) out.push({ name, path: join(dir, name), size: st.size, mtime: st.mtimeMs });
+    } catch { /* gone meanwhile */ }
+  }
+  return out;
+}
+
+function downloadStorage(): DownloadStorage {
+  const used = downloadFiles().reduce((n, f) => n + f.size, 0);
+  let free = 0;
+  try {
+    const { statfsSync } = require('fs');
+    const st = statfsSync(downloadsFolder());
+    free = Number(st.bavail) * Number(st.bsize);
+  } catch { /* unknown: no budget can be worked out, nothing is refused */ }
+  return { used, free, budget: Math.floor((free + used) * DOWNLOADS_SHARE) };
+}
+
+/** Forget a deleted file in the job that produced it, so the list no longer offers it. */
+function markFileRemoved(name: string): void {
+  for (const job of Object.values(downloadJobs)) {
+    if (job.downloadUrl?.endsWith(`name=${encodeURIComponent(name)}`)) {
+      job.downloadUrl = undefined;
+      job.message = 'Removed to make room for newer downloads';
+    }
+  }
+}
+
+/**
+ * Make room for `needed` more bytes inside the downloads budget by deleting the oldest finished
+ * files. Returns an error text when it cannot fit even after that.
+ */
+function makeRoomForDownload(needed: number): string | null {
+  const { unlinkSync } = require('fs');
+  let { used, budget, free } = downloadStorage();
+  if (free === 0 && budget === 0) return null;
+  const gb = (n: number) => `${(n / 2 ** 30).toFixed(1)} GB`;
+  if (needed > budget) {
+    return `This download (${gb(needed)}) is larger than the space reserved for downloads (${gb(budget)}). Pick a lower quality.`;
+  }
+  // Files still being written (.part) belong to running jobs and stay.
+  const oldest = downloadFiles().filter(f => !f.name.endsWith('.part')).sort((a, b) => a.mtime - b.mtime);
+  // While it is fetched and joined a merged download needs about twice its size on the disk.
+  while (oldest.length && (used + needed > budget || free < needed * 2.2)) {
+    const f = oldest.shift()!;
+    try {
+      unlinkSync(f.path);
+      used -= f.size;
+      free += f.size;
+      markFileRemoved(f.name);
+      console.log(`[Downloads] removed ${f.name} (${gb(f.size)}) to make room`);
+    } catch (e) {
+      console.warn(`[Downloads] could not remove ${f.name}:`, (e as Error).message);
+    }
+  }
+  if (used + needed > budget) {
+    return `Not enough room: other downloads still running hold ${gb(used)} of the ${gb(budget)} reserved. Try again when they finish.`;
+  }
+  if (free < needed * 2.2) {
+    return `Not enough free disk space for this download (${gb(needed)} needs about ${gb(needed * 2.2)} while it is put together, ${gb(free)} is free). Pick a lower quality.`;
+  }
+  return null;
+}
+
 function cleanupOldJobs(): void {
   const now = Date.now();
   // Finished files are kept for three hours so they can be saved from the downloads list.
@@ -1256,6 +1348,11 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
 
       cleanupOldJobs();
 
+      // Keep downloads inside their share of the disk: oldest files make way, and what cannot
+      // fit is refused before it starts.
+      const noRoom = makeRoomForDownload(Number(quality?.sizeBytes) || 0);
+      if (noRoom) return err(res, noRoom, 507);
+
       const jobId = Math.random().toString(36).substring(2, 15);
       const job: DownloadJob = {
         id: jobId,
@@ -1303,6 +1400,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
             const { renameSync, statSync } = require('fs');
             renameSync(file.filePath, join(downloadsDir, safe));
             job.sizeBytes = statSync(join(downloadsDir, safe)).size;
+            makeRoomForDownload(0);
             job.status = 'completed';
             job.progress = 100;
             job.message = 'Download complete!';
@@ -1350,7 +1448,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
   // ── GET /api/youtube/jobs ──────────────────────────────────────────────────
   if (method === 'GET' && pathname === '/api/youtube/jobs') {
     cleanupOldJobs();
-    json(res, { jobs: Object.values(downloadJobs).sort((a, b) => b.createdAt - a.createdAt) });
+    json(res, { jobs: Object.values(downloadJobs).sort((a, b) => b.createdAt - a.createdAt), storage: downloadStorage() });
     return;
   }
 
