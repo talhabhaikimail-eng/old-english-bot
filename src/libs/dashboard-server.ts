@@ -429,7 +429,7 @@ async function runYoutubeJob(job: DownloadJob, qOption: YouTubeQualityOption): P
         try { require('fs').unlinkSync(file.filePath); } catch { /* already gone */ }
         return;
       }
-      const safe = `${jobId}_${file.filename.replace(/[^a-zA-Z0-9_.-]/g, '_')}`;
+      const safe = `${jobId}_${file.filename.replace(/[^a-zA-Z0-9_.-]/g, '_').replace(/\.{2,}/g, '.')}`;
       const { renameSync, statSync } = require('fs');
       renameSync(file.filePath, join(downloadsDir, safe));
       job.sizeBytes = statSync(join(downloadsDir, safe)).size;
@@ -455,7 +455,7 @@ async function runYoutubeJob(job: DownloadJob, qOption: YouTubeQualityOption): P
       }
     });
 
-    const safeFilename = `${jobId}_${result.filename.replace(/[^a-zA-Z0-9_.-]/g, '_')}`;
+    const safeFilename = `${jobId}_${result.filename.replace(/[^a-zA-Z0-9_.-]/g, '_').replace(/\.{2,}/g, '.')}`;
     writeFileSync(join(downloadsDir, safeFilename), result.buffer);
     job.sizeBytes = result.buffer.length;
     job.status = 'completed';
@@ -1740,7 +1740,9 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
   if (method === 'GET' && url.startsWith('/api/youtube/files')) {
     const name = new URL(url, 'http://localhost').searchParams.get('name');
     if (!name) return err(res, 'name is required', 400);
-    if (name.includes('..') || name.includes('/') || name.includes('\\')) {
+    // One file name inside the downloads folder: no path parts. (Dots are fine: titles such as
+    // "Nvidia..." used to be refused here for containing "..".)
+    if (name === '.' || name === '..' || name.includes('/') || name.includes('\\') || name.includes('\0')) {
       return err(res, 'Invalid file name', 400);
     }
     sendDownloadedFile(req, res, name);

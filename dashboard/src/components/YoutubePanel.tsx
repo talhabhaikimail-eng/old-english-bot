@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import {
-  ArrowLeft, BookOpen, Check, Copy, Download, ExternalLink, Eye, EyeOff, KeyRound, ListVideo, Loader2, Music,
+  ArrowLeft, BookOpen, Check, Copy, Download, ExternalLink, Eye, EyeOff, HardDriveDownload, KeyRound, ListVideo, Loader2, Music,
   Radio, Search, ShieldCheck, ShieldAlert, Trash2, Video, X,
 } from 'lucide-react';
 
@@ -358,11 +358,25 @@ export default function YoutubePanel() {
   const here = jobs.filter(j => j.url === watchUrl);
   /** The running download of this video in this quality, if there is one. */
   const running = (key: string) => here.find(j => j.qualityKey === key && (j.status === 'pending' || j.status === 'downloading'));
+  /** The address that sends this quality straight to the browser, with nothing kept on the server. */
+  const directHref = (quality: YtQuality) => {
+    const what = quality.key === 'audio-opus' ? 'audio=1&ext=webm'
+      : quality.audioOnly ? 'audio=1'
+      : `height=${/^(\d+)p/.exec(quality.key)?.[1] || '1080'}`;
+    return `/api/ytp/download?url=${encodeURIComponent(watchUrl || '')}&${what}`;
+  };
   const rowButton = (quality: YtQuality) => {
     const job = running(quality.key);
-    return job
-      ? <Button size="sm" variant="outline" disabled className="tabular-nums"><Loader2 className="animate-spin" /> {job.progress}%</Button>
-      : <Button size="sm" variant="outline" onClick={() => start(quality)} title="Download"><Download /></Button>;
+    return (
+      <div className="flex items-center gap-1.5">
+        <a href={directHref(quality)} download title="Download now: streamed straight to this browser, nothing is kept on the server">
+          <Button size="sm"><Download /></Button>
+        </a>
+        {job
+          ? <Button size="sm" variant="outline" disabled className="tabular-nums"><Loader2 className="animate-spin" /> {job.progress}%</Button>
+          : <Button size="sm" variant="outline" onClick={() => start(quality)} title="Prepare on the server first: exact size, can be resumed, kept for three hours"><HardDriveDownload /></Button>}
+      </div>
+    );
   };
   const signedIn = !!health?.cookies;
 
@@ -612,6 +626,8 @@ export default function YoutubePanel() {
                         </div>
                       </div>
                       <p className="text-[11px] text-muted-foreground">
+                        <Download className="inline size-3" /> downloads now, streamed straight from YouTube through the server: nothing is stored there, but for video the browser cannot show the total size or resume.{' '}
+                        <HardDriveDownload className="inline size-3" /> prepares the file on the server first (exact size, resumable, kept three hours).
                         Up to 1080p comes as H.264 in .mp4. Above that YouTube only offers VP9 or AV1, so the file is .webm or .mkv.
                       </p>
                     </>

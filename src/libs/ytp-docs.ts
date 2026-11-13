@@ -22,9 +22,14 @@ A wrong or missing key gets \`401 {"error":"Unauthorized"}\`. Keys can be delete
 
 Errors always come back as JSON with an \`error\` field and a matching HTTP status.
 
-## The normal flow: download jobs
+## Two ways to download
 
-Large videos take a while to fetch and join, and the server's front door cuts off any request that says nothing for 100 seconds. So downloads run as **jobs**: start one, ask how it is doing, then fetch the finished file.
+- **Direct** (\`/api/ytp/download\`, further down): one link that streams the file. Nothing is stored, it starts at once, and it works after a restart. Best for a download button on a site.
+- **Jobs** (below): the server prepares the file first, then you fetch it. Exact size, resumable, a classic mp4, playlists and live recordings. The file is kept for three hours.
+
+## Download jobs
+
+A job runs in the background: start one, ask how it is doing, then fetch the finished file.
 
 ### 1. Start a job
 
@@ -223,13 +228,18 @@ Each \`video\` entry is what \`height=…\` would give you: \`size\` is the fini
 
 \`GET {{BASE}}/api/ytp/health\` → \`{"ok":true,"cookies":true}\`. \`cookies\` is whether the server has a signed-in YouTube session; without one YouTube refuses most requests from a server.
 
-## Direct downloads (small files only)
+## Direct downloads: one link, nothing stored
 
-\`GET {{BASE}}/api/ytp/download?url=LINK&…\` and \`GET {{BASE}}/api/ytp/record?url=LINK&minutes=…\` take the same options as a job and answer with the file itself, in one request.
+\`GET {{BASE}}/api/ytp/download?url=LINK&…\` takes the same options as a job (\`height\`, \`audio\`, \`ext\`, \`f\`) and answers with the file itself. The bytes go from YouTube through the server to the caller as they arrive: nothing is written to the server's disk, the first bytes arrive within seconds whatever the size, and the link keeps working after a server restart, because it holds only the video and the choice. This is the one to put behind a "Download" button.
 
-Sound-only and single-stream downloads start sending at once and are fine this way. A merged video (\`height=…\`) or a recording sends nothing until the whole file is ready; if that takes longer than **100 seconds** the request is cut off with error 524. Use a job for anything but short videos.
+| Request | What you get |
+|---|---|
+| \`audio=1\`, or \`f=…\` (one stream) | The exact size (\`Content-Length\`) and \`Range\` support: a browser shows the time left, and an interrupted download can be resumed, even days later. |
+| \`height=…\` (picture and sound joined) | Joined on the fly. The size is not known in advance (no \`Content-Length\`; \`X-Estimated-Size\` gives it to within a percent or so) and it cannot be resumed. \`.mp4\` comes "fragmented", which browsers, phones, VLC and editors read; a few old TVs and players do not. Need the exact size, resuming, or a classic mp4? Use a job. |
 
-Add \`&id=ANY_NAME\` to follow a direct download with \`GET {{BASE}}/api/ytp/progress?id=ANY_NAME\` → \`{"stage":"downloading","done":123,"total":456}\`.
+A direct download holds a connection for as long as the caller takes to receive it. Add \`&id=ANY_NAME\` to follow one with \`GET {{BASE}}/api/ytp/progress?id=ANY_NAME\` → \`{"stage":"downloading","done":123,"total":456}\`.
+
+Live streams cannot be sent this way: record them with a job (\`minutes=…\`). \`GET {{BASE}}/api/ytp/record?…\` exists but answers only when the recording is finished, which runs into the 100-second limit for anything but a minute or so.
 
 ## Good to know
 

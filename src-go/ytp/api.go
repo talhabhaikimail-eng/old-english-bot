@@ -8,10 +8,13 @@ package main
 //	                                         container and size, and the audio choices
 //	GET /api/download?url=URL&height=720     best video up to that height merged with the best
 //	                                         audio (needs ffmpeg on PATH); mp4, or webm/mkv when the
-//	                                         height only exists as VP9
+//	                                         height only exists as VP9. Sent as it is fetched and
+//	                                         joined: nothing is stored, mp4 is fragmented, and the
+//	                                         size is not known in advance
 //	GET /api/download?url=URL&audio=1        best audio only, as m4a when there is one (plays
 //	                                         everywhere); ext=webm asks for Opus instead
-//	GET /api/download?url=URL&f=b|bv|ba|ITAG one format, streamed as it is fetched
+//	GET /api/download?url=URL&f=b|bv|ba|ITAG one format, streamed as it is fetched; like audio=1 it
+//	                                         has its size and honours Range (resumable)
 //	GET /api/record?url=URL&minutes=5&height=720   a live stream, recorded from now for that long
 //	GET /api/progress?id=ID                  how far a download or recording that was started with
 //	                                         &id=ID has got: {"stage","done","total"}
@@ -148,7 +151,11 @@ func registerAPI(mux *http.ServeMux, cookies func() string) {
 				sendJSON(w, 400, jmap{"error": "height must be a number, for example 720"})
 				return
 			}
-			sendMerged(w, r, info, height, name, p)
+			if q.Get("save") != "" {
+				sendMerged(w, r, info, height, name, p)
+			} else {
+				streamMerged(w, r, info, height, name, p)
+			}
 			return
 		}
 		sel := q.Get("f")
@@ -459,10 +466,19 @@ func lengthOf(f Format) (int64, error) {
 // whole download) and handed over in order. YTP_PARALLEL sets how many, 8 by default; that many
 // pieces are held in memory at most.
 func pieces(f Format, size int64, alive func() bool, use func([]byte) error) error {
+	return piecesFrom(f, 0, size, 0, alive, use)
+}
+
+// piecesFrom is pieces for the bytes from..size-1, `parallel` at a time (0: the default). A
+// download that goes straight on to a viewer uses few: the viewer's line is the limit there,
+// and each piece under way is 10 MiB of memory.
+func piecesFrom(f Format, from, size int64, parallel int, alive func() bool, use func([]byte) error) error {
 	const chunk = 10 << 20
-	parallel := 8
-	if n, err := strconv.Atoi(os.Getenv("YTP_PARALLEL")); err == nil && n >= 1 && n <= 32 {
-		parallel = n
+	if parallel <= 0 {
+		parallel = 8
+		if n, err := strconv.Atoi(os.Getenv("YTP_PARALLEL")); err == nil && n >= 1 && n <= 32 {
+			parallel = n
+		}
 	}
 	ua := clients[f.Client].ua
 	all := mirrors(f.URL)
@@ -501,7 +517,7 @@ func pieces(f Format, size int64, alive func() bool, use func([]byte) error) err
 	queue := make(chan chan result, parallel)
 	go func() {
 		defer close(queue)
-		for pos := int64(0); pos < size && !stopped.Load(); pos += chunk {
+		for pos := from; pos < size && !stopped.Load(); pos += chunk {
 			ch := make(chan result, 1)
 			queue <- ch
 			go func(pos, end int64) {
@@ -564,7 +580,131 @@ func deliver(w http.ResponseWriter, r *http.Request, path, name, ext, mime strin
 	sendJSON(w, 200, jmap{"saved": dest, "filename": name + "." + ext, "type": mime, "size": size})
 }
 
-// sendFormat streams one format as it is fetched (or saves it, with &save=DIR).
+// streamMerged sends a video with its sound straight on to the caller: ffmpeg joins the two
+// streams as they arrive from YouTube and writes to the response. Nothing touches the disk and
+// the first bytes go out within seconds, however large the video is.
+//
+// A file written this way cannot have its index put at the front, so mp4 is sent "fragmented"
+// (the index is spread through the file), which players and browsers read. The total size is
+// not known in advance, so there is no Content-Length and no resuming: for those, use a job.
+func streamMerged(w http.ResponseWriter, r *http.Request, info *Info, height int, name string, p *progress) {
+	ffmpeg, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		sendJSON(w, 501, jmap{"error": "merging needs ffmpeg on PATH; ask for f=bv and f=ba separately instead"})
+		return
+	}
+	video, audio, ext, err := chooseMerged(info, height)
+	if err != nil {
+		sendJSON(w, 404, jmap{"error": err.Error()})
+		return
+	}
+	vSize, err := lengthOf(video)
+	if err != nil {
+		sendJSON(w, 502, jmap{"error": err.Error()})
+		return
+	}
+	aSize, err := lengthOf(audio)
+	if err != nil {
+		sendJSON(w, 502, jmap{"error": err.Error()})
+		return
+	}
+	inputs, _, forget, err := openFeeds(r, video, audio, vSize, aSize, 2, p)
+	if err != nil {
+		sendJSON(w, 500, jmap{"error": err.Error()})
+		return
+	}
+	defer forget()
+	p.total.Store(vSize + aSize)
+	p.stage.Store("downloading")
+	args := []string{"-y", "-loglevel", "error"}
+	args = append(args, inputs...)
+	args = append(args, "-map", "0:v:0", "-map", "1:a:0", "-c", "copy")
+	switch ext {
+	case "mp4":
+		args = append(args, "-movflags", "frag_keyframe+empty_moov+default_base_moof", "-f", "mp4")
+	case "webm":
+		args = append(args, "-f", "webm")
+	default:
+		args = append(args, "-f", "matroska")
+	}
+	cmd := exec.CommandContext(r.Context(), ffmpeg, append(args, "pipe:1")...)
+	out, err := cmd.StdoutPipe()
+	if err != nil {
+		sendJSON(w, 500, jmap{"error": err.Error()})
+		return
+	}
+	var complaints strings.Builder
+	cmd.Stderr = &complaints
+	if err := cmd.Start(); err != nil {
+		sendJSON(w, 500, jmap{"error": "ffmpeg: " + err.Error()})
+		return
+	}
+	mime := map[string]string{"mp4": "video/mp4", "webm": "video/webm", "mkv": "video/x-matroska"}[ext]
+	buf := make([]byte, 256<<10)
+	started := false
+	for {
+		n, rerr := out.Read(buf)
+		if n > 0 {
+			if !started {
+				attachment(w, name, ext, mime)
+				// For progress bars: about how large the file will be (the two streams together).
+				w.Header().Set("X-Estimated-Size", strconv.FormatInt(vSize+aSize, 10))
+				w.WriteHeader(200)
+				started = true
+			}
+			if _, werr := w.Write(buf[:n]); werr != nil {
+				cmd.Process.Kill()
+				break
+			}
+		}
+		if rerr != nil {
+			break
+		}
+	}
+	err = cmd.Wait()
+	if !started {
+		why := strings.TrimSpace(complaints.String())
+		if why == "" && err != nil {
+			why = err.Error()
+		}
+		sendJSON(w, 502, jmap{"error": "ffmpeg: " + why})
+		return
+	}
+	if err != nil && r.Context().Err() == nil {
+		// Headers are gone: all that can be done is to end the answer short and say why in the log.
+		fmt.Fprintf(os.Stderr, "stream of %s stopped early: %s\n", name, strings.TrimSpace(complaints.String()))
+		if hj, ok := w.(http.Hijacker); ok {
+			if conn, _, herr := hj.Hijack(); herr == nil {
+				conn.Close() // an unfinished answer, so the caller does not take the file for complete
+			}
+		}
+	}
+}
+
+// byteRange reads a Range header ("bytes=START-" or "bytes=START-END") against a size. ok is
+// false when there is none or it is not of that shape.
+func byteRange(h string, size int64) (start, end int64, ok bool) {
+	spec, found := strings.CutPrefix(h, "bytes=")
+	if !found || strings.Contains(spec, ",") {
+		return 0, 0, false
+	}
+	a, b, _ := strings.Cut(spec, "-")
+	start, err := strconv.ParseInt(a, 10, 64)
+	if err != nil || start < 0 {
+		return 0, 0, false
+	}
+	end = size - 1
+	if b != "" {
+		if e, err := strconv.ParseInt(b, 10, 64); err == nil && e < end {
+			end = e
+		}
+	}
+	return start, end, true
+}
+
+// sendFormat streams one format as it is fetched (or saves it, with &save=DIR). The stream has
+// its real size and honours Range, so a download can be resumed, at any later time: the link
+// holds only the video and the choice, and the bytes are asked from YouTube afresh.
 func sendFormat(w http.ResponseWriter, r *http.Request, f Format, name string, p *progress) {
 	size, err := lengthOf(f)
 	if err != nil {
@@ -589,12 +729,28 @@ func sendFormat(w http.ResponseWriter, r *http.Request, f Format, name string, p
 		deliver(w, r, path, name, f.Ext, mimeOf(f))
 		return
 	}
+	from, to, ranged := byteRange(r.Header.Get("Range"), size)
+	if ranged && (from >= size || from > to) {
+		w.Header().Set("Content-Range", "bytes */"+strconv.FormatInt(size, 10))
+		w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
+		return
+	}
+	if !ranged {
+		from, to = 0, size-1
+	}
+	left := to - from + 1
 	started := false
-	err = pieces(f, size, alive, func(data []byte) error {
+	err = piecesFrom(f, from, to+1, 3, alive, func(data []byte) error {
 		if !started {
 			attachment(w, name, f.Ext, mimeOf(f))
-			w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
-			w.WriteHeader(200)
+			w.Header().Set("Accept-Ranges", "bytes")
+			w.Header().Set("Content-Length", strconv.FormatInt(left, 10))
+			if ranged {
+				w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", from, to, size))
+				w.WriteHeader(http.StatusPartialContent)
+			} else {
+				w.WriteHeader(200)
+			}
 			started = true
 		}
 		_, err := w.Write(data)
@@ -639,11 +795,12 @@ func join(r *http.Request, ffmpeg string, inputs []string, out string) error {
 // (/internal/feed/TOKEN) while the pieces arrive from YouTube, so a merged download is joined
 // as it is fetched instead of being written to disk first and copied again.
 type feed struct {
-	f     Format
-	size  int64
-	alive func() bool
-	p     *progress
-	done  chan error
+	f        Format
+	size     int64
+	parallel int
+	alive    func() bool
+	p        *progress
+	done     chan error
 }
 
 var (
@@ -664,7 +821,7 @@ func registerFeeds(mux *http.ServeMux) {
 		}
 		w.Header().Set("Content-Type", mimeOf(fd.f))
 		w.Header().Set("Content-Length", strconv.FormatInt(fd.size, 10))
-		fd.done <- pieces(fd.f, fd.size, func() bool { return fd.alive() && r.Context().Err() == nil }, func(data []byte) error {
+		fd.done <- piecesFrom(fd.f, 0, fd.size, fd.parallel, func() bool { return fd.alive() && r.Context().Err() == nil }, func(data []byte) error {
 			_, err := w.Write(data)
 			fd.p.done.Add(int64(len(data)))
 			return err
@@ -674,33 +831,46 @@ func registerFeeds(mux *http.ServeMux) {
 
 // joinWhileFetching feeds both streams to ffmpeg as they download. An error means nothing
 // usable was written.
-func joinWhileFetching(r *http.Request, ffmpeg string, video, audio Format, vSize, aSize int64, out string, p *progress) error {
+// openFeeds makes a video and an audio stream readable by ffmpeg from this server and returns
+// the ffmpeg input arguments, the feeds, and a function that forgets them.
+func openFeeds(r *http.Request, video, audio Format, vSize, aSize int64, parallel int, p *progress) ([]string, []*feed, func(), error) {
 	local, _ := r.Context().Value(http.LocalAddrContextKey).(net.Addr)
 	if local == nil {
-		return errors.New("this server's own address is unknown")
+		return nil, nil, nil, errors.New("this server's own address is unknown")
 	}
 	alive := func() bool { return r.Context().Err() == nil }
-	var inputs []string
+	var inputs, keys []string
 	var fds []*feed
 	for _, in := range []struct {
 		f    Format
 		size int64
 	}{{video, vSize}, {audio, aSize}} {
-		fd := &feed{f: in.f, size: in.size, alive: alive, p: p, done: make(chan error, 1)}
+		fd := &feed{f: in.f, size: in.size, parallel: parallel, alive: alive, p: p, done: make(chan error, 1)}
 		key := token()
 		feedsMu.Lock()
 		feeds[key] = fd
 		feedsMu.Unlock()
-		defer func() {
-			feedsMu.Lock()
-			delete(feeds, key)
-			feedsMu.Unlock()
-		}()
+		keys = append(keys, key)
 		fds = append(fds, fd)
 		// Not seekable: ffmpeg reads straight through, which YouTube's files allow (their index is
 		// at the front).
 		inputs = append(inputs, "-seekable", "0", "-i", "http://"+local.String()+"/internal/feed/"+key)
 	}
+	return inputs, fds, func() {
+		feedsMu.Lock()
+		for _, k := range keys {
+			delete(feeds, k)
+		}
+		feedsMu.Unlock()
+	}, nil
+}
+
+func joinWhileFetching(r *http.Request, ffmpeg string, video, audio Format, vSize, aSize int64, out string, p *progress) error {
+	inputs, fds, forget, err := openFeeds(r, video, audio, vSize, aSize, 0, p)
+	if err != nil {
+		return err
+	}
+	defer forget()
 	if err := join(r, ffmpeg, inputs, out); err != nil {
 		return err
 	}
