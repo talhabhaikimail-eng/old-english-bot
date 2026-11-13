@@ -1389,12 +1389,12 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
 
           // First choice: the ytp service, straight into a file (no size limit from memory).
           try {
-            const file = await downloadViaYtpToFile(videoUrl, qOption, downloadsDir, (pct, stage) => {
+            const file = await downloadViaYtpToFile(videoUrl, qOption, downloadsDir, (pct, stage, speed) => {
               job.progress = pct;
               job.message = stage === 'recording' ? `Recording the live stream… ${pct}%`
                 : stage === 'merging' ? 'Joining video and audio…'
                 : stage === 'sending' ? 'Finishing…'
-                : `Downloading… ${pct}%`;
+                : `Downloading… ${pct}%${speed ? ` · ${(speed / 1e6).toFixed(1)} MB/s` : ''}`;
             });
             const safe = `${jobId}_${file.filename.replace(/[^a-zA-Z0-9_.-]/g, '_')}`;
             const { renameSync, statSync } = require('fs');

@@ -359,37 +359,77 @@ func lengthOf(f Format) (int64, error) {
 
 // pieces fetches a format in 10 MiB range requests, moving to a mirror node when one fails, and
 // hands each piece to `use`. `alive` says whether anyone still wants it.
+//
+// Several pieces are fetched at once (YouTube limits the speed of one connection, not of the
+// whole download) and handed over in order. YTP_PARALLEL sets how many, 8 by default; that many
+// pieces are held in memory at most.
 func pieces(f Format, size int64, alive func() bool, use func([]byte) error) error {
 	const chunk = 10 << 20
+	parallel := 8
+	if n, err := strconv.Atoi(os.Getenv("YTP_PARALLEL")); err == nil && n >= 1 && n <= 32 {
+		parallel = n
+	}
 	ua := clients[f.Client].ua
-	urls := mirrors(f.URL)
-	for pos := int64(0); pos < size; {
-		if !alive() {
-			return errors.New("cancelled")
-		}
-		end := min(pos+chunk, size) - 1
-		var data []byte
-		var err error
-		for attempt := 0; ; attempt++ {
-			data, err = fetch("GET", fmt.Sprintf("%s&range=%d-%d", urls[0], pos, end), nil, map[string]string{"User-Agent": ua}, 20*time.Second)
+	all := mirrors(f.URL)
+	var stopped atomic.Bool
+	// One piece, complete: a short answer is continued from where it stopped.
+	one := func(pos, end int64) ([]byte, error) {
+		urls := append([]string(nil), all...)
+		buf := make([]byte, 0, end-pos+1)
+		for attempt := 0; pos <= end; {
+			if stopped.Load() || !alive() {
+				return nil, errors.New("cancelled")
+			}
+			data, err := fetch("GET", fmt.Sprintf("%s&range=%d-%d", urls[0], pos, end), nil, map[string]string{"User-Agent": ua}, 30*time.Second)
+			if err == nil && len(data) > 0 {
+				buf = append(buf, data...)
+				pos += int64(len(data))
+				continue
+			}
 			if err == nil {
-				break
+				err = errors.New("the server sent nothing")
 			}
 			var he *httpError
-			if errors.As(err, &he) && he.code == 403 || attempt == 2*len(urls)-1 {
-				return err
+			if errors.As(err, &he) && he.code == 403 || attempt >= 2*len(urls)+1 {
+				return nil, err
 			}
-			urls = append(urls[1:], urls[0])
+			attempt++
+			urls = append(urls[1:], urls[0]) // node unreachable or timed out: the next mirror
 		}
-		if len(data) == 0 {
-			return errors.New("the server sent nothing")
-		}
-		if err := use(data); err != nil {
-			return err
-		}
-		pos += int64(len(data))
+		return buf, nil
 	}
-	return nil
+	type result struct {
+		data []byte
+		err  error
+	}
+	// The queue keeps the pieces in order and its size is how many may be under way.
+	queue := make(chan chan result, parallel)
+	go func() {
+		defer close(queue)
+		for pos := int64(0); pos < size && !stopped.Load(); pos += chunk {
+			ch := make(chan result, 1)
+			queue <- ch
+			go func(pos, end int64) {
+				data, err := one(pos, end)
+				ch <- result{data, err}
+			}(pos, min(pos+chunk, size)-1)
+		}
+	}()
+	var failed error
+	for ch := range queue {
+		r := <-ch
+		if failed != nil {
+			continue // let what was started finish and be dropped
+		}
+		if r.err == nil {
+			r.err = use(r.data)
+		}
+		if r.err != nil {
+			failed = r.err
+			stopped.Store(true)
+		}
+	}
+	return failed
 }
 
 // sendFormat streams one format as it is fetched.

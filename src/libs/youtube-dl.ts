@@ -257,7 +257,7 @@ export function downloadViaYtpToFile(
   url: string,
   quality: YouTubeQualityOption,
   dir: string,
-  onProgress?: (percent: number, stage: string) => void,
+  onProgress?: (percent: number, stage: string, bytesPerSecond?: number) => void,
 ): Promise<YtpFile> {
   const base = process.env.YTP_URL || 'http://127.0.0.1:8084';
   const id = Math.random().toString(36).slice(2, 12);
@@ -266,6 +266,8 @@ export function downloadViaYtpToFile(
   return new Promise((resolve, reject) => {
     // While the service fetches and joins the streams it sends nothing; it reports how far
     // it has got separately.
+    let last = { done: 0, at: Date.now() };
+    let speed = 0;
     const poll = setInterval(() => {
       http.get(`${base}/api/progress?id=${id}`, r => {
         const chunks: Buffer[] = [];
@@ -273,7 +275,13 @@ export function downloadViaYtpToFile(
         r.on('end', () => {
           try {
             const p = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-            if (p.stage && p.total > 0) onProgress?.(Math.min(99, Math.floor((p.done / p.total) * 100)), String(p.stage));
+            if (p.stage === 'downloading' && p.done >= last.done) {
+              const now = Date.now();
+              const fresh = ((p.done - last.done) * 1000) / Math.max(now - last.at, 1);
+              speed = speed ? speed * 0.6 + fresh * 0.4 : fresh;
+              last = { done: p.done, at: now };
+            }
+            if (p.stage && p.total > 0) onProgress?.(Math.min(99, Math.floor((p.done / p.total) * 100)), String(p.stage), speed);
             else if (p.stage) onProgress?.(0, String(p.stage));
           } catch { /* not started yet */ }
         });
