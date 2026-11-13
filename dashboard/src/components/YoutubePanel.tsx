@@ -8,7 +8,7 @@ import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import {
   ArrowLeft, BookOpen, Check, Copy, Download, ExternalLink, Eye, EyeOff, KeyRound, ListVideo, Loader2, Music,
-  Radio, Search, ShieldCheck, ShieldAlert, Trash2, Video,
+  Radio, Search, ShieldCheck, ShieldAlert, Trash2, Video, X,
 } from 'lucide-react';
 
 // ---------------------------------------------------------------- helpers
@@ -87,7 +87,7 @@ function CopyButton({ text, label = 'Copy' }: { text: string; label?: string }) 
 }
 
 /** One download: what it is, how far it has got, and the file once it is ready. */
-function JobRow({ job, compact = false }: { job: YtJob; compact?: boolean }) {
+function JobRow({ job, compact = false, onRemove }: { job: YtJob; compact?: boolean; onRemove?: (job: YtJob) => void }) {
   const running = job.status === 'pending' || job.status === 'downloading';
   return (
     <div className={`flex gap-3 items-center ${compact ? '' : 'border border-border bg-card rounded-lg p-3'}`}>
@@ -114,6 +114,9 @@ function JobRow({ job, compact = false }: { job: YtJob; compact?: boolean }) {
           <Button size="sm"><Download /> Save</Button>
         </a>
       )}
+      {onRemove && (running
+        ? <Button size="sm" variant="outline" onClick={() => onRemove(job)} title="Cancel this download" className="text-destructive"><X /> Cancel</Button>
+        : <Button size="sm" variant="ghost" onClick={() => onRemove(job)} title="Remove from the list and delete the file" className="text-muted-foreground"><Trash2 /></Button>)}
     </div>
   );
 }
@@ -271,6 +274,31 @@ export default function YoutubePanel() {
     } catch (e) {
       setError((e as Error).message);
     }
+  };
+
+  /** Cancel a running download, or remove a finished one and its file. */
+  const removeJob = async (job: YtJob) => {
+    try {
+      await api.ytRemoveJob(job.id);
+      await refreshJobs();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+
+  const cancelAll = async () => {
+    const waiting = jobs.filter(j => j.status === 'pending' || j.status === 'downloading');
+    // Those still waiting first, so none of them starts when a running one stops.
+    waiting.sort((a, b) => (a.status === 'pending' ? 0 : 1) - (b.status === 'pending' ? 0 : 1));
+    for (const j of waiting) { try { await api.ytRemoveJob(j.id); } catch { /* the list shows what is left */ } }
+    await refreshJobs();
+  };
+
+  const clearFinished = async () => {
+    for (const j of jobs.filter(x => x.status !== 'pending' && x.status !== 'downloading')) {
+      try { await api.ytRemoveJob(j.id); } catch { /* the list shows what is left */ }
+    }
+    await refreshJobs();
   };
 
   // ---- session
@@ -507,7 +535,7 @@ export default function YoutubePanel() {
                         <CardTitle className="flex items-center gap-2"><Download className="size-4 text-muted-foreground" /> Downloads of this video</CardTitle>
                         <button type="button" className="text-xs text-muted-foreground hover:text-foreground underline" onClick={() => setTab('downloads')}>All downloads</button>
                       </div>
-                      {here.map(j => <JobRow key={j.id} job={j} compact />)}
+                      {here.map(j => <JobRow key={j.id} job={j} compact onRemove={removeJob} />)}
                     </div>
                   )}
                   {loadingInfo && <p className="text-xs text-muted-foreground flex items-center gap-2"><Loader2 className="size-3.5 animate-spin" /> Reading the available qualities…</p>}
@@ -613,7 +641,13 @@ export default function YoutubePanel() {
               Nothing downloaded yet. Finished files stay here for three hours.
             </Card>
           )}
-          {jobs.map(j => <JobRow key={j.id} job={j} />)}
+          {jobs.length > 0 && (
+            <div className="flex justify-end gap-2">
+              {active > 0 && <Button size="sm" variant="outline" onClick={cancelAll} className="text-destructive"><X /> Cancel all running ({active})</Button>}
+              {jobs.length > active && <Button size="sm" variant="outline" onClick={clearFinished}><Trash2 /> Clear finished</Button>}
+            </div>
+          )}
+          {jobs.map(j => <JobRow key={j.id} job={j} onRemove={removeJob} />)}
         </TabsContent>
 
         {/* ------------------------------------------------ API access */}

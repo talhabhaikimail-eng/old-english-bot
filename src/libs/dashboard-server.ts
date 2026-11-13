@@ -178,7 +178,7 @@ export interface DownloadJob {
   id: string;
   url: string;
   qualityKey: string;
-  status: 'pending' | 'downloading' | 'completed' | 'failed';
+  status: 'pending' | 'downloading' | 'completed' | 'failed' | 'cancelled';
   progress: number;
   message: string;
   downloadUrl?: string;
@@ -195,6 +195,17 @@ export interface DownloadJob {
 }
 
 const downloadJobs: Record<string, DownloadJob> = {};
+/** How to stop each download that is under way. */
+const downloadAborts: Record<string, AbortController> = {};
+
+/** Stop a job that is waiting or running. False when it had already ended. */
+function cancelYoutubeJob(job: DownloadJob): boolean {
+  if (job.status !== 'pending' && job.status !== 'downloading') return false;
+  job.status = 'cancelled';
+  job.message = 'Cancelled';
+  downloadAborts[job.id]?.abort();
+  return true;
+}
 
 // ── Storage for downloads ────────────────────────────────────────────────────
 // The machine's disk is shared with everything else the bridge does, so YouTube downloads may
@@ -372,9 +383,11 @@ async function runYoutubeJob(job: DownloadJob, qOption: YouTubeQualityOption): P
   const videoUrl = job.url;
   await downloadSlot();
   try {
-    if (!downloadJobs[jobId]) return; // deleted while it waited
+    if (!downloadJobs[jobId] || job.status === 'cancelled') return; // deleted or cancelled while it waited
     job.status = 'downloading';
     job.message = 'Starting download...';
+    const abort = (downloadAborts[jobId] = new AbortController());
+    const cancelled = () => (job.status as string) === 'cancelled';
     const downloadsDir = downloadsFolder();
 
     // A job that came without a size (public API, playlists): ask what the video offers, so the
@@ -400,6 +413,7 @@ async function runYoutubeJob(job: DownloadJob, qOption: YouTubeQualityOption): P
         if (/live stream|Not enough|larger than/.test(why)) throw infoErr;
       }
     }
+    if (cancelled()) return;
 
     // First choice: the ytp service, which writes the file into the downloads folder itself.
     try {
@@ -409,7 +423,12 @@ async function runYoutubeJob(job: DownloadJob, qOption: YouTubeQualityOption): P
           : stage === 'merging' ? 'Joining video and audio…'
           : stage === 'sending' ? 'Finishing…'
           : `Downloading… ${pct}%${speed ? ` · ${(speed / 1e6).toFixed(1)} MB/s` : ''}`;
-      });
+      }, abort.signal);
+      if (cancelled()) {
+        // It finished in the moment it was cancelled: the file is not wanted.
+        try { require('fs').unlinkSync(file.filePath); } catch { /* already gone */ }
+        return;
+      }
       const safe = `${jobId}_${file.filename.replace(/[^a-zA-Z0-9_.-]/g, '_')}`;
       const { renameSync, statSync } = require('fs');
       renameSync(file.filePath, join(downloadsDir, safe));
@@ -422,6 +441,7 @@ async function runYoutubeJob(job: DownloadJob, qOption: YouTubeQualityOption): P
       job.downloadUrl = `/api/youtube/files?name=${encodeURIComponent(safe)}`;
       return;
     } catch (ytpErr) {
+      if (cancelled()) return;
       if (qOption.key.startsWith('live:') || qOption.key.startsWith('itag:')) throw ytpErr;
       console.warn(`[Download Job ${jobId}] ytp failed (${(ytpErr as Error).message}), falling back to yt-dlp`);
       job.message = 'Trying the fallback downloader…';
@@ -444,11 +464,13 @@ async function runYoutubeJob(job: DownloadJob, qOption: YouTubeQualityOption): P
     job.title = result.filename;
     job.downloadUrl = `/api/youtube/files?name=${encodeURIComponent(safeFilename)}`;
   } catch (jobErr) {
+    if ((job.status as string) === 'cancelled') return;
     console.error(`[Download Job ${jobId}] error:`, jobErr);
     job.status = 'failed';
     job.message = `Failed: ${(jobErr as Error).message}`;
     job.error = (jobErr as Error).message;
   } finally {
+    delete downloadAborts[jobId];
     releaseDownloadSlot();
   }
 }
@@ -551,7 +573,9 @@ async function handleYtpJobs(req: IncomingMessage, res: ServerResponse, pathname
     const job = downloadJobs[one[1]];
     if (!job) { err(res, 'No such job (jobs do not survive a restart, and are removed after three hours)', 404); return true; }
     if (method === 'DELETE') {
-      if (job.status === 'pending' || job.status === 'downloading') { err(res, 'The job is still running', 409); return true; }
+      // A job that is waiting or running is cancelled (and stays listed as cancelled); one that
+      // has ended is removed together with its file.
+      if (cancelYoutubeJob(job)) { json(res, { success: true, cancelled: true }); return true; }
       const name = jobFileName(job);
       if (name) { try { require('fs').unlinkSync(join(downloadsFolder(), name)); } catch { /* already gone */ } }
       delete downloadJobs[job.id];

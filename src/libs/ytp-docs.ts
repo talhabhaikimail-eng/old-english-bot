@@ -73,7 +73,7 @@ Answer (\`202\`):
 }
 \`\`\`
 
-\`status\` is one of \`pending\`, \`downloading\`, \`completed\`, \`failed\`. Ask once a second or so. When it is \`completed\`, \`size\` (bytes), \`title\` (the file's name) and \`file_url\` are filled in. When it is \`failed\`, \`error\` says why.
+\`status\` is one of \`pending\`, \`downloading\`, \`completed\`, \`failed\`, \`cancelled\`. Ask once a second or so. When it is \`completed\`, \`size\` (bytes), \`title\` (the file's name) and \`file_url\` are filled in. When it is \`failed\`, \`error\` says why.
 
 ### 3. Fetch the file
 
@@ -119,7 +119,7 @@ Private playlists, Liked videos (\`LL\`) and Watch later (\`WL\`) work for the s
 | Call | What it does |
 |---|---|
 | \`GET {{BASE}}/api/ytp/jobs\` | All current jobs, newest first, with the storage in use. |
-| \`DELETE {{BASE}}/api/ytp/jobs/ID\` | Delete a finished job and its file. |
+| \`DELETE {{BASE}}/api/ytp/jobs/ID\` | Cancel a job that is waiting or running (it stays listed as \`cancelled\`). On a job that has ended: remove it and its file. |
 
 ### Example: shell
 

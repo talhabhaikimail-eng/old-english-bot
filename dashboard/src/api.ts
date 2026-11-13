@@ -194,7 +194,7 @@ export interface YtDownloadJob {
   id: string;
   url: string;
   qualityKey: string;
-  status: 'pending' | 'downloading' | 'completed' | 'failed';
+  status: 'pending' | 'downloading' | 'completed' | 'failed' | 'cancelled';
   progress: number;
   message: string;
   downloadUrl?: string;
@@ -530,6 +530,11 @@ export const api = {
     }),
   ytStartJob: (url: string, quality: YtQuality, title?: string, thumbnail?: string) =>
     post<{ jobId: string }>('/api/youtube/download-job', { url, quality, title, thumbnail }),
+  /** Cancels a job that is waiting or running; removes one that has ended, with its file. */
+  ytRemoveJob: (id: string) =>
+    authFetch(`${BASE}/api/ytp/jobs/${encodeURIComponent(id)}`, { method: 'DELETE' }).then(r => {
+      if (!r.ok && r.status !== 404) throw new Error(`HTTP ${r.status}`);
+    }),
   ytJobs: () => getJson<{ jobs: YtJob[]; storage?: YtStorage }>('/api/youtube/jobs'),
   ytJobStatus: (jobId: string) =>
     authFetch(`${BASE}/api/youtube/job-status?id=${encodeURIComponent(jobId)}`).then(r => {

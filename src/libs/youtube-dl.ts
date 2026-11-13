@@ -283,6 +283,8 @@ export function downloadViaYtpToFile(
   quality: YouTubeQualityOption,
   dir: string,
   onProgress?: (percent: number, stage: string, bytesPerSecond?: number) => void,
+  /** Aborting stops the download: the service notices the request is gone and cleans up. */
+  signal?: AbortSignal,
 ): Promise<YtpFile> {
   const base = ytpBase();
   const id = Math.random().toString(36).slice(2, 12);
@@ -338,6 +340,8 @@ export function downloadViaYtpToFile(
     // Recordings and large files take as long as they take.
     req.setTimeout(3 * 60 * 60_000, () => req.destroy(new Error('ytp timed out')));
     req.on('error', fail);
+    if (signal?.aborted) req.destroy(new Error('cancelled'));
+    signal?.addEventListener('abort', () => req.destroy(new Error('cancelled')), { once: true });
   });
 }
 
