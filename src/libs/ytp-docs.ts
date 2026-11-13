@@ -196,14 +196,22 @@ with requests.get(job["file_url"], headers=H, stream=True) as r, open(job["title
 
 \`\`\`json
 {
-  "id": "VIDEO_ID", "title": "…", "author": "…", "duration": 314, "live": false,
+  "id": "VIDEO_ID", "url": "https://www.youtube.com/watch?v=VIDEO_ID",
+  "title": "…", "author": "Channel name", "duration": 314, "live": false,
+  "channel_id": "UC…", "channel_url": "https://www.youtube.com/channel/UC…",
+  "description": "The full description…", "views": 335574252,
+  "published": "2018-06-12T19:49:29-07:00", "category": "Film & Animation",
+  "keywords": ["4K", "…"], "family_safe": true,
   "thumbnail": "https://i.ytimg.com/vi/VIDEO_ID/hqdefault.jpg",
+  "thumbnails": [ { "url": "…", "width": 1920, "height": 1080 } ],
   "video": [ { "height": 2160, "fps": 60, "codec": "vp9", "ext": "webm", "size": 1138500000 },
              { "height": 1080, "fps": 60, "codec": "avc1.64002A", "ext": "mp4", "size": 171000000 } ],
   "audio": [ { "ext": "m4a", "codec": "mp4a.40.2", "kbps": 130, "size": 5080048 },
              { "ext": "webm", "codec": "opus", "kbps": 148, "size": 5199989 } ]
 }
 \`\`\`
+
+\`duration\` is in seconds. \`thumbnail\` is always there; \`thumbnails\` lists the sizes YouTube has, smallest first. \`description\`, \`views\`, \`published\`, \`category\`, \`keywords\` and \`family_safe\` come from the video's page and are left out when YouTube does not give them (treat them as optional). Like counts and comments are not included.
 
 Each \`video\` entry is what \`height=…\` would give you: \`size\` is the finished file (picture and sound), \`ext\` its container. Up to 1080p is H.264 in \`.mp4\`; above that YouTube only has VP9 or AV1, so the file is \`.webm\` or \`.mkv\`. For a live stream \`live\` is \`true\` and sizes are \`0\`.
 

@@ -274,6 +274,8 @@ type Info struct {
 	HLS       *string  `json:"hls"`
 	ExpiresIn int      `json:"expires_in"`
 	Formats   []Format `json:"formats"`
+	// What the player answer says about the video itself (description, views, channel, …).
+	Details   jmap     `json:"details,omitempty"`
 	Tried     []string `json:"tried,omitempty"`
 	Timing    jmap     `json:"timing,omitempty"`
 	Error     string   `json:"error,omitempty"`
@@ -506,6 +508,7 @@ func extract(vid, cl, cookie string, tm *timing, pyv, probe bool) (*Info, string
 	if v := str(d, "author"); v != "" {
 		info.Author = ptr(v)
 	}
+	info.Details = videoFacts(p)
 	if pm.ID != "" {
 		info.Player = ptr(pm.ID)
 	}

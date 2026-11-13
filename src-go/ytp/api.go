@@ -22,6 +22,7 @@ package main
 // Add cookie_first=1 to use the logged-in tv client first. Errors are JSON: {"error": "..."}.
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -110,11 +111,23 @@ func registerAPI(mux *http.ServeMux, cookies func() string) {
 		return info, vid
 	}
 	mux.HandleFunc("/api/info", func(w http.ResponseWriter, r *http.Request) {
+		// The clients that hand out stream addresses say little about the video itself, so its
+		// page is read alongside for the description, views, date and so on.
+		facts := make(chan jmap, 1)
+		if vid, err := videoID(r.URL.Query().Get("url")); err == nil {
+			go func() { facts <- pageFacts(vid, cookies()) }()
+		} else {
+			facts <- nil
+		}
 		info, vid := resolved(w, r)
 		if info == nil {
 			return
 		}
-		sendJSON(w, 200, describe(info, vid))
+		out := describe(info, vid)
+		for k, v := range <-facts {
+			out[k] = v
+		}
+		sendJSON(w, 200, out)
 	})
 	mux.HandleFunc("/api/download", func(w http.ResponseWriter, r *http.Request) {
 		info, vid := resolved(w, r)
@@ -249,6 +262,66 @@ func chooseMerged(info *Info, height int) (video, audio Format, ext string, err 
 	return video, audio, ext, nil
 }
 
+// videoFacts collects what a player answer says about the video itself. Which of these are
+// present depends on the client that answered; missing ones are left out.
+func videoFacts(p jmap) jmap {
+	d := obj(p, "videoDetails")
+	out := jmap{}
+	if v := str(d, "shortDescription"); v != "" {
+		out["description"] = v
+	}
+	if v := str(d, "channelId"); v != "" {
+		out["channel_id"] = v
+		out["channel_url"] = origin + "/channel/" + v
+	}
+	if v, err := strconv.ParseInt(str(d, "viewCount"), 10, 64); err == nil {
+		out["views"] = v
+	}
+	if k := arr(d, "keywords"); len(k) > 0 {
+		out["keywords"] = k
+	}
+	if t := arr(obj(d, "thumbnail"), "thumbnails"); len(t) > 0 {
+		out["thumbnails"] = t
+	}
+	m := obj(obj(p, "microformat"), "playerMicroformatRenderer")
+	for from, to := range map[string]string{"publishDate": "published", "uploadDate": "uploaded", "category": "category"} {
+		if v := str(m, from); v != "" {
+			out[to] = v
+		}
+	}
+	if v, ok := m["isFamilySafe"].(bool); ok {
+		out["family_safe"] = v
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// pageFacts reads a video's watch page for what videoFacts can tell from it. Nil when the page
+// could not be read; the caller then has only what the player answer gave.
+func pageFacts(vid, cookie string) jmap {
+	h := map[string]string{"User-Agent": webUA, "Accept-Language": "en-US,en;q=0.9"}
+	if cookie != "" {
+		h["Cookie"] = cookie
+	}
+	html, err := fetch("GET", origin+"/watch?v="+vid+"&hl=en", nil, h, 8*time.Second)
+	if err != nil {
+		return nil
+	}
+	const mark = "ytInitialPlayerResponse = "
+	at := strings.Index(string(html), mark)
+	if at < 0 {
+		return nil
+	}
+	// The object is followed by more script: decode exactly one JSON value.
+	var p jmap
+	if json.NewDecoder(strings.NewReader(string(html[at+len(mark):]))).Decode(&p) != nil {
+		return nil
+	}
+	return videoFacts(p)
+}
+
 // describe lists what can be downloaded from a resolved video.
 func describe(info *Info, vid string) jmap {
 	heights := map[int]bool{}
@@ -293,11 +366,28 @@ func describe(info *Info, vid string) jmap {
 	if author == "None" {
 		author = ""
 	}
-	return jmap{
-		"id": vid, "title": title, "author": author, "duration": info.Duration, "live": info.Live, "client": info.Client,
+	out := jmap{
+		"id": vid, "url": origin + "/watch?v=" + vid, "title": title, "author": author, "duration": info.Duration,
+		"live": info.Live, "client": info.Client,
 		"thumbnail": "https://i.ytimg.com/vi/" + vid + "/hqdefault.jpg",
 		"video":     videos, "audio": audios,
 	}
+	// description, views, channel_id, channel_url, keywords, published, category, family_safe
+	for k, v := range info.Details {
+		out[k] = v
+	}
+	// YouTube's own thumbnail list, or the standard sizes every video has.
+	if _, ok := out["thumbnails"]; !ok {
+		sizes := []jmap{}
+		for _, t := range []struct {
+			name string
+			w, h int
+		}{{"default", 120, 90}, {"mqdefault", 320, 180}, {"hqdefault", 480, 360}, {"sddefault", 640, 480}, {"maxresdefault", 1280, 720}} {
+			sizes = append(sizes, jmap{"url": "https://i.ytimg.com/vi/" + vid + "/" + t.name + ".jpg", "width": t.w, "height": t.h})
+		}
+		out["thumbnails"] = sizes
+	}
+	return out
 }
 
 // safeName makes a title usable as a file name.
